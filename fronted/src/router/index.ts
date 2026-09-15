@@ -6,7 +6,13 @@ const router = createRouter({
   routes: [
     {
       path: "/",
-      redirect: "/dashboard",
+      redirect: "/login",
+    },
+
+    {
+      path: "/login",
+      name: "Login",
+      component: () => import("@/views/login/index.vue"),
     },
 
     {
@@ -16,6 +22,11 @@ const router = createRouter({
 
     {
       path: "/workflow",
+      component: () => import("@/views/workflow/index.vue"),
+    },
+
+    {
+      path: "/workflow/:id",
       component: () => import("@/views/workflow/index.vue"),
     },
 

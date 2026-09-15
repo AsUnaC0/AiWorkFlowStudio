@@ -1,12 +1,12 @@
 import { fileURLToPath, URL } from "node:url";
 import vue from "@vitejs/plugin-vue";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import AutoImport from "unplugin-auto-import/vite";
 import Components from "unplugin-vue-components/vite";
 import { TDesignResolver } from "@tdesign-vue-next/auto-import-resolver";
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     vue(),
     AutoImport({
@@ -32,9 +32,9 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "http://localhost:3000",
+        target: loadEnv(mode, process.cwd()).VITE_API_BASE_URL,
         changeOrigin: true,
       },
     },
   },
-});
+}));

@@ -7,7 +7,6 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtPayload, JwtUser } from './strategies/jwt.strategy';
@@ -23,17 +22,20 @@ export interface AuthResult {
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResult> {
-    const existingEmail = await this.usersService.findByEmail(dto.email);
+    const existingEmail = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
     if (existingEmail) {
       throw new ConflictException('Email already registered');
     }
 
-    const existingUsername = await this.usersService.findByUsername(dto.username);
+    const existingUsername = await this.prisma.user.findUnique({
+      where: { username: dto.username },
+    });
     if (existingUsername) {
       throw new ConflictException('Username already taken');
     }
@@ -51,7 +53,9 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {
-    const user = await this.usersService.findByEmail(dto.email);
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -65,7 +69,9 @@ export class AuthService {
   }
 
   async getMe(user: JwtUser): Promise<PublicUser> {
-    const dbUser = await this.usersService.findById(user.id);
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+    });
     if (!dbUser) {
       throw new UnauthorizedException('User not found');
     }

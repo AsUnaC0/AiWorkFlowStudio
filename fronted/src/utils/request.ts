@@ -3,7 +3,7 @@ import { useUserStore } from "@/stores/user";
 
 export const request = axios.create({
   baseURL: "/api",
-  timeout: 10000,
+  timeout: 100000,
 });
 
 request.interceptors.request.use(
@@ -14,7 +14,7 @@ request.interceptors.request.use(
     }
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 );
 
 request.interceptors.response.use(
@@ -25,5 +25,5 @@ request.interceptors.response.use(
       userStore.logout();
     }
     return Promise.reject(error);
-  }
+  },
 );

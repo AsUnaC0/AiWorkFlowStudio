@@ -30,6 +30,7 @@ model Workspace {
   updatedAt DateTime @updatedAt
 
   members   WorkspaceMember[]
+  workflows Workflow[]
 }
 
 model WorkspaceMember {
@@ -44,4 +45,37 @@ model WorkspaceMember {
   createdAt   DateTime @default(now())
 
   @@unique([workspaceId, userId])
+}
+
+model Workflow {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  name            String
+  description     String?
+  status          String           @default("DRAFT")
+  currentVersionId String?
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  versions        WorkflowVersion[] @relation("WorkflowVersions")
+  currentVersion  WorkflowVersion? @relation("WorkflowCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([workspaceId])
+  @@unique([currentVersionId])
+}
+
+model WorkflowVersion {
+  id             String    @id @default(uuid())
+  workflowId     String
+  version        Int
+  definition     Json
+  createdAt      DateTime  @default(now())
+
+  workflow       Workflow  @relation("WorkflowVersions", fields: [workflowId], references: [id], onDelete: Cascade)
+  currentWorkflow Workflow? @relation("WorkflowCurrentVersion")
+
+  @@unique([workflowId, version])
+  @@index([workflowId])
 }

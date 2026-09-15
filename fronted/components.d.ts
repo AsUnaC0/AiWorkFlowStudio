@@ -11,7 +11,12 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    CustomNode: typeof import('./src/components/workflow/CustomNode.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    TButton: typeof import('tdesign-vue-next')['Button']
+    TDialog: typeof import('tdesign-vue-next')['Dialog']
+    TInput: typeof import('tdesign-vue-next')['Input']
+    TTextarea: typeof import('tdesign-vue-next')['Textarea']
   }
 }
