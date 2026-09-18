@@ -3,8 +3,6 @@ import {
   createWorkspace as createWorkspaceRequest,
   getWorkspaces,
 } from "@/api/workspace";
-import { createWorkflow, getWorkflows } from "@/api/workflow";
-import type { WorkflowDefinition } from "@/types/workflow";
 import type { WorkspaceItem } from "@/types/workspace";
 import type { WorkspaceApiItem } from "@/types/workspace-api";
 import { useRouter } from "vue-router";
@@ -36,18 +34,10 @@ export function useWorkspace() {
 
   const selectWorkspace = async (workspace: WorkspaceItem) => {
     try {
-      const workflows = await getWorkflows(workspace.id);
-      let workflowId = workflows[0]?.id;
-
-      if (!workflowId) {
-        const createdWorkflow = await createWorkflow(workspace.id, {
-          name: "默认工作流",
-          definition: defaultWorkflowDefinition,
-        });
-        workflowId = createdWorkflow.id;
-      }
-
-      await router.push({ path: `/workflow/${workflowId}` });
+      await router.push({
+        path: "/workflow",
+        query: { workspaceId: workspace.id },
+      });
     } catch {
       errorMessage.value = "无法打开工作空间，请稍后重试";
     }
@@ -75,21 +65,3 @@ const mapWorkspace = (workspace: WorkspaceApiItem): WorkspaceItem => ({
   reportCount: 0,
   memberCount: workspace._count?.members ?? 0,
 });
-
-const defaultWorkflowDefinition: WorkflowDefinition = {
-  nodes: [
-    {
-      id: "start-1",
-      type: "custom",
-      position: { x: 250, y: 50 },
-      data: { label: "Start", nodeType: "start" },
-    },
-    {
-      id: "output-1",
-      type: "custom",
-      position: { x: 250, y: 220 },
-      data: { label: "Output", nodeType: "output" },
-    },
-  ],
-  edges: [{ id: "e-start-output", source: "start-1", target: "output-1" }],
-};

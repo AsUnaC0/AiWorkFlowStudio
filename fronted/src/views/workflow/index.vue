@@ -5,6 +5,7 @@ import { VueFlow } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
 import { Controls } from "@vue-flow/controls";
 import CustomNode from "@/components/workflow/CustomNode.vue";
+import PageHeader from "@/components/common/PageHeader.vue";
 import { useWorkflow } from "@/composables/useWorkflow";
 import { runWorkflowStream, type WorkflowStreamEvent } from "@/api/workflow";
 import type { WorkflowDefinition } from "@/types/workflow";
@@ -28,6 +29,7 @@ const {
   loading,
   saving,
   errorMessage,
+  workflowName,
   saveWorkflow,
   getCurrentDefinition,
 } = useWorkflow(workflowId);
@@ -136,161 +138,114 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
 
 <template>
   <div class="workflow-editor">
-    <!-- 左侧：节点选择面板 -->
-    <aside class="panel node-panel">
-      <div class="panel-header">节点</div>
-      <div class="node-list">
-        <div
-          v-for="item in availableNodes"
-          :key="item.type"
-          class="drag-node-item"
-          draggable="true"
-          @dragstart="onDragStart($event, item.type, item.label)"
-        >
-          <span class="node-title">{{ item.label }}</span>
+    <PageHeader :title="workflowName || '工作流编辑器'" back-path="/workflow">
+      <!-- 状态提示 -->
+      <span v-if="loading" class="header-status">正在加载工作流...</span>
+      <span v-else-if="errorMessage" class="header-status error">{{ errorMessage }}</span>
+
+      <!-- 保存按钮 -->
+      <t-button variant="outline" :disabled="saving || loading" :loading="saving" @click="saveWorkflow">
+        {{ saving ? "保存中..." : "保存工作流" }}
+      </t-button>
+
+      <!-- 运行按钮 -->
+      <t-button theme="primary" :disabled="loading || running" :loading="running" @click="openRunDialog">
+        运行
+      </t-button>
+    </PageHeader>
+
+    <div class="editor-body">
+      <!-- 左侧：节点选择面板 -->
+      <aside class="panel node-panel">
+        <div class="panel-header">节点</div>
+        <div class="node-list">
+          <div v-for="item in availableNodes" :key="item.type" class="drag-node-item" draggable="true"
+            @dragstart="onDragStart($event, item.type, item.label)">
+            <span class="node-title">{{ item.label }}</span>
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
 
-    <!-- 中间：Workflow 画布 -->
-    <main class="canvas-area" @drop="onDrop" @dragover="onDragOver">
-      <div class="workflow-toolbar">
-        <span v-if="loading" class="status-message">正在加载工作流...</span>
-        <span v-else-if="errorMessage" class="status-message error">{{
-          errorMessage
-        }}</span>
-        <button
-          class="save-button"
-          type="button"
-          :disabled="saving || loading"
-          @click="saveWorkflow"
-        >
-          {{ saving ? "保存中..." : "保存工作流" }}
-        </button>
+      <!-- 中间：Workflow 画布 -->
+      <main class="canvas-area" @drop="onDrop" @dragover="onDragOver">
+        <VueFlow :nodes="nodes" :edges="edges" @node-click="onNodeClick" @pane-click="onPaneClick" fit-view-on-init>
+          <!-- 注册自定义节点组件 -->
+          <template #node-custom="nodeProps">
+            <CustomNode v-bind="nodeProps" />
+          </template>
 
-        <t-button
-          class="save-button"
-          :disabled="loading || running"
-          :loading="running"
-          @click="openRunDialog"
-        >
-          运行
-        </t-button>
-      </div>
-      <VueFlow
-        :nodes="nodes"
-        :edges="edges"
-        @node-click="onNodeClick"
-        @pane-click="onPaneClick"
-        fit-view-on-init
-      >
-        <!-- 注册自定义节点组件 -->
-        <template #node-custom="nodeProps">
-          <CustomNode v-bind="nodeProps" />
-        </template>
+          <!-- 画布背景与控制微调部件 -->
+          <Background pattern-color="#aaa" :gap="16" />
+          <Controls />
+        </VueFlow>
+      </main>
 
-        <!-- 画布背景与控制微调部件 -->
-        <Background pattern-color="#aaa" :gap="16" />
-        <Controls />
-      </VueFlow>
-    </main>
+      <!-- 右侧：属性设置面板 -->
+      <aside class="panel property-panel">
+        <div class="panel-header">属性</div>
 
-    <!-- 右侧：属性设置面板 -->
-    <aside class="panel property-panel">
-      <div class="panel-header">属性</div>
-
-      <div v-if="selectedNode" class="property-form">
-        <div class="form-item">
-          <label class="form-label">Node ID</label>
-          <input class="form-input" :value="selectedNode.id" disabled />
-        </div>
-
-        <div class="form-item">
-          <label class="form-label">Node Type</label>
-          <input
-            class="form-input"
-            :value="selectedNode.data.nodeType"
-            disabled
-          />
-        </div>
-
-        <div class="form-item">
-          <label class="form-label">Label</label>
-          <input class="form-input" v-model="selectedNode.data.label" />
-        </div>
-
-        <!-- LLM 节点配置 (支持 Model, Temperature, Prompt 配置) -->
-        <template v-if="selectedNode.data.nodeType === 'llm'">
+        <div v-if="selectedNode" class="property-form">
           <div class="form-item">
-            <label class="form-label">Model</label>
-            <select class="form-select" v-model="selectedNode.data.model">
-              <option value="qwen2.5:7b">Ollama (qwen2.5:7b)</option>
-            </select>
+            <label class="form-label">Node ID</label>
+            <input class="form-input" :value="selectedNode.id" disabled />
           </div>
 
           <div class="form-item">
-            <label class="form-label"
-              >Temperature: {{ selectedNode.data.temperature }}</label
-            >
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              class="form-range"
-              v-model.number="selectedNode.data.temperature"
-            />
+            <label class="form-label">Node Type</label>
+            <input class="form-input" :value="selectedNode.data.nodeType" disabled />
           </div>
 
           <div class="form-item">
-            <label class="form-label">Prompt</label>
-            <textarea
-              class="form-textarea"
-              rows="6"
-              placeholder="请输入 Prompt 模板，支持变量如 {{input}}"
-              v-model="selectedNode.data.prompt"
-            ></textarea>
+            <label class="form-label">Label</label>
+            <input class="form-input" v-model="selectedNode.data.label" />
           </div>
-        </template>
-      </div>
 
-      <!-- 未选中节点提示 -->
-      <div v-else class="empty-tip">请在画布中选中节点以配置属性</div>
-    </aside>
+          <!-- LLM 节点配置 (支持 Model, Temperature, Prompt 配置) -->
+          <template v-if="selectedNode.data.nodeType === 'llm'">
+            <div class="form-item">
+              <label class="form-label">Model</label>
+              <select class="form-select" v-model="selectedNode.data.model">
+                <option value="qwen2.5:7b">Ollama (qwen2.5:7b)</option>
+              </select>
+            </div>
 
-    <t-dialog
-      v-model:visible="runDialogVisible"
-      header="运行工作流"
-      :confirm-btn="{ content: '运行', loading: running }"
-      :cancel-btn="{ content: '取消' }"
-      :close-on-overlay-click="false"
-      @confirm="handleRunWorkflow"
-    >
+            <div class="form-item">
+              <label class="form-label">Temperature: {{ selectedNode.data.temperature }}</label>
+              <input type="range" min="0" max="1" step="0.1" class="form-range"
+                v-model.number="selectedNode.data.temperature" />
+            </div>
+
+            <div class="form-item">
+              <label class="form-label">Prompt</label>
+              <textarea class="form-textarea" rows="6" placeholder="请输入 Prompt 模板，支持变量如 {{input}}"
+                v-model="selectedNode.data.prompt"></textarea>
+            </div>
+          </template>
+        </div>
+
+        <!-- 未选中节点提示 -->
+        <div v-else class="empty-tip">请在画布中选中节点以配置属性</div>
+      </aside>
+    </div>
+
+    <t-dialog v-model:visible="runDialogVisible" header="运行工作流" :confirm-btn="{ content: '运行', loading: running }"
+      :cancel-btn="{ content: '取消' }" :close-on-overlay-click="false" @confirm="handleRunWorkflow">
       <div class="run-dialog-content">
         <label class="form-label" for="workflow-run-input">输入内容</label>
         <div v-if="currentNodeStatus" class="node-status">
           {{ currentNodeStatus }}
         </div>
         <div class="chat-messages">
-          <div
-            v-for="(message, index) in chatMessages"
-            :key="`${message.role}-${index}`"
-            class="chat-message"
-            :class="message.role"
-          >
+          <div v-for="(message, index) in chatMessages" :key="`${message.role}-${index}`" class="chat-message"
+            :class="message.role">
             <div class="chat-role">
               {{ message.role === "user" ? "你" : "工作流" }}
             </div>
             <div class="chat-bubble">{{ message.content }}</div>
           </div>
         </div>
-        <t-textarea
-          id="workflow-run-input"
-          v-model="runInput"
-          :disabled="running"
-          :autosize="{ minRows: 5, maxRows: 10 }"
-          placeholder="请输入本次运行传给工作流的内容"
-        />
+        <t-textarea id="workflow-run-input" v-model="runInput" :disabled="running"
+          :autosize="{ minRows: 5, maxRows: 10 }" placeholder="请输入本次运行传给工作流的内容" />
 
         <div v-if="runError" class="run-error">{{ runError }}</div>
         <div v-if="runResult !== null" class="run-result">
@@ -302,60 +257,76 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
   </div>
 </template>
 
-<style lang="less" scoped>
-@border-color: #e5e6eb;
-@bg-light: #f7f8fa;
-@text-main: #1d1d1f;
-@text-sub: #86909c;
-
+<style scoped>
 .workflow-editor {
   display: flex;
+  flex-direction: column;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+
+  .header-status {
+    max-width: 420px;
+    overflow: hidden;
+    color: var(--color-text-tertiary);
+    font-size: var(--font-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &.error {
+      color: var(--color-error);
+    }
+  }
+
+  .editor-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
 
   /* 面板公共样式 */
   .panel {
     width: 240px;
     height: 100%;
-    background-color: #ffffff;
-    border-right: 1px solid @border-color;
+    background-color: var(--color-bg-white);
+    border-right: 1px solid var(--color-border);
     display: flex;
     flex-direction: column;
+    flex-shrink: 0;
 
     .panel-header {
-      height: 48px;
-      line-height: 48px;
-      padding: 0 16px;
+      height: var(--header-height);
+      line-height: var(--header-height);
+      padding: 0 var(--space-4);
       font-weight: 600;
-      font-size: 15px;
-      border-bottom: 1px solid @border-color;
-      color: @text-main;
+      font-size: var(--font-md);
+      border-bottom: 1px solid var(--color-border);
+      color: var(--color-text);
     }
   }
 
   /* 左侧节点选择区 */
   .node-panel {
     .node-list {
-      padding: 16px;
+      padding: var(--space-4);
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: var(--space-3);
 
       .drag-node-item {
-        padding: 10px 14px;
-        background-color: @bg-light;
-        border: 1px dashed darken(@border-color, 10%);
-        border-radius: 6px;
+        padding: var(--space-3) var(--space-4);
+        background-color: var(--color-bg-light);
+        border: 1px dashed var(--color-border-dashed);
+        border-radius: var(--radius-md);
         cursor: grab;
-        font-size: 14px;
-        color: @text-main;
+        font-size: var(--font-base);
+        color: var(--color-text);
         transition: all 0.2s ease;
 
         &:hover {
-          background-color: #e8f3ff;
-          border-color: #0052d9;
-          color: #0052d9;
+          background-color: var(--primary-light);
+          border-color: var(--primary);
+          color: var(--primary);
         }
 
         &:active {
@@ -368,71 +339,29 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
   /* 中间画布区 */
   .canvas-area {
     flex: 1;
-    height: 100%;
-    background-color: #f2f3f5;
+    min-width: 0;
+    background-color: var(--color-bg-canvas);
     position: relative;
-
-    .workflow-toolbar {
-      position: absolute;
-      z-index: 5;
-      top: 16px;
-      right: 16px;
-      left: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 12px;
-      pointer-events: none;
-
-      .status-message {
-        max-width: 420px;
-        overflow: hidden;
-        color: @text-sub;
-        font-size: 13px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-
-        &.error {
-          color: #d54941;
-        }
-      }
-
-      .save-button {
-        padding: 8px 16px;
-        border: 0;
-        border-radius: 4px;
-        background: #0052d9;
-        color: #ffffff;
-        cursor: pointer;
-        font-size: 13px;
-        pointer-events: auto;
-
-        &:disabled {
-          cursor: not-allowed;
-          opacity: 0.6;
-        }
-      }
-    }
   }
 
   /* 右侧属性配置区 */
   .property-panel {
     border-right: none;
-    border-left: 1px solid @border-color;
+    border-left: 1px solid var(--color-border);
     width: 280px;
 
     .empty-tip {
-      padding: 32px 16px;
+      padding: var(--space-8) var(--space-4);
       text-align: center;
-      color: @text-sub;
-      font-size: 13px;
+      color: var(--color-text-tertiary);
+      font-size: var(--font-sm);
     }
 
     .property-form {
-      padding: 16px;
+      padding: var(--space-4);
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: var(--space-4);
 
       .form-item {
         display: flex;
@@ -442,24 +371,24 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
         .form-label {
           font-size: 12px;
           font-weight: 500;
-          color: @text-sub;
+          color: var(--color-text-tertiary);
         }
 
         .form-input,
         .form-select,
         .form-textarea {
-          padding: 8px;
-          border: 1px solid @border-color;
-          border-radius: 4px;
-          font-size: 13px;
+          padding: var(--space-2);
+          border: 1px solid var(--color-border);
+          border-radius: var(--radius-sm);
+          font-size: var(--font-sm);
           outline: none;
 
           &:focus {
-            border-color: #0052d9;
+            border-color: var(--primary);
           }
 
           &:disabled {
-            background-color: @bg-light;
+            background-color: var(--color-bg-light);
             cursor: not-allowed;
           }
         }
@@ -474,26 +403,26 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
   .run-dialog-content {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
 
     .run-error {
-      color: #d54941;
-      font-size: 13px;
+      color: var(--color-error);
+      font-size: var(--font-sm);
     }
 
     .node-status {
-      padding: 8px 10px;
-      border-left: 3px solid #0052d9;
+      padding: var(--space-2) var(--space-3);
+      border-left: 3px solid var(--primary);
       background: #f0f5ff;
-      color: #0052d9;
-      font-size: 13px;
+      color: var(--primary);
+      font-size: var(--font-sm);
     }
 
     .chat-messages {
       display: flex;
       max-height: 280px;
       flex-direction: column;
-      gap: 12px;
+      gap: var(--space-3);
       overflow: auto;
       padding: 4px 2px;
 
@@ -514,16 +443,16 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
         }
 
         .chat-role {
-          color: @text-sub;
+          color: var(--color-text-tertiary);
           font-size: 12px;
         }
 
         .chat-bubble {
-          padding: 10px 12px;
+          padding: var(--space-3) var(--space-3);
           border-radius: 8px;
-          background: #f2f3f5;
-          color: @text-main;
-          font-size: 13px;
+          background: var(--color-bg-canvas);
+          color: var(--color-text);
+          font-size: var(--font-sm);
           line-height: 1.6;
           white-space: pre-wrap;
           word-break: break-word;
@@ -531,22 +460,22 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
       }
 
       .user .chat-bubble {
-        background: #0052d9;
-        color: #ffffff;
+        background: var(--primary);
+        color: var(--color-bg-white);
       }
     }
 
     .run-result {
-      margin-top: 8px;
+      margin-top: var(--space-2);
 
       pre {
         max-height: 220px;
-        margin: 8px 0 0;
-        padding: 12px;
+        margin: var(--space-2) 0 0;
+        padding: var(--space-3);
         overflow: auto;
-        border-radius: 4px;
-        background: #f7f8fa;
-        color: @text-main;
+        border-radius: var(--radius-sm);
+        background: var(--color-bg-light);
+        color: var(--color-text);
         font-size: 12px;
         white-space: pre-wrap;
         word-break: break-word;

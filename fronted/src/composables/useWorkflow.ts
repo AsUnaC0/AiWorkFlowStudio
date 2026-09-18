@@ -18,6 +18,7 @@ export function useWorkflow(workflowId: string) {
   const loading = ref(false);
   const saving = ref(false);
   const errorMessage = ref("");
+  const workflowName = ref("");
 
   // 当前选中的节点
   const selectedNode = ref<Node | null>(null);
@@ -115,6 +116,7 @@ export function useWorkflow(workflowId: string) {
     errorMessage.value = "";
     try {
       const workflow = await getWorkflow(workflowId);
+      workflowName.value = workflow.name || "";
       const definition = workflow.currentVersion?.definition;
       if (definition) {
         initialNodes.value = definition.nodes;
@@ -172,6 +174,7 @@ export function useWorkflow(workflowId: string) {
     loading,
     saving,
     errorMessage,
+    workflowName,
     saveWorkflow,
     getCurrentDefinition,
   };

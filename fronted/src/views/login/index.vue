@@ -1,126 +1,108 @@
 <template>
-  <main class="login-page">
-    <section class="intro-panel">
-      <div class="brand-mark">AI</div>
-      <p class="eyebrow">AI WORKFLOW STUDIO</p>
-      <h1>让每个想法，<br /><em>流动起来。</em></h1>
-      <p class="intro-copy">连接知识、模型与团队，构建属于你的智能工作流。</p>
-    </section>
-
-    <section class="form-panel">
-      <div class="form-shell">
-        <div class="form-heading">
-          <p class="eyebrow">WELCOME BACK</p>
-          <h2>{{ isRegister ? "创建账号" : "登录工作台" }}</h2>
-          <p>
-            {{
-              isRegister
-                ? "注册后即可开始构建你的第一个工作流"
-                : "输入账号信息，继续你的工作"
-            }}
-          </p>
-        </div>
-
-        <div class="mode-switch" role="tablist" aria-label="登录或注册">
-          <button
-            :class="{ active: !isRegister }"
-            type="button"
-            @click="switchMode(false)"
-          >
-            登录
-          </button>
-          <button
-            :class="{ active: isRegister }"
-            type="button"
-            @click="switchMode(true)"
-          >
-            注册
-          </button>
-        </div>
-
-        <form @submit.prevent="submitForm">
-          <label v-if="isRegister" class="field">
-            <span>用户名</span>
-            <input
-              v-model.trim="form.username"
-              autocomplete="username"
-              placeholder="请输入用户名"
-            />
-          </label>
-
-          <label class="field">
-            <span>邮箱</span>
-            <input
-              v-model.trim="form.email"
-              autocomplete="email"
-              type="email"
-              placeholder="name@example.com"
-            />
-          </label>
-
-          <label class="field">
-            <span>密码</span>
-            <input
-              v-model="form.password"
-              autocomplete="current-password"
-              type="password"
-              placeholder="请输入密码"
-            />
-          </label>
-
-          <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
-          <button class="submit-button" :disabled="loading" type="submit">
-            {{ loading ? "提交中..." : isRegister ? "创建账号" : "进入工作台" }}
-            <span aria-hidden="true">→</span>
-          </button>
-        </form>
+  <div class="login-page">
+    <div class="login-card">
+      <!-- 品牌区 -->
+      <div class="brand">
+        <div class="brand-logo">AWS</div>
+        <div class="brand-title">AI WorkFlow Studio</div>
+        <div class="brand-subtitle">让每个想法，流动起来</div>
       </div>
-    </section>
-  </main>
+
+      <!-- 登录 / 注册 切换 -->
+      <t-tabs v-model="isRegister" class="mode-tabs">
+        <t-tab-panel :value="false" label="登录" />
+        <t-tab-panel :value="true" label="注册" />
+      </t-tabs>
+
+      <!-- 表单 -->
+      <t-form ref="formRef" class="login-form" :data="form" :rules="formRules" :disabled="loading" @submit="submitForm">
+        <t-form-item v-if="isRegister" label="用户名" name="username">
+          <t-input v-model="form.username" placeholder="请输入用户名" :autosize="false" />
+        </t-form-item>
+
+        <t-form-item label="邮箱" name="email">
+          <t-input v-model="form.email" type="email" placeholder="name@example.com" />
+        </t-form-item>
+
+        <t-form-item label="密码" name="password">
+          <t-input v-model="form.password" type="password" placeholder="请输入密码" show-password-on="click" />
+        </t-form-item>
+
+        <t-alert v-if="errorMessage" theme="error" :message="errorMessage" class="form-alert" />
+
+        <t-button theme="primary" type="submit" block :loading="loading" size="large" class="submit-btn">
+          {{ isRegister ? "创建账号" : "进入工作台" }}
+        </t-button>
+      </t-form>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
 import axios from "axios";
-import { reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import type { FormInstanceFunctions, FormRule } from "tdesign-vue-next";
 import { login, register } from "@/api/auth";
 import { useUserStore } from "@/stores/user";
 
 const router = useRouter();
+const route = useRoute();
 const userStore = useUserStore();
+
 const isRegister = ref(false);
 const loading = ref(false);
 const errorMessage = ref("");
+const formRef = ref<FormInstanceFunctions>();
+
 const form = reactive({
   username: "",
   email: "",
   password: "",
 });
 
-const switchMode = (registerMode: boolean) => {
-  isRegister.value = registerMode;
-  errorMessage.value = "";
+// 表单校验规则
+const formRules: Record<string, FormRule[]> = {
+  username: [
+    { required: true, message: "请输入用户名", trigger: "blur" },
+    { min: 2, max: 32, message: "用户名长度 2-32 个字符", trigger: "blur" },
+  ],
+  email: [
+    { required: true, message: "请输入邮箱", trigger: "blur" },
+    { pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: "邮箱格式不正确", trigger: "blur" },
+  ],
+  password: [
+    { required: true, message: "请输入密码", trigger: "blur" },
+    { min: 6, message: "密码至少 6 位", trigger: "blur" },
+  ],
 };
+
+// 切换登录/注册时清空错误信息
+watch(isRegister, () => {
+  errorMessage.value = "";
+  formRef.value?.reset?.();
+});
 
 const submitForm = async () => {
   errorMessage.value = "";
-  if (!form.email || !form.password || (isRegister.value && !form.username)) {
-    errorMessage.value = "请完整填写表单信息";
-    return;
-  }
+
+  const result = await formRef.value?.validate?.();
+  if (result !== true) return;
 
   loading.value = true;
   try {
     const response = isRegister.value
       ? await register({
-          username: form.username,
-          email: form.email,
-          password: form.password,
-        })
+        username: form.username,
+        email: form.email,
+        password: form.password,
+      })
       : await login({ email: form.email, password: form.password });
+
     userStore.setToken(response.accessToken);
     userStore.setUserInfo(response.user);
-    await router.push("/dashboard");
+    const redirect = (route.query.redirect as string) || "/dashboard";
+    await router.push(redirect);
   } catch (error) {
     if (axios.isAxiosError(error)) {
       const message = error.response?.data?.message;
@@ -136,204 +118,71 @@ const submitForm = async () => {
 };
 </script>
 
-<style scoped lang="less">
+<style scoped>
 .login-page {
-  min-height: 100%;
-  display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
-  background: #f6f4ef;
-  color: #202b2b;
-}
-
-.intro-panel {
-  padding: clamp(48px, 8vw, 120px);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  background: #173d3b;
-  color: #f7f2e9;
-}
-
-.brand-mark {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  margin-bottom: 72px;
-  border: 1px solid #d9c6a1;
-  color: #d9c6a1;
-  font:
-    700 14px Georgia,
-    serif;
-  letter-spacing: 0;
-}
-
-.eyebrow {
-  margin: 0 0 18px;
-  color: #b79b6d;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 2px;
-}
-
-h1,
-h2 {
-  margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
-  font-weight: 400;
-  letter-spacing: 0;
-}
-
-h1 {
-  font-size: clamp(42px, 5vw, 72px);
-  line-height: 1.08;
-}
-
-h1 em {
-  color: #d9c6a1;
-  font-style: italic;
-}
-
-.intro-copy {
-  max-width: 280px;
-  margin: 28px 0 0;
-  color: #b9c7c1;
-  font-size: 15px;
-  line-height: 1.8;
-}
-
-.form-panel {
-  display: grid;
-  place-items: center;
-  padding: 40px 24px;
-}
-
-.form-shell {
-  width: min(100%, 420px);
-}
-
-.form-heading h2 {
-  font-size: 38px;
-}
-
-.form-heading > p:last-child {
-  margin: 12px 0 36px;
-  color: #77817e;
-  font-size: 14px;
-}
-
-.mode-switch {
-  display: flex;
-  gap: 28px;
-  margin-bottom: 28px;
-  border-bottom: 1px solid #d9ddd8;
-}
-
-.mode-switch button {
-  padding: 0 0 12px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: #8a9490;
-  cursor: pointer;
-  font-size: 14px;
-}
-
-.mode-switch button.active {
-  border-bottom-color: #173d3b;
-  color: #173d3b;
-  font-weight: 700;
-}
-
-.field {
-  display: block;
-  margin-bottom: 18px;
-}
-
-.field span {
-  display: block;
-  margin-bottom: 8px;
-  color: #53605c;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.field input {
-  width: 100%;
-  height: 48px;
-  padding: 0 14px;
-  border: 1px solid #d9ddd8;
-  border-radius: 2px;
-  outline: 0;
-  background: #fffdf9;
-  color: #202b2b;
-  font: inherit;
-  transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease;
-}
-
-.field input:focus {
-  border-color: #477a72;
-  box-shadow: 0 0 0 3px rgba(71, 122, 114, 0.12);
-}
-
-.error-message {
-  margin: 4px 0 16px;
-  color: #b04c42;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.submit-button {
-  width: 100%;
-  height: 50px;
+  min-height: 100vh;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 2px;
-  background: #173d3b;
-  color: #fffdf9;
-  cursor: pointer;
-  font: inherit;
+  justify-content: center;
+  padding: var(--space-10) var(--space-6);
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e9f2 100%);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--color-bg-card);
+  border-radius: var(--radius-card);
+  padding: var(--space-12) var(--space-10);
+  box-shadow: var(--shadow-card);
+}
+
+.brand {
+  text-align: center;
+  margin-bottom: var(--space-8);
+}
+
+.brand .brand-logo {
+  width: 50px;
+  height: 48px;
+  line-height: 48px;
+  margin: 0 auto var(--space-4);
+  background: var(--primary);
+  color: #fff;
+  font-size: var(--font-xl);
   font-weight: 700;
-  transition:
-    background 160ms ease,
-    transform 160ms ease;
+  border-radius: var(--radius-xl);
+  text-align: center;
 }
 
-.submit-button:hover:not(:disabled) {
-  background: #245754;
-  transform: translateY(-1px);
+.brand .brand-title {
+  font-size: var(--font-xl);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 4px;
 }
 
-.submit-button:disabled {
-  cursor: wait;
-  opacity: 0.65;
+.brand .brand-subtitle {
+  font-size: var(--font-sm);
+  color: var(--color-text-tertiary);
 }
 
-@media (max-width: 720px) {
-  .login-page {
-    display: block;
-  }
+.mode-tabs {
+  margin-bottom: var(--space-6);
+}
 
-  .intro-panel {
-    min-height: 300px;
-    padding: 36px 28px;
-  }
+.login-form .form-alert {
+  margin-bottom: var(--space-4);
+}
 
-  .brand-mark {
-    margin-bottom: 38px;
-  }
+.login-form .submit-btn {
+  margin-top: var(--space-2);
+}
 
-  h1 {
-    font-size: 42px;
-  }
-
-  .form-panel {
-    padding: 48px 28px 64px;
+@media (max-width: 480px) {
+  .login-card {
+    padding: 36px var(--space-6);
+    border-radius: var(--radius-xl);
   }
 }
 </style>

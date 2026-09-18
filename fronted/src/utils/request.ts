@@ -1,5 +1,7 @@
 import axios from "axios";
 import { useUserStore } from "@/stores/user";
+import router from "@/router";
+import { MessagePlugin } from "tdesign-vue-next";
 
 export const request = axios.create({
   baseURL: "/api",
@@ -21,8 +23,10 @@ request.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
+      MessagePlugin.error("登录过期，请重新登录");
       const userStore = useUserStore();
       userStore.logout();
+      router.replace({ path: "/login" });
     }
     return Promise.reject(error);
   },

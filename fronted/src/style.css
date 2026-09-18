@@ -1,3 +1,4 @@
+/* ========== 全局样式重置 ========== */
 * {
   margin: 0;
   padding: 0;
@@ -7,11 +8,91 @@
 html,
 body {
   height: 100%;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color: var(--color-text);
+  background-color: var(--color-bg);
 }
 
 #app {
   height: 100%;
+}
+
+/* ========== 统一设计变量 ========== */
+:root {
+  /* ---- 品牌主色 ---- */
+  --primary: #0052d9;
+  --primary-hover: #0034b5;
+  --primary-light: #e8f3ff;
+  --primary-shadow: rgba(0, 82, 217, 0.2);
+
+  /* ---- 功能色 ---- */
+  --color-success: #2ba471;
+  --color-warning: #e37318;
+  --color-error: #d54941;
+
+  /* ---- 中性色（文本层级） ---- */
+  --color-text: #1d1d1f;
+  --color-text-secondary: #4e5969;
+  --color-text-tertiary: #86909c;
+  --color-text-quaternary: #c9cdd4;
+
+  /* ---- 背景色 ---- */
+  --color-bg: #f3f4f7;
+  --color-bg-light: #f7f8fa;
+  --color-bg-canvas: #f2f3f5;
+  --color-bg-card: #ffffff;
+  --color-bg-white: #ffffff;
+
+  /* ---- 边框 ---- */
+  --color-border: #e5e6eb;
+  --color-border-light: #f0f1f3;
+  --color-border-dashed: #dcdfe6;
+
+  /* ---- 字号 ---- */
+  --font-xs: 12px;
+  --font-sm: 13px;
+  --font-base: 14px;
+  --font-md: 15px;
+  --font-lg: 16px;
+  --font-xl: 18px;
+  --font-xxl: 20px;
+  --font-title: 24px;
+
+  /* ---- 字重 ---- */
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  /* ---- 圆角 ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-card: 12px;
+
+  /* ---- 间距 ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ---- 阴影 ---- */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.1);
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04);
+
+  /* ---- 布局 ---- */
+  --header-height: 56px;
+  --sidebar-width: 220px;
+  --sidebar-collapsed-width: 64px;
 }
