@@ -268,7 +268,7 @@ onBeforeUnmount(() => {
 
       <!-- 创建 Workspace 对话框 -->
       <t-dialog v-model:visible="createDialogVisible" header="创建 Workspace" :footer="false" width="420px">
-        <t-form layout="vertical" @submit.prevent="submitCreateWorkspace">
+        <t-form layout="vertical" @submit="submitCreateWorkspace">
           <t-form-item label="Workspace 名称">
             <t-input v-model="workspaceName" placeholder="请输入 Workspace 名称" />
           </t-form-item>
@@ -354,7 +354,7 @@ onBeforeUnmount(() => {
 
       <!-- 创建工作流对话框 -->
       <t-dialog v-model:visible="wfCreateDialogVisible" header="创建工作流" :footer="false" width="420px">
-        <t-form layout="vertical" @submit.prevent="submitCreateWorkflow">
+        <t-form layout="vertical" @submit="submitCreateWorkflow">
           <t-form-item label="工作流名称">
             <t-input v-model="workflowName" placeholder="请输入工作流名称" />
           </t-form-item>

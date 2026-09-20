@@ -8,12 +8,10 @@ import {
 
 @Injectable()
 export class InputNodeExecutor implements NodeExecutor {
-
   async execute(
     context: NodeExecutionContext,
     node: any,
   ): Promise<NodeExecutionResult> {
-
     console.log('执行 Input Node');
 
     return {

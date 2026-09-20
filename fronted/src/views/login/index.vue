@@ -101,7 +101,7 @@ const submitForm = async () => {
 
     userStore.setToken(response.accessToken);
     userStore.setUserInfo(response.user);
-    const redirect = (route.query.redirect as string) || "/dashboard";
+    const redirect = (route.query.redirect as string) || "/chat";
     await router.push(redirect);
   } catch (error) {
     if (axios.isAxiosError(error)) {

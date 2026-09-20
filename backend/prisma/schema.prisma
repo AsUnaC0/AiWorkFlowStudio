@@ -17,20 +17,22 @@ model User {
 
   workspaces   Workspace[] @relation("WorkspaceOwner")
   memberships  WorkspaceMember[]
+  knowledgeBases KnowledgeBase[] @relation("KnowledgeBaseOwner")
 }
 
 model Workspace {
-  id        String   @id @default(uuid())
-  name      String
+  id              String   @id @default(uuid())
+  name            String
 
-  ownerId   String
-  owner     User     @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  ownerId         String
+  owner           User     @relation("WorkspaceOwner", fields: [ownerId], references: [id])
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  members   WorkspaceMember[]
-  workflows Workflow[]
+  members         WorkspaceMember[]
+  workflows       Workflow[]
+  knowledgeBases  WorkspaceKnowledgeBase[]
 }
 
 model WorkspaceMember {
@@ -78,4 +80,101 @@ model WorkflowVersion {
 
   @@unique([workflowId, version])
   @@index([workflowId])
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Base（知识库 —— 独立资源，可关联到多个 Workspace）
+// ---------------------------------------------------------------------------
+
+model KnowledgeBase {
+  id                 String   @id @default(uuid())
+  ownerId            String
+
+  name               String
+  description        String?
+
+  embeddingModel     String
+  embeddingDimension Int
+
+  documentCount      Int      @default(0)
+  chunkCount         Int      @default(0)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  owner              User     @relation("KnowledgeBaseOwner", fields: [ownerId], references: [id])
+  documents          Document[]
+  workspaces         WorkspaceKnowledgeBase[]
+
+  @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// WorkspaceKnowledgeBase（中间表：Workspace ↔ KnowledgeBase 多对多）
+// ---------------------------------------------------------------------------
+
+model WorkspaceKnowledgeBase {
+  id               String @id @default(uuid())
+
+  workspaceId       String
+  knowledgeBaseId   String
+
+  workspace        Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  knowledgeBase    KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime @default(now())
+
+  @@unique([workspaceId, knowledgeBaseId])
+  @@index([knowledgeBaseId])
+}
+
+// ---------------------------------------------------------------------------
+// Document（文档，知识库中的文件）
+// ---------------------------------------------------------------------------
+
+model Document {
+  id             String   @id @default(uuid())
+  knowledgeBaseId String
+
+  fileName       String
+  fileType       String
+  fileSize       Int
+  storagePath    String
+  mimeType       String?
+  status         String   @default("UPLOADED")   // UPLOADED / PROCESSING / COMPLETED / FAILED
+  errorMessage   String?
+  pageCount      Int?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  knowledgeBase  KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  chunks         DocumentChunk[]
+
+  @@index([knowledgeBaseId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// DocumentChunk（文档分块，对应 pgvector 存储）
+// ---------------------------------------------------------------------------
+
+model DocumentChunk {
+  id          String   @id @default(uuid())
+  documentId  String
+
+  content     String
+  chunkIndex  Int
+  tokenCount  Int?
+  // embedding 由 pgvector 扩展管理，Prisma 原生不支持 vector 类型
+  // 实际列通过原生 SQL migration 添加：embedding vector(768)
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([chunkIndex])
 }

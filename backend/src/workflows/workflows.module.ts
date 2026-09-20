@@ -13,6 +13,7 @@ import { InputNodeExecutor } from './engine/executors/input.executor';
 import { LLMNodeExecutor } from './engine/executors/llm.executor';
 import { OutputNodeExecutor } from './engine/executors/output.executor';
 import { StartNodeExecutor } from './engine/executors/start.executor';
+import { PromptNodeExecutor } from './engine/executors/prompt.executor';
 
 @Module({
   imports: [PrismaModule, AuthModule, AiModule],
@@ -25,6 +26,7 @@ import { StartNodeExecutor } from './engine/executors/start.executor';
     InputNodeExecutor,
     LLMNodeExecutor,
     OutputNodeExecutor,
+    PromptNodeExecutor,
   ],
 })
 export class WorkflowsModule {}

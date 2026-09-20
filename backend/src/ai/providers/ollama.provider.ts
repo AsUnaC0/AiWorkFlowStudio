@@ -1,31 +1,95 @@
 import { Injectable } from '@nestjs/common';
+import {
+  AiProvider,
+  ChatMessage,
+  ChatOptions,
+  ChatResult,
+  EmbeddingOptions,
+  EmbeddingResult,
+} from '../ai-provider.interface';
+
+const OLLAMA_BASE_URL = 'http://localhost:11434';
 
 @Injectable()
-export class OllamaProvider {
-  async *chatStream(params: {
-    model: string;
-    messages: {
-      role: 'system' | 'user' | 'assistant';
-      content: string;
-    }[];
-  }): AsyncGenerator<string> {
-    const response = await fetch('http://localhost:11434/api/chat', {
+export class OllamaProvider implements AiProvider {
+  readonly name = 'ollama';
+
+  // ---------------------------------------------------------------------------
+  // Chat（多轮，完整实现）
+  // ---------------------------------------------------------------------------
+
+  async chat(
+    messages: ChatMessage[],
+    options: ChatOptions,
+  ): Promise<ChatResult> {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: params.model,
-        messages: params.messages,
+        model: options.model,
+        messages,
+        stream: false,
+        options: this.buildOllamaOptions(options),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.buildError(response));
+    }
+
+    const data = (await response.json()) as {
+      message?: { content?: string };
+      eval_count?: number;
+      prompt_eval_count?: number;
+    };
+
+    const content = data.message?.content ?? '';
+    const promptTokens = data.prompt_eval_count;
+    const completionTokens = data.eval_count;
+
+    return {
+      content,
+      model: options.model,
+      usage:
+        promptTokens !== undefined && completionTokens !== undefined
+          ? {
+              promptTokens,
+              completionTokens,
+              totalTokens: promptTokens + completionTokens,
+            }
+          : undefined,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Complete（单轮，委托给 chat）
+  // ---------------------------------------------------------------------------
+
+  async complete(prompt: string, options: ChatOptions): Promise<ChatResult> {
+    return this.chat([{ role: 'user', content: prompt }], options);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stream（流式，完整实现）
+  // ---------------------------------------------------------------------------
+
+  async *streamChat(
+    messages: ChatMessage[],
+    options: ChatOptions,
+  ): AsyncGenerator<string> {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: options.model,
+        messages,
         stream: true,
+        options: this.buildOllamaOptions(options),
       }),
     });
 
     if (!response.ok || !response.body) {
-      const errorBody = await response.text();
-      throw new Error(
-        `Ollama 请求失败: ${response.status}${errorBody ? ` - ${errorBody}` : ''}`,
-      );
+      throw new Error(await this.buildError(response));
     }
 
     const reader = response.body.getReader();
@@ -57,34 +121,60 @@ export class OllamaProvider {
     }
   }
 
-  async chat(params: {
-    model: string;
-    messages: {
-      role: 'system' | 'user' | 'assistant';
-      content: string;
-    }[];
-  }): Promise<string> {
-    const response = await fetch('http://localhost:11434/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: params.model,
-        messages: params.messages,
-        stream: false,
-      }),
-    });
+  // ---------------------------------------------------------------------------
+  // Embedding（向量，新增）
+  // ---------------------------------------------------------------------------
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(
-        `Ollama 请求失败: ${response.status}${errorBody ? ` - ${errorBody}` : ''}`,
-      );
+  async embedding(
+    texts: string[],
+    options: EmbeddingOptions,
+  ): Promise<EmbeddingResult> {
+    const embeddings: number[][] = [];
+
+    // Ollama /api/embeddings 只接受单条输入，批量逐个调用
+    for (const text of texts) {
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: options.model,
+          prompt: text,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await this.buildError(response));
+      }
+
+      const data = (await response.json()) as {
+        embedding: number[];
+      };
+      embeddings.push(data.embedding);
     }
 
-    const data = await response.json();
+    return {
+      embeddings,
+      model: options.model,
+    };
+  }
 
-    return data.message.content;
+  // ---------------------------------------------------------------------------
+  // 内部工具
+  // ---------------------------------------------------------------------------
+
+  private buildOllamaOptions(options: ChatOptions): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    if (options.temperature !== undefined) {
+      result.temperature = options.temperature;
+    }
+    if (options.maxTokens !== undefined) {
+      result.num_predict = options.maxTokens;
+    }
+    return result;
+  }
+
+  private async buildError(response: Response): Promise<string> {
+    const body = await response.text();
+    return `Ollama 请求失败: ${response.status}${body ? ` - ${body}` : ''}`;
   }
 }

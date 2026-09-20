@@ -8,20 +8,29 @@ const router = createRouter({
     {
       path: "/",
       component: () => import("@/layout/MainLayout.vue"),
-      redirect: "/dashboard",
+      redirect: "/chat",
       children: [
         {
-          path: "dashboard",
-          name: "Dashboard",
-          component: () => import("@/views/dashboard/index.vue"),
+          path: "chat",
+          name: "Chat",
+          component: () => import("@/views/chat/index.vue"),
           meta: { title: "AI 聊天" },
         },
+        // 知识库列表（先选 workspace）
         {
           path: "knowledge",
-          name: "Knowledge",
+          name: "KnowledgeList",
           component: () => import("@/views/knowledge/index.vue"),
           meta: { title: "知识库" },
         },
+        // 知识库详情（文件管理）
+        {
+          path: "knowledge/:kbId",
+          name: "KnowledgeDetail",
+          component: () => import("@/views/knowledge/detail.vue"),
+          meta: { title: "知识库详情" },
+        },
+        // 工作空间（工作流列表）
         {
           path: "workflow",
           name: "WorkflowList",
@@ -45,7 +54,7 @@ const router = createRouter({
       meta: { title: "登录", public: true },
     },
 
-    // 工作流编辑器：独立路由，不经过 MainLayout，只保留头部返回导航
+    // 工作流编辑器：独立路由，不经过 MainLayout
     {
       path: "/workflow/:id",
       name: "WorkflowEditor",
@@ -55,21 +64,17 @@ const router = createRouter({
   ],
 });
 
-// 全局路由守卫：未登录时重定向到登录页
+// 全局路由守卫
 router.beforeEach((to) => {
   const userStore = useUserStore();
   const isAuthenticated = !!userStore.token;
   const isPublic = to.meta.public === true;
 
-  // 公开页面（登录页）：已登录则直接跳到首页
   if (isPublic) {
-    if (isAuthenticated) {
-      return { path: "/dashboard" };
-    }
+    if (isAuthenticated) return { path: "/chat" };
     return true;
   }
 
-  // 非公开页面：未登录则跳登录
   if (!isAuthenticated) {
     return { path: "/login", query: { redirect: to.fullPath } };
   }

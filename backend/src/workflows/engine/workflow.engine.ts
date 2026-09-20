@@ -34,7 +34,6 @@ export class WorkflowEngine {
       }
 
       visitedNodeIds.add(currentNode.id);
-      console.log(`执行 Node: ${currentNode.type}`);
 
       const executor = this.registry.get(currentNode.type);
 
@@ -45,6 +44,16 @@ export class WorkflowEngine {
 
       const outgoingEdges = workflow.edges.filter(
         (edge: any) => edge.source === currentNode.id,
+      );
+
+      const nextNodeType = outgoingEdges[0]
+        ? workflow.nodes.find((n: any) => n.id === outgoingEdges[0].target)
+            ?.type
+        : 'end';
+
+      console.log(
+        `[Node: ${currentNode.type}] 执行完成 → 传给下一个节点 [${nextNodeType}] 的输入:`,
+        context.previousOutput,
       );
 
       if (outgoingEdges.length === 0) {
@@ -117,6 +126,17 @@ export class WorkflowEngine {
       const outgoingEdges = workflow.edges.filter(
         (edge: any) => edge.source === currentNode.id,
       );
+
+      const nextNodeType = outgoingEdges[0]
+        ? workflow.nodes.find((n: any) => n.id === outgoingEdges[0].target)
+            ?.type
+        : 'end';
+
+      console.log(
+        `[Stream][Node: ${nodeType}] 执行完成 → 传给下一个节点 [${nextNodeType}] 的输入:`,
+        context.previousOutput,
+      );
+
       if (outgoingEdges.length === 0) break;
       if (outgoingEdges.length > 1) {
         throw new Error(`Node ${currentNode.id} 存在多个后继节点`);

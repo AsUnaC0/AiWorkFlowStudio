@@ -221,6 +221,16 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
                 v-model="selectedNode.data.prompt"></textarea>
             </div>
           </template>
+
+          <!-- Prompt 节点配置 (支持 Model, Temperature, Prompt 配置) -->
+          <template v-if="selectedNode.data.nodeType === 'prompt'">
+
+            <div class="form-item">
+              <label class="form-label">Prompt</label>
+              <textarea class="form-textarea" rows="6" placeholder="请输入 Prompt 模板"
+                v-model="selectedNode.data.prompt"></textarea>
+            </div>
+          </template>
         </div>
 
         <!-- 未选中节点提示 -->

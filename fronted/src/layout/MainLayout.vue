@@ -20,7 +20,7 @@ const activeMenu = computed(() => {
 
 // 菜单项定义
 const menuItems = [
-  { value: "/dashboard", label: "AI 聊天", icon: "chat" },
+  { value: "/chat", label: "AI 聊天", icon: "chat" },
   { value: "/workflow", label: "工作空间", icon: "apps" },
   { value: "/knowledge", label: "知识库", icon: "library" },
 ];
