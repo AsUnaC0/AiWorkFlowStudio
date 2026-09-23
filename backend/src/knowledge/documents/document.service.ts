@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { unlink } from 'node:fs/promises';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /**
@@ -37,6 +38,7 @@ export class DocumentService {
     fileSize: number;
     storagePath: string;
     mimeType?: string;
+    status?: 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   }) {
     const doc = await this.prisma.document.create({
       data: {
@@ -46,7 +48,7 @@ export class DocumentService {
         fileSize: data.fileSize,
         storagePath: data.storagePath,
         mimeType: data.mimeType ?? null,
-        status: 'UPLOADED',
+        status: data.status ?? 'UPLOADED',
       },
     });
 
@@ -59,23 +61,50 @@ export class DocumentService {
     return doc;
   }
 
+  /** 更新文档状态 */
+  async updateStatus(
+    id: string,
+    status: 'UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED',
+    errorMessage?: string,
+  ) {
+    return this.prisma.document.update({
+      where: { id },
+      data: {
+        status,
+        errorMessage: errorMessage ?? null,
+      },
+    });
+  }
+
   /** 删除文档 */
   async remove(id: string) {
     const doc = await this.prisma.document.findUnique({
       where: { id },
-      select: { id: true, knowledgeBaseId: true },
+      select: { id: true, knowledgeBaseId: true, storagePath: true },
     });
     if (!doc) throw new NotFoundException('Document not found');
 
+    // 先删磁盘文件（删不掉不阻塞 DB 记录，只打 warn）
+    try {
+      await unlink(doc.storagePath);
+    } catch {
+      // 文件可能被手动清理过，静默忽略
+    }
+
     await this.prisma.document.delete({ where: { id } });
 
-    // 重算知识库文档计数
-    const count = await this.prisma.document.count({
-      where: { knowledgeBaseId: doc.knowledgeBaseId },
-    });
+    // 重算知识库计数（文档级联删除后 chunks 也被清理）
+    const [documentCount, chunkCount] = await Promise.all([
+      this.prisma.document.count({
+        where: { knowledgeBaseId: doc.knowledgeBaseId },
+      }),
+      this.prisma.documentChunk.count({
+        where: { document: { knowledgeBaseId: doc.knowledgeBaseId } },
+      }),
+    ]);
     await this.prisma.knowledgeBase.update({
       where: { id: doc.knowledgeBaseId },
-      data: { documentCount: count },
+      data: { documentCount, chunkCount },
     });
 
     return doc;

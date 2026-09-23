@@ -3,9 +3,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { UpdateKnowledgeBaseDto } from './dto/update-knowledge-base.dto';
+
+const UPLOAD_DIR = join(process.cwd(), 'uploads');
 
 const kbSelection = {
   id: true,
@@ -74,9 +78,18 @@ export class KnowledgeService {
     });
   }
 
-  /** 删除知识库（级联删除 documents + chunks + 关联关系） */
+  /** 删除知识库（级联删除 documents + chunks + 关联关系 + 磁盘文件） */
   async remove(userId: string, id: string) {
     await this.assertOwnerExists(userId, id);
+
+    // 先清理磁盘文件目录（DB 记录删除后就拿不到路径了）
+    const storageDir = join(UPLOAD_DIR, id);
+    try {
+      await rm(storageDir, { recursive: true, force: true });
+    } catch {
+      // 文件系统异常不阻塞 DB 删除，只打 warn
+    }
+
     return this.prisma.knowledgeBase.delete({
       where: { id },
       select: kbSelection,

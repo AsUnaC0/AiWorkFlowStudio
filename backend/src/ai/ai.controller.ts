@@ -4,12 +4,12 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Inject,
   Post,
   UseGuards,
 } from '@nestjs/common';
 import { AI_PROVIDER } from './ai-provider.interface';
 import { AIService } from './ai.service';
-import { Inject } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { ChatMessage } from './ai-provider.interface';
 

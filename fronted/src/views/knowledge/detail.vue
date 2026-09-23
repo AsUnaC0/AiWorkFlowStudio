@@ -76,7 +76,7 @@ const startPolling = () => {
       return;
     }
     loadDocuments();
-  }, 2000);
+  }, 10000);
 };
 
 const stopPolling = () => {
@@ -300,8 +300,8 @@ onBeforeUnmount(() => {
                   <t-tag :theme="statusMap[row.status].theme" variant="light" size="small">
                     {{ statusMap[row.status].text }}
                   </t-tag>
-                  <t-progress v-if="row.status === 'PROCESSING'" :percentage="60"
-                    :bar-height="3" class="inline-progress" />
+                  <t-progress v-if="row.status === 'PROCESSING'" :percentage="60" :bar-height="3"
+                    class="inline-progress" />
                 </template>
               </t-table-col>
 
@@ -404,9 +404,18 @@ onBeforeUnmount(() => {
     gap: 6px;
     font-size: var(--font-sm);
 
-    .sep { color: var(--color-text-tertiary); }
-    .bc-label { color: var(--color-text-tertiary); }
-    .bc-name { color: var(--color-text); font-weight: 500; }
+    .sep {
+      color: var(--color-text-tertiary);
+    }
+
+    .bc-label {
+      color: var(--color-text-tertiary);
+    }
+
+    .bc-name {
+      color: var(--color-text);
+      font-weight: 500;
+    }
   }
 }
 
@@ -459,7 +468,9 @@ onBeforeUnmount(() => {
       padding: 0 var(--space-4);
       border-left: 1px solid var(--color-border);
 
-      &:first-child { border-left: none; }
+      &:first-child {
+        border-left: none;
+      }
 
       .stat-num {
         font-size: var(--font-lg);
@@ -501,7 +512,9 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--space-3);
 
-  .file-icon { font-size: 20px; }
+  .file-icon {
+    font-size: 20px;
+  }
 
   .file-info {
     display: flex;
@@ -541,7 +554,9 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-.placeholder { color: var(--color-text-tertiary); }
+.placeholder {
+  color: var(--color-text-tertiary);
+}
 
 .processing-tip {
   margin-top: var(--space-4);
@@ -571,9 +586,22 @@ onBeforeUnmount(() => {
       background: var(--primary-bg);
     }
 
-    .dz-icon { font-size: 40px; margin-bottom: var(--space-3); }
-    .dz-title { font-size: var(--font-base); font-weight: 500; color: var(--color-text); }
-    .dz-desc { font-size: var(--font-sm); color: var(--color-text-tertiary); margin-top: 4px; }
+    .dz-icon {
+      font-size: 40px;
+      margin-bottom: var(--space-3);
+    }
+
+    .dz-title {
+      font-size: var(--font-base);
+      font-weight: 500;
+      color: var(--color-text);
+    }
+
+    .dz-desc {
+      font-size: var(--font-sm);
+      color: var(--color-text-tertiary);
+      margin-top: 4px;
+    }
   }
 
   .file-list-preview {
@@ -598,9 +626,18 @@ onBeforeUnmount(() => {
       padding: 4px 0;
       font-size: var(--font-sm);
 
-      .preview-icon { font-size: 14px; }
-      .preview-name { flex: 1; color: var(--color-text); }
-      .preview-size { color: var(--color-text-tertiary); }
+      .preview-icon {
+        font-size: 14px;
+      }
+
+      .preview-name {
+        flex: 1;
+        color: var(--color-text);
+      }
+
+      .preview-size {
+        color: var(--color-text-tertiary);
+      }
     }
   }
 }

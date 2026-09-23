@@ -43,3 +43,6 @@ Thumbs.db
 
 # Tests
 .nyc_output/
+
+# Uploads
+backend/uploads/

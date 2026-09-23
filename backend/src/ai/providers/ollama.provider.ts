@@ -122,7 +122,7 @@ export class OllamaProvider implements AiProvider {
   }
 
   // ---------------------------------------------------------------------------
-  // Embedding（向量，新增）
+  // Embedding（向量）
   // ---------------------------------------------------------------------------
 
   async embedding(
@@ -131,7 +131,6 @@ export class OllamaProvider implements AiProvider {
   ): Promise<EmbeddingResult> {
     const embeddings: number[][] = [];
 
-    // Ollama /api/embeddings 只接受单条输入，批量逐个调用
     for (const text of texts) {
       const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
         method: 'POST',
@@ -146,16 +145,11 @@ export class OllamaProvider implements AiProvider {
         throw new Error(await this.buildError(response));
       }
 
-      const data = (await response.json()) as {
-        embedding: number[];
-      };
+      const data = (await response.json()) as { embedding: number[] };
       embeddings.push(data.embedding);
     }
 
-    return {
-      embeddings,
-      model: options.model,
-    };
+    return { embeddings, model: options.model };
   }
 
   // ---------------------------------------------------------------------------
@@ -164,12 +158,8 @@ export class OllamaProvider implements AiProvider {
 
   private buildOllamaOptions(options: ChatOptions): Record<string, unknown> {
     const result: Record<string, unknown> = {};
-    if (options.temperature !== undefined) {
-      result.temperature = options.temperature;
-    }
-    if (options.maxTokens !== undefined) {
-      result.num_predict = options.maxTokens;
-    }
+    if (options.temperature !== undefined) result.temperature = options.temperature;
+    if (options.maxTokens !== undefined) result.num_predict = options.maxTokens;
     return result;
   }
 

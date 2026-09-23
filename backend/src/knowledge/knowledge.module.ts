@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PrismaModule } from '../prisma/prisma.module';
 import { KnowledgeService } from './knowledge.service';
 import { KnowledgeController } from './knowledge.controller';
 import { DocumentsController } from './documents/documents.controller';
@@ -8,12 +9,13 @@ import { PdfParser } from './documents/parsers/pdf.parser';
 import { DocxParser } from './documents/parsers/docx.parser';
 import { TxtParser } from './documents/parsers/txt.parser';
 import { MarkdownParser } from './documents/parsers/markdown.parser';
-import { ChunkService } from './chunk/chunk.service';
+import { ChunkService } from './documents/chunk/chunk.service';
 import { EmbeddingService } from './embedding/embedding.service';
 import { VectorStoreService } from './vector/vector-store.service';
 import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.service';
 
 @Module({
+  imports: [PrismaModule],
   controllers: [KnowledgeController, DocumentsController],
   providers: [
     KnowledgeService,
@@ -28,10 +30,6 @@ import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.servi
     VectorStoreService,
     KnowledgeRetrievalService,
   ],
-  exports: [
-    KnowledgeService,
-    DocumentService,
-    KnowledgeRetrievalService,
-  ],
+  exports: [KnowledgeService, DocumentService, KnowledgeRetrievalService],
 })
 export class KnowledgeModule {}

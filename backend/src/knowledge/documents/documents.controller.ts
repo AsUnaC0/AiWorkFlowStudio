@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   Delete,
   Get,
@@ -20,6 +19,8 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { JwtUser } from '../../auth/strategies/jwt.strategy';
 import { DocumentService } from './document.service';
+import { DocumentParserService } from './document-parser.service';
+import { ChunkService } from './chunk/chunk.service';
 
 const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.markdown'];
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -36,7 +37,11 @@ const EXT_TO_TYPE: Record<string, string> = {
 @Controller()
 @UseGuards(JwtAuthGuard)
 export class DocumentsController {
-  constructor(private readonly documentService: DocumentService) {}
+  constructor(
+    private readonly documentService: DocumentService,
+    private readonly documentParserService: DocumentParserService,
+    private readonly chunkService: ChunkService,
+  ) {}
 
   // ===========================================================================
   // 上传
@@ -83,14 +88,39 @@ export class DocumentsController {
     await mkdir(storageDir, { recursive: true });
     await writeFile(storagePath, file.buffer);
 
-    return this.documentService.create({
+    // 先创建文档记录，状态为 PROCESSING
+    const doc = await this.documentService.create({
       knowledgeBaseId: kbId,
       fileName: file.originalname,
       fileType: EXT_TO_TYPE[ext] ?? ext.replace('.', '').toUpperCase(),
       fileSize: file.size,
       storagePath,
       mimeType: file.mimetype,
+      status: 'PROCESSING',
     });
+
+    // 解析、分块、存储
+    try {
+      const text = await this.documentParserService.parse(storagePath);
+      const chunks = await this.chunkService.split(text);
+      await this.chunkService.createMany(doc.id, kbId, chunks);
+
+      // 成功 → COMPLETED
+      await this.documentService.updateStatus(doc.id, 'COMPLETED');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '未知解析错误';
+
+      // 失败 → FAILED
+      await this.documentService.updateStatus(doc.id, 'FAILED', message);
+
+      throw new HttpException(
+        `文档处理失败：${message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+
+    // 重新获取，返回最终状态的文档记录
+    return this.documentService.findOne(doc.id);
   }
 
   // ===========================================================================
