@@ -158,7 +158,8 @@ export class OllamaProvider implements AiProvider {
 
   private buildOllamaOptions(options: ChatOptions): Record<string, unknown> {
     const result: Record<string, unknown> = {};
-    if (options.temperature !== undefined) result.temperature = options.temperature;
+    if (options.temperature !== undefined)
+      result.temperature = options.temperature;
     if (options.maxTokens !== undefined) result.num_predict = options.maxTokens;
     return result;
   }

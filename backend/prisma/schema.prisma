@@ -166,8 +166,8 @@ model DocumentChunk {
   content     String
   chunkIndex  Int
   tokenCount  Int?
-  // embedding 由 pgvector 扩展管理，Prisma 原生不支持 vector 类型
-  // 实际列通过原生 SQL migration 添加：embedding vector(768)
+  // ⚠️ embedding 由 pgvector 扩展单独手写 migration 添加（Prisma Unsupported 类型无法自动生成）
+  //   embedding vector(768)    ← 手写 migration 加
   metadata    Json?
 
   createdAt   DateTime @default(now())
