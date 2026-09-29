@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { VueFlow } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
@@ -8,6 +8,7 @@ import CustomNode from "@/components/workflow/CustomNode.vue";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useWorkflow } from "@/composables/useWorkflow";
 import { runWorkflowStream, type WorkflowStreamEvent } from "@/api/workflow";
+import { getKnowledgeBases, type KnowledgeBase } from "@/api/knowledge";
 import type { WorkflowDefinition } from "@/types/workflow";
 import { MessagePlugin } from "tdesign-vue-next";
 
@@ -45,6 +46,23 @@ const runResultText = computed(() =>
   runResult.value === null ? "" : JSON.stringify(runResult.value, null, 2),
 );
 
+/** 当前用户可用的知识库列表（RAG 节点用） */
+const knowledgeBases = ref<KnowledgeBase[]>([]);
+const knowledgeBasesLoading = ref(false);
+
+const fetchKnowledgeBases = async () => {
+  knowledgeBasesLoading.value = true;
+  try {
+    knowledgeBases.value = await getKnowledgeBases();
+  } catch (e) {
+    console.error("加载知识库列表失败", e);
+  } finally {
+    knowledgeBasesLoading.value = false;
+  }
+};
+
+onMounted(fetchKnowledgeBases);
+
 const openRunDialog = () => {
   runInput.value = "";
   runResult.value = null;
@@ -69,11 +87,7 @@ const handleRunWorkflow = async () => {
         ...node,
         type: String(node.data?.nodeType ?? node.type),
         data: node.data,
-        config: {
-          ...node.data,
-          model:
-            node.data?.model === "qwen2.5:7b" ? node.data.model : "qwen2.5:7b",
-        },
+        config: { ...node.data },
       })),
       edges: definition.edges,
     };
@@ -229,6 +243,52 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
               <label class="form-label">Prompt</label>
               <textarea class="form-textarea" rows="6" placeholder="请输入 Prompt 模板"
                 v-model="selectedNode.data.prompt"></textarea>
+            </div>
+          </template>
+
+          <!-- RAG 节点配置 -->
+          <template v-if="selectedNode.data.nodeType === 'rag'">
+            <div class="form-item">
+              <label class="form-label">知识库（可多选）</label>
+              <t-select v-model="selectedNode.data.knowledgeBaseIds" multiple
+                :disabled="knowledgeBasesLoading || knowledgeBases.length === 0" placeholder="请选择知识库">
+                <t-option v-for="kb in knowledgeBases" :key="kb.id" :value="kb.id">
+                  {{ kb.name }}
+                  <span v-if="kb.documentCount" style="color:#bbb;margin-left:4px">
+                    ({{ kb.documentCount }}文档)
+                  </span>
+                </t-option>
+              </t-select>
+              <div v-if="knowledgeBases.length === 0 && !knowledgeBasesLoading" class="form-hint">
+                暂无知识库，请先去知识库管理创建
+              </div>
+            </div>
+
+            <div class="form-item">
+              <label class="form-label">检索模式</label>
+              <select class="form-select" v-model="selectedNode.data.searchMode">
+                <option value="hybrid">混合检索（Hybrid，推荐）</option>
+                <option value="vector">仅向量检索</option>
+                <option value="keyword">仅关键词检索</option>
+              </select>
+            </div>
+
+            <div class="form-item">
+              <label class="form-label">Top K：{{ selectedNode.data.topK ?? 5 }}</label>
+              <input type="range" min="1" max="20" step="1" class="form-range"
+                v-model.number="selectedNode.data.topK" />
+            </div>
+
+            <div class="form-item" v-if="selectedNode.data.searchMode !== 'keyword'">
+              <label class="form-label">距离阈值：{{ selectedNode.data.threshold ?? 0.8 }}</label>
+              <input type="range" min="0.1" max="1.5" step="0.05" class="form-range"
+                v-model.number="selectedNode.data.threshold" />
+              <div class="form-hint">越小越严格（0.5~0.8 常用）</div>
+            </div>
+
+            <div class="form-item">
+              <label class="form-label">Embedding 模型</label>
+              <input class="form-input" v-model="selectedNode.data.embeddingModel" placeholder="nomic-embed-text" />
             </div>
           </template>
         </div>
@@ -405,6 +465,12 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
 
         .form-range {
           cursor: pointer;
+        }
+
+        .form-hint {
+          font-size: 11px;
+          color: var(--color-text-tertiary);
+          line-height: 1.4;
         }
       }
     }

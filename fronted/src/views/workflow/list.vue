@@ -305,52 +305,35 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <t-tabs v-model="activeTab" class="main-tabs">
-        <!-- 工作流 Tab -->
-        <t-tab-panel value="workflow" label="工作流">
-          <t-loading :loading="wfLoading" text="正在加载工作流..." :delay="200">
-            <div class="list-content">
-              <t-alert v-if="wfError" theme="error" :message="wfError" />
+      <!-- 工作流 Tab -->
+      <t-loading :loading="wfLoading" text="正在加载工作流..." :delay="200">
+        <div class="list-content">
+          <t-alert v-if="wfError" theme="error" :message="wfError" />
 
-              <template v-else-if="workflows.length > 0">
-                <div class="workflow-grid">
-                  <div v-for="wf in workflows" :key="wf.id" class="workflow-card-wrapper" :data-id="wf.id"
-                    @click="handleWorkflowClick">
-                    <t-card class="workflow-card" :bordered="true" :title="wf.name">
-                      <div class="card-footer">
-                        <span class="meta-label">创建于 {{ formatDate(wf.createdAt) }}</span>
-                        <span class="meta-label">更新于 {{ formatDate(wf.updatedAt) }}</span>
-                      </div>
-                    </t-card>
+          <template v-else-if="workflows.length > 0">
+            <div class="workflow-grid">
+              <div v-for="wf in workflows" :key="wf.id" class="workflow-card-wrapper" :data-id="wf.id"
+                @click="handleWorkflowClick">
+                <t-card class="workflow-card" :bordered="true" :title="wf.name">
+                  <div class="card-footer">
+                    <span class="meta-label">创建于 {{ formatDate(wf.createdAt) }}</span>
+                    <span class="meta-label">更新于 {{ formatDate(wf.updatedAt) }}</span>
                   </div>
-                </div>
-              </template>
-
-              <t-empty v-else type="empty" title="还没有工作流" description="点击上方按钮创建第一个工作流吧">
-                <template #action>
-                  <t-button theme="primary" @click="openWfCreateDialog">
-                    创建工作流
-                  </t-button>
-                </template>
-              </t-empty>
+                </t-card>
+              </div>
             </div>
-          </t-loading>
-        </t-tab-panel>
+          </template>
 
-        <!-- 知识库 Tab -->
-        <t-tab-panel value="knowledge" label="知识库">
-          <div class="tab-placeholder">
-            <t-empty type="maintenance" title="知识库功能开发中" description="知识库 API 接口尚未对接，敬请期待" />
-          </div>
-        </t-tab-panel>
+          <t-empty v-else type="empty" title="还没有工作流" description="点击上方按钮创建第一个工作流吧">
+            <template #action>
+              <t-button theme="primary" @click="openWfCreateDialog">
+                创建工作流
+              </t-button>
+            </template>
+          </t-empty>
+        </div>
+      </t-loading>
 
-        <!-- Agent Tab -->
-        <t-tab-panel value="agent" label="Agent">
-          <div class="tab-placeholder">
-            <t-empty type="maintenance" title="Agent 功能开发中" description="Agent API 接口尚未对接，敬请期待" />
-          </div>
-        </t-tab-panel>
-      </t-tabs>
 
       <!-- 创建工作流对话框 -->
       <t-dialog v-model:visible="wfCreateDialogVisible" header="创建工作流" :footer="false" width="420px">

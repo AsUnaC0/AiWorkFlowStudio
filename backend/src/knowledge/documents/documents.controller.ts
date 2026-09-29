@@ -56,7 +56,10 @@ export class DocumentsController {
   /** 上传文档到指定知识库 → 解析 → 分块 → 向量化 → COMPLETED */
   @Post('knowledge-bases/:kbId/documents')
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: MAX_FILE_SIZE } }),
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_FILE_SIZE },
+      defParamCharset: 'utf8',
+    }),
   )
   async upload(
     @CurrentUser() user: JwtUser,

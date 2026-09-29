@@ -5,6 +5,7 @@ import { LLMNodeExecutor } from './executors/llm.executor';
 import { OutputNodeExecutor } from './executors/output.executor';
 import { StartNodeExecutor } from './executors/start.executor';
 import { PromptNodeExecutor } from './executors/prompt.executor';
+import { RAGNodeExecutor } from './executors/rag.executor';
 
 @Injectable()
 export class NodeExecutorRegistry {
@@ -16,12 +17,14 @@ export class NodeExecutorRegistry {
     private readonly llmExecutor: LLMNodeExecutor,
     private readonly outputExecutor: OutputNodeExecutor,
     private readonly promptExecutor: PromptNodeExecutor,
+    private readonly ragExecutor: RAGNodeExecutor,
   ) {
     this.executors.set('start', startExecutor);
     this.executors.set('input', inputExecutor);
     this.executors.set('llm', llmExecutor);
     this.executors.set('output', outputExecutor);
     this.executors.set('prompt', promptExecutor);
+    this.executors.set('rag', ragExecutor);
   }
 
   get(type: string): NodeExecutor {

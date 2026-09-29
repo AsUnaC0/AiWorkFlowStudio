@@ -30,6 +30,12 @@ import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.servi
     VectorStoreService,
     KnowledgeRetrievalService,
   ],
-  exports: [KnowledgeService, DocumentService, KnowledgeRetrievalService],
+  exports: [
+    KnowledgeService,
+    DocumentService,
+    KnowledgeRetrievalService,
+    VectorStoreService,
+    EmbeddingService,
+  ],
 })
 export class KnowledgeModule {}

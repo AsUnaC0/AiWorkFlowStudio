@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AiModule } from '../ai/ai.module';
 import { AuthModule } from '../auth/auth.module';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import {
   WorkflowController,
@@ -14,9 +15,10 @@ import { LLMNodeExecutor } from './engine/executors/llm.executor';
 import { OutputNodeExecutor } from './engine/executors/output.executor';
 import { StartNodeExecutor } from './engine/executors/start.executor';
 import { PromptNodeExecutor } from './engine/executors/prompt.executor';
+import { RAGNodeExecutor } from './engine/executors/rag.executor';
 
 @Module({
-  imports: [PrismaModule, AuthModule, AiModule],
+  imports: [PrismaModule, AuthModule, AiModule, KnowledgeModule],
   controllers: [WorkflowsController, WorkflowController],
   providers: [
     WorkflowsService,
@@ -27,6 +29,7 @@ import { PromptNodeExecutor } from './engine/executors/prompt.executor';
     LLMNodeExecutor,
     OutputNodeExecutor,
     PromptNodeExecutor,
+    RAGNodeExecutor,
   ],
 })
 export class WorkflowsModule {}

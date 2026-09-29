@@ -23,6 +23,38 @@ export function useWorkflow(workflowId: string) {
   // 当前选中的节点
   const selectedNode = ref<Node | null>(null);
 
+  /**
+   * 补齐节点缺失的默认配置字段
+   * — 兼容旧版本保存的工作流（当时还没有这些字段）
+   */
+  const normalizeNodeData = (node: Node): Node => {
+    const data = { ...(node.data ?? {}) };
+    const nodeType: string = data.nodeType ?? node.type;
+
+    if (nodeType === "rag") {
+      data.knowledgeBaseIds ??= [];
+      data.searchMode ??= "hybrid";
+      data.topK ??= 5;
+      data.threshold ??= 0.8;
+      data.embeddingModel ??= "nomic-embed-text";
+      // 旧数据可能残留 temperature（历史 bug：所有节点默认塞了 0.7），移除
+      if ("temperature" in data && data.temperature === 0.7 && !data.model) {
+        delete data.temperature;
+      }
+    }
+
+    if (nodeType === "llm") {
+      data.model ??= "qwen2.5:7b";
+      data.temperature ??= 0.7;
+    }
+
+    if (nodeType === "prompt") {
+      data.prompt ??= "";
+    }
+
+    return { ...node, data };
+  };
+
   // 初始化节点示例 (匹配需求结构: Start -> LLM -> Output)
   const initialNodes = ref<Node[]>([
     {
@@ -64,6 +96,12 @@ export function useWorkflow(workflowId: string) {
 
   // 处理节点点击选中
   const onNodeClick = (event: { node: Node }) => {
+    // 选中时补齐缺失字段（兼容旧数据）
+    const normalized = normalizeNodeData(event.node);
+    if (normalized.data !== event.node.data) {
+      // VueFlow 的 node data 是响应式代理，直接在原对象上补字段让 v-model 生效
+      Object.assign(event.node.data, normalized.data);
+    }
     selectedNode.value = event.node;
   };
 
@@ -94,8 +132,14 @@ export function useWorkflow(workflowId: string) {
         label: label || type.toUpperCase(),
         nodeType: type,
         model: type === "llm" ? "qwen2.5:7b" : undefined,
-        prompt: type === "llm" ? "" : undefined,
-        temperature: 0.7,
+        prompt: type === "llm" || type === "prompt" ? "" : undefined,
+        temperature: type === "llm" ? 0.7 : undefined,
+        // RAG 节点默认配置
+        knowledgeBaseIds: type === "rag" ? [] : undefined,
+        searchMode: type === "rag" ? "hybrid" : undefined,
+        topK: type === "rag" ? 5 : undefined,
+        threshold: type === "rag" ? 0.8 : undefined,
+        embeddingModel: type === "rag" ? "nomic-embed-text" : undefined,
       },
     };
 
@@ -119,9 +163,12 @@ export function useWorkflow(workflowId: string) {
       workflowName.value = workflow.name || "";
       const definition = workflow.currentVersion?.definition;
       if (definition) {
-        initialNodes.value = definition.nodes;
+        const normalizedNodes = definition.nodes.map((n: Node) =>
+          normalizeNodeData(n),
+        );
+        initialNodes.value = normalizedNodes;
         initialEdges.value = definition.edges;
-        setNodes(definition.nodes);
+        setNodes(normalizedNodes);
         setEdges(definition.edges);
       }
     } catch {

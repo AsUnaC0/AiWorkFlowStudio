@@ -9,7 +9,6 @@ import {
   type DocumentItem,
 } from "@/api/knowledge";
 import { MessagePlugin } from "tdesign-vue-next";
-import type { UploadFile } from "tdesign-vue-next";
 
 const route = useRoute();
 const router = useRouter();
@@ -201,6 +200,18 @@ const fileIcon = (fileType: string) => {
 };
 
 // ===========================================================================
+// 表格列配置
+// ===========================================================================
+const columns = [
+  { colKey: "fileName", title: "文件名", width: 280 },
+  { colKey: "status", title: "状态", width: 120 },
+  { colKey: "pageCount", title: "页数", width: 80 },
+  { colKey: "errorMessage", title: "错误信息" },
+  { colKey: "createdAt", title: "上传时间", width: 180 },
+  { colKey: "actions", title: "操作", width: 120, align: "right" as const },
+];
+
+// ===========================================================================
 // 生命周期
 // ===========================================================================
 
@@ -281,55 +292,40 @@ onBeforeUnmount(() => {
           </t-empty>
 
           <!-- 文档表格 -->
-          <t-table v-else :data="documents" row-key="id" hover stripe size="medium">
-            <template #columns>
-              <t-table-col col-key="fileName" title="文件名" :cell-width="280">
-                <template #cell="{ row }">
-                  <div class="file-name-cell">
-                    <span class="file-icon">{{ fileIcon(row.fileType) }}</span>
-                    <div class="file-info">
-                      <div class="file-name" :title="row.fileName">{{ row.fileName }}</div>
-                      <div class="file-meta">{{ row.fileType }} · {{ formatSize(row.fileSize) }}</div>
-                    </div>
-                  </div>
-                </template>
-              </t-table-col>
+          <t-table v-else :data="documents" :columns="columns" row-key="id" hover size="medium">
+            <template #fileName="{ row }">
+              <div class="file-name-cell">
+                <span class="file-icon">{{ fileIcon(row.fileType) }}</span>
+                <div class="file-info">
+                  <div class="file-name" :title="row.fileName">{{ row.fileName }}</div>
+                  <div class="file-meta">{{ row.fileType }} · {{ formatSize(row.fileSize) }}</div>
+                </div>
+              </div>
+            </template>
 
-              <t-table-col col-key="status" title="状态" :cell-width="120">
-                <template #cell="{ row }">
-                  <t-tag :theme="statusMap[row.status].theme" variant="light" size="small">
-                    {{ statusMap[row.status].text }}
-                  </t-tag>
-                  <t-progress v-if="row.status === 'PROCESSING'" :percentage="60" :bar-height="3"
-                    class="inline-progress" />
-                </template>
-              </t-table-col>
+            <template #status="{ row }">
+              <t-tag :theme="statusMap[row.status].theme" variant="light" size="small">
+                {{ statusMap[row.status].text }}
+              </t-tag>
+              <t-progress v-if="row.status === 'PROCESSING'" :percentage="60" :bar-height="3" class="inline-progress" />
+            </template>
 
-              <t-table-col col-key="pageCount" title="页数" :cell-width="80">
-                <template #cell="{ row }">{{ row.pageCount ?? '-' }}</template>
-              </t-table-col>
+            <template #pageCount="{ row }">{{ row.pageCount ?? '-' }}</template>
 
-              <t-table-col col-key="errorMessage" title="错误信息">
-                <template #cell="{ row }">
-                  <span v-if="row.status === 'FAILED' && row.errorMessage" class="error-text" :title="row.errorMessage">
-                    {{ row.errorMessage }}
-                  </span>
-                  <span v-else class="placeholder">-</span>
-                </template>
-              </t-table-col>
+            <template #errorMessage="{ row }">
+              <span v-if="row.status === 'FAILED' && row.errorMessage" class="error-text" :title="row.errorMessage">
+                {{ row.errorMessage }}
+              </span>
+              <span v-else class="placeholder">-</span>
+            </template>
 
-              <t-table-col col-key="createdAt" title="上传时间" :cell-width="180">
-                <template #cell="{ row }">{{ formatDate(row.createdAt) }}</template>
-              </t-table-col>
+            <template #createdAt="{ row }">{{ formatDate(row.createdAt) }}</template>
 
-              <t-table-col col-key="actions" title="操作" :cell-width="120" :align="'right'">
-                <template #cell="{ row }">
-                  <t-button variant="text" size="small" status="danger" @click="openDeleteDialog(row)">
-                    <template #icon><t-icon name="delete" /></template>
-                    删除
-                  </t-button>
-                </template>
-              </t-table-col>
+            <template #actions="{ row }">
+              <t-button variant="text" size="small" status="danger" @click="openDeleteDialog(row)">
+                <template #icon><t-icon name="delete" /></template>
+                删除
+              </t-button>
             </template>
           </t-table>
 
