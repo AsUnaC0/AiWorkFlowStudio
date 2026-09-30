@@ -14,7 +14,7 @@ const router = createRouter({
           path: "chat",
           name: "Chat",
           component: () => import("@/views/chat/index.vue"),
-          meta: { title: "AI 聊天" },
+          meta: { title: "chat" },
         },
         // 知识库列表（先选 workspace）
         {
@@ -32,16 +32,10 @@ const router = createRouter({
         },
         // 工作空间（工作流列表）
         {
-          path: "workflow",
-          name: "WorkflowList",
-          component: () => import("@/views/workflow/list.vue"),
+          path: "workspace",
+          name: "WorkspaceList",
+          component: () => import("@/views/workspace/index.vue"),
           meta: { title: "工作空间" },
-        },
-        {
-          path: "report",
-          name: "Report",
-          component: () => import("@/views/report/index.vue"),
-          meta: { title: "报告" },
         },
       ],
     },
@@ -56,9 +50,9 @@ const router = createRouter({
 
     // 工作流编辑器：独立路由，不经过 MainLayout
     {
-      path: "/workflow/:id",
+      path: "/workspace/:id",
       name: "WorkflowEditor",
-      component: () => import("@/views/workflow/index.vue"),
+      component: () => import("@/views/workspace/workflow.vue"),
       meta: { title: "工作流编辑", standalone: true },
     },
   ],

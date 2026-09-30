@@ -1,8 +1,78 @@
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useVueFlow, type Node, type Edge } from "@vue-flow/core";
 import { getWorkflow, updateWorkflow } from "@/api/workflow";
 import type { WorkflowDefinition } from "@/types/workflow";
 import { MessagePlugin } from "tdesign-vue-next";
+
+/** 节点类型 → 显示中文名 */
+const NODE_TYPE_LABELS: Record<string, string> = {
+  start: "Start",
+  input: "Input",
+  llm: "LLM",
+  prompt: "Prompt",
+  rag: "RAG",
+  http: "HTTP",
+  condition: "Condition",
+  output: "Output",
+};
+
+/** 已知的节点输出字段（设计期可知的） */
+interface OutputField {
+  shortLabel: string; // 在 {{nodeId.xxx}} 里的 xxx
+  fullTemplate: (nodeId: string) => string; // 完整模板
+}
+
+/**
+ * 根据节点类型返回设计期已知的输出字段
+ * HTTP body 内部字段（score/vip/...）运行时才知道，不列在这里
+ */
+function knownOutputFieldsFor(nodeType: string): OutputField[] {
+  switch (nodeType) {
+    case "start":
+    case "input":
+    case "llm":
+    case "prompt":
+    case "rag":
+    case "output":
+      return [
+        {
+          shortLabel: "output",
+          fullTemplate: (id) => `{{${id}.output}}`,
+        },
+      ];
+
+    case "http":
+      return [
+        {
+          shortLabel: "status",
+          fullTemplate: (id) => `{{${id}.status}}`,
+        },
+        {
+          shortLabel: "headers",
+          fullTemplate: (id) => `{{${id}.headers}}`,
+        },
+        {
+          shortLabel: "body",
+          fullTemplate: (id) => `{{${id}.body}}`,
+        },
+      ];
+
+    case "condition":
+      return [
+        {
+          shortLabel: "result",
+          fullTemplate: (id) => `{{${id}.result}}`,
+        },
+        {
+          shortLabel: "branch",
+          fullTemplate: (id) => `{{${id}.branch}}`,
+        },
+      ];
+
+    default:
+      return [];
+  }
+}
 
 export function useWorkflow(workflowId: string) {
   const {
@@ -50,6 +120,58 @@ export function useWorkflow(workflowId: string) {
 
     if (nodeType === "prompt") {
       data.prompt ??= "";
+    }
+
+    if (nodeType === "http") {
+      data.method ??= "GET";
+      data.url ??= "";
+      data.bodyType ??= "json";
+      data.timeout ??= 30000;
+      // 编辑态用数组，持久化存 Record 格式。加载时把 Record 转回数组
+      if (
+        data.headers &&
+        typeof data.headers === "object" &&
+        !Array.isArray(data.headers)
+      ) {
+        data._headers = Object.entries(data.headers).map(([key, value]) => ({
+          key,
+          value: String(value),
+        }));
+        delete data.headers;
+      }
+      data._headers ??= [];
+      if (
+        data.query &&
+        typeof data.query === "object" &&
+        !Array.isArray(data.query)
+      ) {
+        data._query = Object.entries(data.query).map(([key, value]) => ({
+          key,
+          value: String(value),
+        }));
+        delete data.query;
+      }
+      data._query ??= [];
+    }
+
+    if (nodeType === "condition") {
+      data.logicalOperator ??= "AND";
+      // 加载持久化的 conditions → 编辑态 _conditions（带 id）
+      if (
+        Array.isArray(data.conditions) &&
+        (!Array.isArray(data._conditions) || data._conditions.length === 0)
+      ) {
+        data._conditions = data.conditions.map((c: any, idx: number) => ({
+          id: c.id ?? `rule-${idx + 1}`,
+          left: c.left ?? "",
+          operator: c.operator ?? "eq",
+          right: c.right ?? "",
+        }));
+        delete data.conditions;
+      }
+      data._conditions ??= [
+        { id: "rule-1", left: "", operator: "eq", right: "" },
+      ];
     }
 
     return { ...node, data };
@@ -140,6 +262,19 @@ export function useWorkflow(workflowId: string) {
         topK: type === "rag" ? 5 : undefined,
         threshold: type === "rag" ? 0.8 : undefined,
         embeddingModel: type === "rag" ? "nomic-embed-text" : undefined,
+        // HTTP 节点默认配置
+        method: type === "http" ? "GET" : undefined,
+        url: type === "http" ? "" : undefined,
+        bodyType: type === "http" ? "json" : undefined,
+        timeout: type === "http" ? 30000 : undefined,
+        _headers: type === "http" ? [] : undefined,
+        _query: type === "http" ? [] : undefined,
+        // Condition 节点默认配置
+        logicalOperator: type === "condition" ? "AND" : undefined,
+        _conditions:
+          type === "condition"
+            ? [{ id: "rule-1", left: "", operator: "eq", right: "" }]
+            : undefined,
       },
     };
 
@@ -187,10 +322,7 @@ export function useWorkflow(workflowId: string) {
     saving.value = true;
     errorMessage.value = "";
     try {
-      const definition = {
-        nodes: getNodes.value,
-        edges: getEdges.value,
-      } as unknown as WorkflowDefinition;
+      const definition = getCurrentDefinition();
       await updateWorkflow(workflowId, { definition });
       MessagePlugin.success("工作流保存成功");
       return true;
@@ -203,9 +335,116 @@ export function useWorkflow(workflowId: string) {
     }
   };
 
+  /** 把编辑态的节点数据转为持久化/运行时的干净格式 */
+  const sanitizeNodeForSave = (node: Node): Node => {
+    const data: any = { ...(node.data ?? {}) };
+    const nodeType: string = data.nodeType ?? node.type;
+
+    if (nodeType === "http") {
+      // _headers 数组 → headers Record
+      if (Array.isArray(data._headers)) {
+        const headers: Record<string, string> = {};
+        for (const row of data._headers) {
+          if (row?.key?.trim()) headers[row.key.trim()] = row.value ?? "";
+        }
+        data.headers = headers;
+        delete data._headers;
+      }
+      // _query 数组 → query Record
+      if (Array.isArray(data._query)) {
+        const query: Record<string, string> = {};
+        for (const row of data._query) {
+          if (row?.key?.trim()) query[row.key.trim()] = row.value ?? "";
+        }
+        data.query = query;
+        delete data._query;
+      }
+    }
+
+    if (nodeType === "condition") {
+      // _conditions（编辑态）→ conditions（持久化）
+      if (Array.isArray(data._conditions)) {
+        data.conditions = data._conditions.map((c: any) => ({
+          id: c.id ?? `rule-${Math.random().toString(36).slice(2, 8)}`,
+          left: c.left ?? "",
+          operator: c.operator ?? "eq",
+          // right 可能是变量模板字符串或 JSON 字符串，直接透传
+          right: c.right ?? "",
+        }));
+        delete data._conditions;
+      }
+      data.logicalOperator ??= "AND";
+    }
+
+    return { ...node, data };
+  };
+
   const getCurrentDefinition = (): WorkflowDefinition => ({
-    nodes: getNodes.value,
+    nodes: getNodes.value.map(sanitizeNodeForSave),
     edges: getEdges.value,
+  });
+
+  /**
+   * 可用变量列表（扁平结构）
+   * 自动从画布所有节点提取已知输出字段，供 Condition / HTTP / LLM 等节点选择
+   */
+  const availableVariables = computed(() => {
+    const groups: Array<{
+      label: string;
+      options: Array<{ value: string; label: string }>;
+    }> = [];
+
+    // 1. 全局固定变量
+    groups.push({
+      label: "全局",
+      options: [
+        { value: "{{input}}", label: "input — 工作流初始输入" },
+        { value: "{{previous}}", label: "previous — 上一个节点输出" },
+      ],
+    });
+
+    // 2. 从画布所有节点提取
+    const nodeGroups = new Map<
+      string,
+      Array<{ value: string; label: string }>
+    >();
+
+    for (const node of getNodes.value) {
+      const nodeType: string =
+        (node.data?.nodeType as string) ?? node.type ?? "";
+      const nodeId = node.id;
+      const nodeLabel: string =
+        (node.data?.label as string) ?? nodeType ?? nodeId;
+
+      const fields = knownOutputFieldsFor(nodeType);
+      if (fields.length === 0) continue;
+
+      const options = fields.map((field) => ({
+        value: field.fullTemplate(nodeId),
+        label: `${nodeId}${field.shortLabel !== "output" ? "." + field.shortLabel : ""}`,
+      }));
+
+      if (!nodeGroups.has(nodeType)) {
+        nodeGroups.set(nodeType, []);
+      }
+      nodeGroups.get(nodeType)!.push(...options);
+
+      // 也加一个节点整体输出（不带字段）
+      nodeGroups.get(nodeType)!.push({
+        value: `{{${nodeId}}}`,
+        label: `${nodeId} — ${nodeLabel}（整体输出）`,
+      });
+    }
+
+    // 按节点类型分组
+    for (const [type, options] of nodeGroups) {
+      groups.push({
+        label: `${NODE_TYPE_LABELS[type] ?? type} 节点`,
+        options,
+      });
+    }
+
+    return groups;
   });
 
   onMounted(loadWorkflow);
@@ -224,5 +463,6 @@ export function useWorkflow(workflowId: string) {
     workflowName,
     saveWorkflow,
     getCurrentDefinition,
+    availableVariables,
   };
 }

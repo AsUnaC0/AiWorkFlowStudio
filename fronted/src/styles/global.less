@@ -1,0 +1,243 @@
+/* ============================================================
+ * AI WorkFlow Studio — Global Styles
+ * 引入所有设计系统文件，设置 CSS 变量和 TDesign 主题覆盖
+ * ============================================================ */
+
+@import "./variables.less";
+@import "./animations.less";
+@import "./transitions.less";
+
+/* ========== 全局样式重置 ========== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: @font-family;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  font-size: @font-base;
+  line-height: 1.5;
+}
+
+#app {
+  height: 100%;
+}
+
+/* ========== CSS 变量（Light Mode）========== */
+:root {
+  /* 品牌主色 —— 紫色系 */
+  --primary: @primary;
+  --primary-hover: @primary-hover;
+  --primary-light: @primary-light;
+  --primary-shadow: @primary-shadow;
+
+  /* 功能色 */
+  --color-success: @color-success;
+  --color-warning: @color-warning;
+  --color-error: @color-error;
+
+  /* 文本层级 */
+  --color-text: @color-text;
+  --color-text-secondary: @color-text-secondary;
+  --color-text-tertiary: @color-text-tertiary;
+
+  /* 背景色 */
+  --color-bg: @color-bg;
+  --color-bg-surface: @color-bg-surface;
+  --color-bg-white: @color-bg-surface; /* 兼容旧变量 */
+  --color-bg-hover: @color-bg-hover;
+  --color-bg-active: @color-bg-active;
+  --primary-bg: @primary-light; /* 兼容旧变量 */
+
+  /* 边框 */
+  --color-border: @color-border;
+  --color-border-strong: @color-border-strong;
+  --color-border-dashed: @color-border-strong; /* 兼容旧变量 */
+
+  /* 字号 */
+  --font-xs: @font-xs;
+  --font-sm: @font-sm;
+  --font-base: @font-base;
+  --font-md: @font-md;
+  --font-lg: @font-lg;
+  --font-xl: @font-xl;
+  --font-xxl: @font-xxl;
+
+  /* 圆角 */
+  --radius-sm: @radius-sm;
+  --radius-md: @radius-md;
+  --radius-lg: @radius-lg;
+  --radius-xl: @radius-xl;
+  --radius-card: @radius-card;
+
+  /* 间距 */
+  --space-1: @space-1;
+  --space-2: @space-2;
+  --space-3: @space-3;
+  --space-4: @space-4;
+  --space-5: @space-5;
+  --space-6: @space-6;
+  --space-8: @space-8;
+  --space-10: @space-10;
+  --space-12: @space-12;
+
+  /* 阴影 */
+  --shadow-md: @shadow-md;
+  --shadow-card: @shadow-card;
+  --shadow-sm: @shadow-sm;
+  --shadow-float: @shadow-float;
+
+  /* 布局 */
+  --header-height: @header-height;
+  --sidebar-width: @sidebar-width;
+  --sidebar-collapsed-width: @sidebar-collapsed-width;
+
+  /* TDesign 主题 Token 覆盖 —— 把默认蓝改成品牌紫 */
+  --td-brand-color: @primary;
+  --td-brand-color-hover: @primary-hover;
+  --td-brand-color-focus: @primary-hover;
+  --td-brand-color-active: #5B4AE0;
+  --td-brand-color-disabled: #C4B8FC;
+  --td-brand-color-light: @primary-light;
+  --td-text-color-primary: @color-text;
+  --td-text-color-secondary: @color-text-secondary;
+  --td-text-color-placeholder: @color-text-tertiary;
+  --td-bg-color-page: @color-bg;
+  --td-bg-color-container: @color-bg-surface;
+  --td-bg-color-container-hover: @color-bg-hover;
+  --td-bg-color-container-active: @color-bg-active;
+  --td-component-stroke: @color-border;
+  --td-component-border: @color-border;
+  --td-border-level-1-color: @color-border;
+}
+
+/* ========== 公共页面布局样式 ========== */
+
+.page-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: var(--space-6) var(--space-8) var(--space-8);
+  box-sizing: border-box;
+  animation: fade-slide-up @duration-normal @ease-out;
+}
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) 0 var(--space-4);
+  flex-shrink: 0;
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .page-title {
+    font-size: @font-xl;
+    font-weight: 600;
+    color: var(--color-text);
+    letter-spacing: -0.01em;
+  }
+
+  .page-subtitle {
+    font-size: @font-sm;
+    color: var(--color-text-secondary);
+  }
+
+  .toolbar-actions {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+  }
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.form-alert {
+  margin-bottom: var(--space-2);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-5);
+}
+
+.clickable-card {
+  cursor: pointer;
+  transition: transform 180ms @ease-standard,
+    box-shadow 180ms @ease-standard,
+    border-color 180ms @ease-standard;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: @shadow-card;
+  }
+}
+
+.error-message {
+  margin: 0;
+  color: var(--color-error);
+  font-size: @font-sm;
+}
+
+.list-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+}
+
+.delete-tip {
+  margin: 0;
+  font-size: @font-base;
+  color: var(--color-text);
+  line-height: 1.6;
+}
+
+/* ========== 滚动条美化（Webkit）========== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D4D4D8;
+  border-radius: 4px;
+  transition: background-color @duration-fast;
+
+  &:hover {
+    background: #A1A1AA;
+  }
+}
+
+/* ========== 选中文字颜色 ========== */
+::selection {
+  background: @primary-light;
+  color: @primary;
+}

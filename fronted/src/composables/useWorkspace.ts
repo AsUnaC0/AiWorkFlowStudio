@@ -1,6 +1,7 @@
 import { onMounted, ref } from "vue";
 import {
   createWorkspace as createWorkspaceRequest,
+  deleteWorkspace as deleteWorkspaceRequest,
   getWorkspaces,
 } from "@/api/workspace";
 import type { WorkspaceItem } from "@/types/workspace";
@@ -32,10 +33,15 @@ export function useWorkspace() {
     return workspace;
   };
 
+  const deleteWorkspace = async (id: string) => {
+    await deleteWorkspaceRequest(id);
+    workspaces.value = workspaces.value.filter((ws) => ws.id !== id);
+  };
+
   const selectWorkspace = async (workspace: WorkspaceItem) => {
     try {
       await router.push({
-        path: "/workflow",
+        path: "/workspace",
         query: { workspaceId: workspace.id },
       });
     } catch {
@@ -53,6 +59,7 @@ export function useWorkspace() {
     errorMessage,
     fetchWorkspaces,
     createWorkspace,
+    deleteWorkspace,
     selectWorkspace,
   };
 }

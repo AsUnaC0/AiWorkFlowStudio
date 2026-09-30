@@ -29,7 +29,7 @@ const fetchKnowledgeBases = async () => {
 };
 
 // 创建知识库
-const createKnowledgeDialogVisible = ref(false);
+const createDialogVisible = ref(false);
 const kbCreating = ref(false);
 const createName = ref("");
 const createDescription = ref("");
@@ -43,7 +43,7 @@ const openCreateDialog = () => {
   createEmbeddingModel.value = "nomic-embed-text";
   createEmbeddingDimension.value = 768;
   createError.value = "";
-  createKnowledgeDialogVisible.value = true;
+  createDialogVisible.value = true;
 };
 
 const submitCreate = async () => {
@@ -71,7 +71,7 @@ const submitCreate = async () => {
       embeddingModel: createEmbeddingModel.value.trim(),
       embeddingDimension: dimension,
     });
-    createKnowledgeDialogVisible.value = false;
+    createDialogVisible.value = false;
     MessagePlugin.success("知识库创建成功");
     fetchKnowledgeBases();
   } catch {
@@ -82,16 +82,8 @@ const submitCreate = async () => {
 };
 
 // 进入知识库详情页
-const enterKnowledge = async (kb: { id: string }) => {
-  await router.push({ path: `/knowledge/${kb.id}` });
-};
-
-// 事件处理：点击整个卡片进入详情
-const handleKbClick = (e: MouseEvent) => {
-  const target = e.currentTarget as HTMLElement;
-  const id = target.dataset.id || "";
-  const kb = knowledgeBases.value.find((k) => k.id === id);
-  if (kb) enterKnowledge(kb);
+const enterKnowledge = (kb: KnowledgeBase) => {
+  router.push({ path: `/knowledge/${kb.id}` });
 };
 
 // 删除知识库
@@ -122,15 +114,19 @@ const submitDelete = async () => {
   }
 };
 
-const formatDate = (dateStr: string) => {
-  const d = new Date(dateStr);
-  return d.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+// 相对时间
+const formatRelativeTime = (dateStr: string) => {
+  const date = new Date(dateStr);
+  const diff = Date.now() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
 
 onMounted(() => {
@@ -139,125 +135,149 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="knowledge-page">
-    <div class="page-toolbar">
-      <span class="page-title">知识库</span>
-      <div class="toolbar-actions">
+  <div class="page-container">
+    <!-- 页面头部 -->
+    <div class="page-header">
+      <div class="page-header-info">
+        <h1 class="page-title">Knowledge</h1>
+        <p class="page-subtitle">
+          Your knowledge bases. Connect documents and make your AI smarter.
+        </p>
+      </div>
+      <div class="page-header-actions">
         <t-button theme="primary" @click="openCreateDialog">
           <template #icon><t-icon name="add" /></template>
-          创建知识库
+          New Knowledge Base
         </t-button>
       </div>
     </div>
 
-    <t-loading :loading="kbLoading" text="正在加载知识库..." :delay="200">
-      <t-alert v-if="kbError" theme="error" :message="kbError" class="list-alert" />
+    <!-- 内容 -->
+    <t-loading :loading="kbLoading" text="Loading..." :delay="200">
+      <t-alert v-if="kbError" theme="error" :message="kbError" style="margin-top: var(--space-4)" />
 
+      <!-- 知识库列表 -->
       <template v-else-if="knowledgeBases.length > 0">
-        <div class="kb-grid">
-          <div v-for="kb in knowledgeBases" :key="kb.id" class="kb-card-wrapper" :data-id="kb.id"
-            @click="handleKbClick">
-            <t-card class="kb-card" :bordered="true">
-              <template #header>
-                <div class="kb-header">
-                  <span class="kb-icon">
-                    <t-icon name="library" />
-                  </span>
-                  <span class="kb-title">{{ kb.name }}</span>
-                </div>
-              </template>
+        <div class="kb-list">
+          <div
+            v-for="kb in knowledgeBases"
+            :key="kb.id"
+            class="kb-row"
+            @click="enterKnowledge(kb)"
+          >
+            <!-- 图标 -->
+            <div class="kb-icon">
+              <t-icon name="library" />
+            </div>
 
-              <div class="kb-body">
-                <p v-if="kb.description" class="kb-desc">{{ kb.description }}</p>
-                <p v-else class="kb-desc placeholder">暂无描述</p>
-
-                <div class="kb-stats">
-                  <div class="stat-item">
-                    <span class="stat-value">{{ kb.documentCount }}</span>
-                    <span class="stat-label">文档</span>
-                  </div>
-                  <div class="stat-item">
-                    <span class="stat-value">{{ kb.chunkCount }}</span>
-                    <span class="stat-label">分块</span>
-                  </div>
-                  <div class="stat-item">
-                    <span class="stat-value">
-                      {{ kb.embeddingModel }}<span class="dimension">@{{ kb.embeddingDimension }}</span>
-                    </span>
-                    <span class="stat-label">向量模型</span>
-                  </div>
-                </div>
+            <!-- 主信息 -->
+            <div class="kb-main">
+              <div class="kb-name">{{ kb.name }}</div>
+              <div class="kb-desc">
+                {{ kb.description || 'No description' }}
               </div>
+            </div>
 
-              <template #footer>
-                <div class="kb-footer">
-                  <div class="kb-meta">
-                    <span>更新于 {{ formatDate(kb.updatedAt) }}</span>
-                  </div>
-                  <div class="kb-actions">
-                    <t-button variant="text" size="small" @click.stop="enterKnowledge(kb)">
-                      <template #icon><t-icon name="view-list" /></template>
-                      进入管理
-                    </t-button>
-                    <t-button variant="text" size="small" status="danger" @click.stop="openDeleteDialog(kb)">
-                      <template #icon><t-icon name="delete" /></template>
-                      删除
-                    </t-button>
-                  </div>
-                </div>
-              </template>
-            </t-card>
+            <!-- 统计 -->
+            <div class="kb-stats">
+              <div class="stat">
+                <span class="stat-value">{{ kb.documentCount }}</span>
+                <span class="stat-label">Documents</span>
+              </div>
+              <div class="stat">
+                <span class="stat-value">{{ kb.chunkCount }}</span>
+                <span class="stat-label">Chunks</span>
+              </div>
+            </div>
+
+            <!-- 状态 + 时间 -->
+            <div class="kb-status">
+              <span class="status-dot ready" />
+              <span class="status-text">Ready</span>
+              <span class="kb-updated">{{ formatRelativeTime(kb.updatedAt) }}</span>
+            </div>
+
+            <!-- 右侧操作 + 箭头 -->
+            <div class="kb-row-actions">
+              <t-dropdown @click.stop>
+                <button class="row-more-btn" @click.stop>
+                  <t-icon name="more" />
+                </button>
+                <template #dropdown>
+                  <t-dropdown-menu>
+                    <t-dropdown-item @click.stop="enterKnowledge(kb)">
+                      <template #prefix><t-icon name="view-list" /></template>
+                      Open
+                    </t-dropdown-item>
+                    <t-dropdown-item @click.stop="openDeleteDialog(kb)">
+                      <template #prefix><t-icon name="delete" /></template>
+                      Delete
+                    </t-dropdown-item>
+                  </t-dropdown-menu>
+                </template>
+              </t-dropdown>
+              <t-icon name="chevron-right" class="row-arrow" />
+            </div>
           </div>
         </div>
       </template>
 
-      <t-empty v-else type="empty" title="还没有知识库" description="点击上方按钮创建第一个知识库吧">
-        <template #action>
-          <t-button theme="primary" @click="openCreateDialog">创建知识库</t-button>
-        </template>
-      </t-empty>
+      <!-- 空状态 -->
+      <div v-else-if="!kbLoading && !kbError" class="empty-state">
+        <div class="empty-icon">
+          <t-icon name="library" />
+        </div>
+        <h3 class="empty-title">No knowledge bases yet</h3>
+        <p class="empty-desc">
+          Create your first knowledge base to power AI responses with your documents.
+        </p>
+        <t-button theme="primary" @click="openCreateDialog">
+          <template #icon><t-icon name="add" /></template>
+          Create Knowledge Base
+        </t-button>
+      </div>
     </t-loading>
 
     <!-- 创建知识库对话框 -->
-    <t-dialog v-model:visible="createKnowledgeDialogVisible" header="创建知识库" :footer="false" width="480px">
+    <t-dialog v-model:visible="createDialogVisible" header="Create Knowledge Base" :footer="false" width="480px">
       <t-form layout="vertical" @submit="submitCreate">
-        <t-form-item label="知识库名称">
-          <t-input v-model="createName" placeholder="请输入知识库名称" maxlength="200" />
+        <t-form-item label="Name">
+          <t-input v-model="createName" placeholder="Product Documentation" maxlength="200" />
         </t-form-item>
-        <t-form-item label="描述">
-          <t-textarea v-model="createDescription" placeholder="请输入知识库描述（可选）" :maxlength="1000"
-            :autosize="{ minRows: 2, maxRows: 4 }" />
+        <t-form-item label="Description (optional)">
+          <t-textarea v-model="createDescription" placeholder="A brief description of this knowledge base"
+            :maxlength="1000" :autosize="{ minRows: 2, maxRows: 4 }" />
         </t-form-item>
-        <t-form-item label="向量模型">
-          <t-input v-model="createEmbeddingModel" placeholder="如 nomic-embed-text" maxlength="100" />
+        <t-form-item label="Embedding Model">
+          <t-input v-model="createEmbeddingModel" placeholder="nomic-embed-text" maxlength="100" />
         </t-form-item>
-        <t-form-item label="向量维度">
-          <t-input-number v-model="createEmbeddingDimension" :min="1" :max="8192" :step="8" placeholder="向量维度" />
+        <t-form-item label="Embedding Dimension">
+          <t-input-number v-model="createEmbeddingDimension" :min="1" :max="8192" :step="8" />
         </t-form-item>
         <t-alert v-if="createError" theme="error" :message="createError" class="form-alert" />
         <div class="dialog-actions">
-          <t-button variant="outline" type="button" @click="createKnowledgeDialogVisible = false">
-            取消
+          <t-button variant="outline" type="button" @click="createDialogVisible = false">
+            Cancel
           </t-button>
           <t-button theme="primary" type="submit" :loading="kbCreating">
-            创建
+            Create
           </t-button>
         </div>
       </t-form>
     </t-dialog>
 
-    <!-- 删除知识库确认对话框 -->
-    <t-dialog v-model:visible="deleteDialogVisible" header="删除知识库" :footer="false" width="420px">
+    <!-- 删除确认对话框 -->
+    <t-dialog v-model:visible="deleteDialogVisible" header="Delete Knowledge Base" :footer="false" width="420px">
       <p class="delete-tip">
-        确定要删除知识库「{{ deleteTarget?.name }}」吗？删除后其中的文档数据将无法恢复。
+        Are you sure you want to delete "{{ deleteTarget?.name }}"? All documents and chunks will be permanently removed.
       </p>
       <t-alert v-if="deleteError" theme="error" :message="deleteError" class="form-alert" />
       <div class="dialog-actions">
         <t-button variant="outline" type="button" @click="deleteDialogVisible = false">
-          取消
+          Cancel
         </t-button>
         <t-button theme="danger" type="button" :loading="kbDeleting" @click="submitDelete">
-          确认删除
+          Delete
         </t-button>
       </div>
     </t-dialog>
@@ -265,173 +285,236 @@ onMounted(() => {
 </template>
 
 <style scoped lang="less">
-.knowledge-page {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-  padding: var(--space-4) var(--space-8) var(--space-8);
-  box-sizing: border-box;
-}
+@import "../../styles/variables.less";
 
-.page-toolbar {
+.page-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: var(--space-3) 0 var(--space-4);
-  flex-shrink: 0;
+  margin-bottom: @space-8;
+  animation: fade-slide-up @duration-normal @ease-out;
 
-  .page-title {
-    font-size: var(--font-xl);
-    font-weight: 600;
-    color: var(--color-text);
-  }
-
-  .toolbar-actions {
-    display: flex;
-    gap: var(--space-2);
-  }
-}
-
-.list-alert {
-  margin-top: var(--space-4);
-}
-
-.kb-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--space-4);
-}
-
-.kb-card-wrapper {
-  transition: transform 0.2s ease;
-  cursor: pointer;
-
-  &:hover {
-    transform: translateY(-2px);
-  }
-}
-
-.kb-card {
-  height: 100%;
-
-  .kb-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-
-    .kb-icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 32px;
-      height: 32px;
-      border-radius: var(--radius-md);
-      background: var(--primary-bg);
-      color: var(--primary);
-      font-size: var(--font-lg);
-    }
-
-    .kb-title {
-      font-size: var(--font-lg);
-      font-weight: 600;
-      color: var(--color-text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-  }
-
-  .kb-body {
+  .page-header-info {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
-    min-height: 96px;
+    gap: @space-1;
+  }
 
-    .kb-desc {
-      margin: 0;
-      font-size: var(--font-sm);
-      color: var(--color-text);
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
+  .page-title {
+    font-size: @font-xxl;
+    font-weight: 700;
+    color: @color-text;
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
 
-      &.placeholder {
-        color: var(--color-text-tertiary);
-      }
+  .page-subtitle {
+    font-size: @font-sm;
+    color: @color-text-secondary;
+    margin: 0;
+  }
+}
+
+/* 列表行 */
+.kb-list {
+  display: flex;
+  flex-direction: column;
+  gap: @space-2;
+}
+
+.kb-row {
+  display: flex;
+  align-items: center;
+  gap: @space-5;
+  padding: @space-5 @space-6;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  cursor: pointer;
+  transition: all 180ms @ease-standard;
+  animation: fade-slide-up @duration-normal @ease-out both;
+
+  &:hover {
+    border-color: @color-border-strong;
+    box-shadow: @shadow-sm;
+
+    .row-arrow {
+      opacity: 1;
+      transform: translateX(2px);
+      color: @primary;
     }
 
-    .kb-stats {
-      display: flex;
-      gap: var(--space-5);
-      margin-top: auto;
-
-      .stat-item {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-
-        .stat-value {
-          font-weight: 600;
-          color: var(--color-text);
-          font-size: var(--font-base);
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-
-          .dimension {
-            font-weight: 400;
-            font-size: var(--font-xs);
-            color: var(--color-text-tertiary);
-          }
-        }
-
-        .stat-label {
-          font-size: var(--font-xs);
-          color: var(--color-text-tertiary);
-        }
-      }
+    .kb-icon {
+      background: @primary-light;
+      color: @primary;
     }
   }
 
-  .kb-footer {
+  .kb-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: @radius-md;
+    background: @color-bg-hover;
+    color: @color-text-secondary;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+    transition: all 180ms @ease-standard;
+  }
 
-    .kb-meta {
-      font-size: var(--font-xs);
-      color: var(--color-text-tertiary);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+  .kb-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .kb-name {
+    font-size: @font-md;
+    font-weight: 600;
+    color: @color-text;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .kb-desc {
+    font-size: @font-sm;
+    color: @color-text-secondary;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .kb-stats {
+    display: flex;
+    gap: @space-6;
+    flex-shrink: 0;
+
+    .stat {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+
+      .stat-value {
+        font-size: @font-md;
+        font-weight: 600;
+        color: @color-text;
+      }
+
+      .stat-label {
+        font-size: @font-xs;
+        color: @color-text-tertiary;
+      }
+    }
+  }
+
+  .kb-status {
+    display: flex;
+    align-items: center;
+    gap: @space-2;
+    flex-shrink: 0;
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+
+      &.ready {
+        background: @color-success;
+      }
     }
 
-    .kb-actions {
+    .status-text {
+      font-size: @font-xs;
+      font-weight: 500;
+      color: @color-success;
+    }
+
+    .kb-updated {
+      font-size: @font-xs;
+      color: @color-text-tertiary;
+      margin-left: @space-2;
+    }
+  }
+
+  .kb-row-actions {
+    display: flex;
+    align-items: center;
+    gap: @space-1;
+    flex-shrink: 0;
+
+    .row-more-btn {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: transparent;
+      border-radius: @radius-md;
+      color: @color-text-tertiary;
+      cursor: pointer;
       display: flex;
       align-items: center;
-      gap: var(--space-1);
-      flex-shrink: 0;
+      justify-content: center;
+      opacity: 0;
+      transition: all @duration-fast;
+
+      &:hover {
+        background: @color-bg-hover;
+        color: @color-text;
+      }
     }
+
+    .row-arrow {
+      color: @color-text-tertiary;
+      opacity: 0;
+      transform: translateX(-2px);
+      transition: all 180ms @ease-standard;
+    }
+  }
+
+  &:hover .row-more-btn {
+    opacity: 1;
   }
 }
 
-.dialog-actions {
+/* 空状态 */
+.empty-state {
   display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-}
+  flex-direction: column;
+  align-items: center;
+  padding: @space-16 @space-8;
+  text-align: center;
+  animation: fade-slide-up @duration-normal @ease-out;
 
-.form-alert {
-  margin-bottom: 4px;
-}
+  .empty-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: @radius-card;
+    background: @color-bg-hover;
+    color: @color-text-tertiary;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    margin-bottom: @space-5;
+  }
 
-.delete-tip {
-  margin: 0;
-  font-size: var(--font-base);
-  color: var(--color-text);
-  line-height: 1.6;
+  .empty-title {
+    font-size: @font-lg;
+    font-weight: 600;
+    color: @color-text;
+    margin: 0 0 @space-2;
+  }
+
+  .empty-desc {
+    font-size: @font-sm;
+    color: @color-text-secondary;
+    max-width: 360px;
+    margin: 0 0 @space-6;
+  }
 }
 </style>

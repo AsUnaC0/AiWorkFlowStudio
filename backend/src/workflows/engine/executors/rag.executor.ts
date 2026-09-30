@@ -4,6 +4,7 @@ import {
   NodeExecutionContext,
   NodeExecutionResult,
 } from '../node-executor.interface';
+import { VariableService } from '../variable.service';
 import { EmbeddingService } from '../../../knowledge/embedding/embedding.service';
 import { VectorStoreService } from '../../../knowledge/vector/vector-store.service';
 
@@ -20,11 +21,18 @@ export interface RagNodeConfig {
   embeddingModel?: string;
   /** 输出格式：text（纯文本拼接）/ json（结构化），默认 text */
   outputFormat?: 'text' | 'json';
+  /**
+   * 检索 query 模板，支持 {{变量}} 引用
+   * 如果未设置或为空，则使用 previousOutput
+   * 例："请根据 {{input}} 检索相关内容" 或 "{{http_1.body.query}}"
+   */
+  queryTemplate?: string;
 }
 
 @Injectable()
 export class RAGNodeExecutor implements NodeExecutor {
   constructor(
+    private readonly variableService: VariableService,
     private readonly embeddingService: EmbeddingService,
     private readonly vectorStoreService: VectorStoreService,
   ) {}
@@ -34,7 +42,20 @@ export class RAGNodeExecutor implements NodeExecutor {
     node: any,
   ): Promise<NodeExecutionResult> {
     const config = (node.config ?? {}) as RagNodeConfig;
-    const query = String(context.previousOutput ?? context.input ?? '').trim();
+
+    // query 来源：优先用 queryTemplate（支持变量），否则用 previousOutput
+    let query: string;
+    if (config.queryTemplate && config.queryTemplate.trim()) {
+      // 用户配置了 query 模板 → 通过变量服务解析
+      query = String(
+        this.variableService.resolve(config.queryTemplate, context) ?? '',
+      ).trim();
+    } else {
+      // 未配置模板 → 传统行为：用上一个节点输出
+      query = String(
+        context.previousOutput ?? context.input ?? '',
+      ).trim();
+    }
 
     console.log('[RAG] node.config =', JSON.stringify(config, null, 2));
     console.log('[RAG] query =', JSON.stringify(query));

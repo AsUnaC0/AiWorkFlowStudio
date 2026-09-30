@@ -13,3 +13,7 @@ export const createWorkspace = (
 ): Promise<WorkspaceApiItem> => {
   return request.post("/workspaces", data);
 };
+
+export const deleteWorkspace = (id: string): Promise<void> => {
+  return request.delete(`/workspaces/${id}`);
+};

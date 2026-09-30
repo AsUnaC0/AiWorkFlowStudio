@@ -226,9 +226,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="kb-detail-page">
+  <div class="page-container">
     <!-- 头部面包屑 + 返回 -->
-    <div class="page-header">
+    <div class="detail-header">
       <t-button variant="text" @click="router.push('/knowledge')">
         <template #icon><t-icon name="chevron-left" /></template>
         返回知识库列表
@@ -382,13 +382,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="less">
-.kb-detail-page {
-  padding: var(--space-4) var(--space-8) var(--space-8);
-  min-height: 100%;
-  box-sizing: border-box;
-}
-
-.page-header {
+// 面包屑头部
+.detail-header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -418,6 +413,7 @@ onBeforeUnmount(() => {
 // 概览卡片
 .kb-overview {
   background: var(--color-bg-white);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
   display: flex;
@@ -434,7 +430,7 @@ onBeforeUnmount(() => {
       width: 48px;
       height: 48px;
       border-radius: var(--radius-lg);
-      background: var(--primary-bg);
+      background: var(--primary-light);
       color: var(--primary);
       display: flex;
       align-items: center;
@@ -486,6 +482,7 @@ onBeforeUnmount(() => {
 // 文档区域
 .doc-section {
   background: var(--color-bg-white);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
 
@@ -557,7 +554,7 @@ onBeforeUnmount(() => {
 .processing-tip {
   margin-top: var(--space-4);
   padding: var(--space-2) var(--space-4);
-  background: var(--primary-bg);
+  background: var(--primary-light);
   border-radius: var(--radius-md);
   font-size: var(--font-sm);
   color: var(--primary);
@@ -579,7 +576,7 @@ onBeforeUnmount(() => {
 
     &:hover {
       border-color: var(--primary);
-      background: var(--primary-bg);
+      background: var(--primary-light);
     }
 
     .dz-icon {
@@ -636,18 +633,5 @@ onBeforeUnmount(() => {
       }
     }
   }
-}
-
-.delete-tip {
-  font-size: var(--font-base);
-  line-height: 1.6;
-  color: var(--color-text);
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  margin-top: var(--space-4);
 }
 </style>

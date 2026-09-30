@@ -1,13 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { getModels, chat as chatApi, type AiModel, type ChatMessage } from "@/api/ai";
+import { computed, onBeforeUnmount, onMounted, ref, nextTick } from "vue";
+import { getModels, chat as chatApi, type AiModel } from "@/api/ai";
 import { getKnowledgeBases, type KnowledgeBase } from "@/api/knowledge";
-import { getWorkflows } from "@/api/workflow";
-import { getWorkspaces } from "@/api/workspace";
-import { useUserStore } from "@/stores/user";
+import { useClickOutside } from "@/composables/useClickOutside";
 import { MessagePlugin } from "tdesign-vue-next";
-
-const userStore = useUserStore();
 
 // ===========================================================================
 // 状态
@@ -17,19 +13,15 @@ const models = ref<AiModel[]>([]);
 const selectedModel = ref("");
 const modelsLoading = ref(false);
 
-// 从用户的第一个 workspace 加载知识库和工作流
-const workspaces = ref<{ id: string; name: string }[]>([]);
 const knowledgeOptions = ref<KnowledgeBase[]>([]);
-const workflowOptions = ref<{ id: string; name: string }[]>([]);
 const kbLoading = ref(false);
-
-const selectedKnowledgeIds = ref<string[]>([]); // 多选知识库
-const selectedWorkflowIds = ref<string[]>([]); // 多选工作流（占位）
+const selectedKnowledgeIds = ref<string[]>([]);
 
 const inputText = ref("");
 const sending = ref(false);
+const inputRef = ref<HTMLTextAreaElement | null>(null);
 
-// 聊天历史（当前会话）
+// 聊天历史
 interface ChatItem {
   role: "user" | "assistant";
   content: string;
@@ -37,6 +29,14 @@ interface ChatItem {
 }
 const messages = ref<ChatItem[]>([]);
 const chatContainerRef = ref<HTMLElement | null>(null);
+
+// 快捷操作
+const suggestions = [
+  { icon: "flow", label: "Build a workflow", desc: "构建 AI 工作流" },
+  { icon: "library", label: "Ask my knowledge base", desc: "查询知识库" },
+  { icon: "chat-1", label: "Summarize a document", desc: "文档摘要" },
+  { icon: "chart", label: "Analyze data", desc: "数据分析" },
+];
 
 // ===========================================================================
 // 初始化
@@ -48,14 +48,12 @@ const loadModels = async () => {
     const res = await getModels();
     models.value = res.models;
     if (res.models.length > 0 && !selectedModel.value) {
-      // 优先选带 chat 能力的，排除 embedding 模型
       const chatModel = res.models.find(
         (m) => !m.name.includes("embed") && !m.name.includes("bge"),
       );
       selectedModel.value = chatModel?.name ?? res.models[0].name;
     }
   } catch {
-    // Ollama 没启，用默认
     models.value = [
       { name: "qwen2.5:7b" },
       { name: "qwen2.5:3b" },
@@ -67,22 +65,10 @@ const loadModels = async () => {
   }
 };
 
-const loadWorkspaceResources = async () => {
+const loadKnowledge = async () => {
   kbLoading.value = true;
   try {
-    const wsList = await getWorkspaces();
-    workspaces.value = wsList.map((w) => ({ id: w.id, name: w.name }));
-
-    // 知识库独立获取（owner 模型）；工作流仍按第一个 workspace 取
-    const firstWsId = wsList[0]?.id;
-    const [kbs, wfs] = await Promise.all([
-      getKnowledgeBases().catch(() => []),
-      firstWsId ? getWorkflows(firstWsId).catch(() => []) : Promise.resolve([]),
-    ]);
-    knowledgeOptions.value = kbs;
-    workflowOptions.value = wfs.map((w) => ({ id: w.id, name: w.name }));
-  } catch {
-    // 用户可能还没有 workspace，忽略
+    knowledgeOptions.value = await getKnowledgeBases().catch(() => []);
   } finally {
     kbLoading.value = false;
   }
@@ -90,11 +76,11 @@ const loadWorkspaceResources = async () => {
 
 onMounted(() => {
   loadModels();
-  loadWorkspaceResources();
+  loadKnowledge();
 });
 
 onBeforeUnmount(() => {
-  // 清理（暂无定时器）
+  messages.value = [];
 });
 
 // ===========================================================================
@@ -105,18 +91,24 @@ const canSend = computed(
   () => !sending.value && selectedModel.value.trim() && inputText.value.trim(),
 );
 
+const isEmpty = computed(() => messages.value.length === 0);
+
 const appendMessage = (role: "user" | "assistant", content: string) => {
   messages.value.push({
     role,
     content,
     time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
   });
-  // 滚动到底
-  setTimeout(() => {
-    if (chatContainerRef.value) {
-      chatContainerRef.value.scrollTop = chatContainerRef.value.scrollHeight;
-    }
-  }, 50);
+};
+
+const scrollToBottom = async () => {
+  await nextTick();
+  if (chatContainerRef.value) {
+    chatContainerRef.value.scrollTo({
+      top: chatContainerRef.value.scrollHeight,
+      behavior: "smooth",
+    });
+  }
 };
 
 const send = async () => {
@@ -126,10 +118,10 @@ const send = async () => {
   inputText.value = "";
   appendMessage("user", userText);
   sending.value = true;
+  scrollToBottom();
 
   try {
-    // 组装消息历史（只传最近 10 条，避免 token 爆炸）
-    const history: ChatMessage[] = messages.value
+    const history = messages.value
       .slice(-10)
       .map((m) => ({ role: m.role, content: m.content }));
 
@@ -147,6 +139,7 @@ const send = async () => {
     appendMessage("assistant", `❌ 抱歉，请求失败了：${msg}`);
   } finally {
     sending.value = false;
+    scrollToBottom();
   }
 };
 
@@ -157,468 +150,683 @@ const onKeydown = (e: KeyboardEvent) => {
   }
 };
 
+const useSuggestion = (text: string) => {
+  inputText.value = text;
+  inputRef.value?.focus();
+};
+
 const clearChat = () => {
   messages.value = [];
 };
 
+// 模型下拉控制
+const showModelDropdown = ref(false);
+const showKbDropdown = ref(false);
+const modelChipRef = ref<HTMLElement | null>(null);
+const modelChipRefChat = ref<HTMLElement | null>(null);
+const kbChipRef = ref<HTMLElement | null>(null);
+const kbChipRefChat = ref<HTMLElement | null>(null);
+
+// 点击外部关闭 chips 下拉（两组 ref 分别对应空状态和有对话状态）
+useClickOutside([modelChipRef, modelChipRefChat], () => {
+  showModelDropdown.value = false;
+});
+useClickOutside([kbChipRef, kbChipRefChat], () => {
+  showKbDropdown.value = false;
+});
+
+// 切换知识库选中（提取出来避免 inline const）
+const toggleKnowledgeBase = (kbId: string) => {
+  const idx = selectedKnowledgeIds.value.indexOf(kbId);
+  if (idx > -1) {
+    selectedKnowledgeIds.value.splice(idx, 1);
+  } else {
+    selectedKnowledgeIds.value.push(kbId);
+  }
+};
+
 const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 0);
-const hasWorkflowSelected = computed(() => selectedWorkflowIds.value.length > 0);
 </script>
 
 <template>
   <div class="chat-page">
-    <!-- 左侧：AI 配置面板 -->
-    <aside class="chat-sidebar">
-      <div class="sidebar-section">
-        <div class="section-title">
-          <t-icon name="server" />
-          AI 模型
-        </div>
-        <t-loading :loading="modelsLoading" text="加载模型..." :delay="200">
-          <t-select v-model="selectedModel" :placeholder="modelsLoading ? '加载中...' : '选择模型'"
-            :popup-props="{ placement: 'right' }">
-            <t-option v-for="m in models" :key="m.name" :value="m.name">
-              {{ m.name }}
-            </t-option>
-          </t-select>
-          <p v-if="models.length === 0 && !modelsLoading" class="helper-text">
-            Ollama 未连接，使用默认模型
+    <!-- 空状态：Hero 居中布局 -->
+    <template v-if="isEmpty">
+      <div class="hero-section">
+        <div class="hero-content">
+          <!-- Logo -->
+          <div class="hero-logo">✦</div>
+
+          <!-- 标题 -->
+          <h1 class="hero-title">How can I help you?</h1>
+          <p class="hero-subtitle">
+            Build, run and connect AI workflows. Ask anything about your knowledge base.
           </p>
-        </t-loading>
-      </div>
 
-      <div class="sidebar-section">
-        <div class="section-title">
-          <t-icon name="library" />
-          知识库
-          <t-tag v-if="hasKnowledgeSelected" theme="primary" variant="light" class="count-tag">
-            {{ selectedKnowledgeIds.length }}
-          </t-tag>
-        </div>
-        <t-loading :loading="kbLoading" text="加载中..." :delay="200">
-          <t-select v-model="selectedKnowledgeIds" multiple placeholder="选择知识库（可多选）"
-            :disabled="knowledgeOptions.length === 0" :popup-props="{ placement: 'right' }">
-            <t-option v-for="kb in knowledgeOptions" :key="kb.id" :value="kb.id">
-              {{ kb.name }}
-              <span class="option-suffix">
-                {{ kb.documentCount }}文档 · {{ kb.embeddingModel }}
-              </span>
-            </t-option>
-          </t-select>
-          <p v-if="knowledgeOptions.length === 0 && !kbLoading" class="helper-text">
-            还没有知识库，去侧边栏「知识库」创建
-          </p>
-        </t-loading>
-      </div>
-
-      <div class="sidebar-section">
-        <div class="section-title">
-          <t-icon name="flow" />
-          工作流
-          <t-tag v-if="hasWorkflowSelected" theme="primary" variant="light" class="count-tag">
-            {{ selectedWorkflowIds.length }}
-          </t-tag>
-        </div>
-        <t-select v-model="selectedWorkflowIds" multiple placeholder="选择工作流（功能开发中）"
-          :disabled="workflowOptions.length === 0 || true" :popup-props="{ placement: 'right' }">
-          <t-option v-for="wf in workflowOptions" :key="wf.id" :value="wf.id">
-            {{ wf.name }}
-          </t-option>
-        </t-select>
-        <p class="helper-text">
-          选择后 AI 将调用该工作流来回答（Agent 模式）
-        </p>
-      </div>
-
-      <t-divider />
-
-      <div class="sidebar-actions">
-        <t-button variant="text" size="small" :disabled="messages.length === 0" @click="clearChat">
-          <template #icon><t-icon name="delete" /></template>
-          清空对话
-        </t-button>
-      </div>
-    </aside>
-
-    <!-- 中间：聊天区域 -->
-    <main class="chat-main">
-      <div class="chat-header">
-        <span class="chat-title">AI 助手</span>
-        <span class="chat-sub">使用 {{ selectedModel || '默认模型' }} 对话</span>
-      </div>
-
-      <!-- 聊天消息区 -->
-      <div ref="chatContainerRef" class="chat-messages">
-        <!-- 空状态 -->
-        <template v-if="messages.length === 0">
-          <div class="empty-state">
-            <div class="empty-avatar">🤖</div>
-            <div class="empty-title">你好，{{ userStore.userInfo?.username || '用户' }}！</div>
-            <div class="empty-desc">我可以帮你问答、写作、分析数据……</div>
-
-            <div class="suggestions">
-              <div class="suggestion-item" @click="inputText = '帮我写一段产品介绍文案'">
-                <div class="suggestion-icon">📝</div>
-                <div>写一段产品介绍文案</div>
-              </div>
-              <div class="suggestion-item" @click="inputText = '用一句话总结什么是 RAG'">
-                <div class="suggestion-icon">💡</div>
-                <div>用一句话总结什么是 RAG</div>
-              </div>
-              <div class="suggestion-item" @click="inputText = '分析一下 AI WorkFlow Studio 可以用来做什么'">
-                <div class="suggestion-icon">🔍</div>
-                <div>分析 AI WorkFlow Studio 能做什么</div>
-              </div>
+          <!-- 主输入框 -->
+          <div class="prompt-box">
+            <div class="prompt-textarea">
+              <textarea ref="inputRef" v-model="inputText" placeholder="Ask anything..." :disabled="sending" rows="1"
+                @keydown="onKeydown" />
+              <!-- 发送按钮 -->
+              <button class="send-btn" :class="{ active: canSend }" :disabled="!canSend" @click="send">
+                <t-icon :name="sending ? 'loading' : 'send'" :spin="sending" />
+              </button>
             </div>
 
-            <p v-if="hasKnowledgeSelected" class="rag-hint">
-              📚 已选 {{ selectedKnowledgeIds.length }} 个知识库，回答将结合知识库内容
-            </p>
-          </div>
-        </template>
-
-        <!-- 消息列表 -->
-        <template v-else>
-          <div v-for="(msg, idx) in messages" :key="idx" class="chat-bubble" :class="msg.role">
-            <div class="bubble-avatar">
-              {{ msg.role === 'user' ? '👤' : '🤖' }}
-            </div>
-            <div class="bubble-body">
-              <div class="bubble-meta">
-                <span>{{ msg.role === 'user' ? '你' : 'AI' }}</span>
-                <span class="bubble-time">{{ msg.time }}</span>
+            <!-- 输入框底部 chips -->
+            <div class="prompt-actions">
+              <!-- Model chip -->
+              <div ref="modelChipRef" class="chip-wrapper">
+                <button class="action-chip" @click="showModelDropdown = !showModelDropdown">
+                  <t-icon name="server" />
+                  <span>{{ selectedModel || 'Model' }}</span>
+                  <t-icon name="caret-down-small" class="caret" />
+                </button>
+                <transition name="fast-fade">
+                  <div v-if="showModelDropdown" class="chip-dropdown model">
+                    <div class="dropdown-title">Select Model</div>
+                    <div v-for="m in models" :key="m.name" class="dropdown-item"
+                      :class="{ active: selectedModel === m.name }"
+                      @click="selectedModel = m.name; showModelDropdown = false">
+                      <span class="item-name">{{ m.name }}</span>
+                      <t-icon v-if="selectedModel === m.name" name="check" />
+                    </div>
+                  </div>
+                </transition>
               </div>
-              <div class="bubble-content">{{ msg.content }}</div>
+
+              <!-- Knowledge chip -->
+              <div ref="kbChipRef" class="chip-wrapper">
+                <button class="action-chip" @click="showKbDropdown = !showKbDropdown">
+                  <t-icon name="library" />
+                  <span>{{ hasKnowledgeSelected ? `${selectedKnowledgeIds.length} Knowledge` : 'Knowledge' }}</span>
+                  <t-icon name="caret-down-small" class="caret" />
+                </button>
+                <transition name="fast-fade">
+                  <div v-if="showKbDropdown" class="chip-dropdown">
+                    <div class="dropdown-title">Select Knowledge Bases</div>
+                    <div v-for="kb in knowledgeOptions" :key="kb.id" class="dropdown-item"
+                      :class="{ active: selectedKnowledgeIds.includes(kb.id) }" @click="toggleKnowledgeBase(kb.id)">
+                      <span class="item-name">{{ kb.name }}</span>
+                      <t-icon v-if="selectedKnowledgeIds.includes(kb.id)" name="check" />
+                    </div>
+                    <div v-if="knowledgeOptions.length === 0" class="dropdown-empty">
+                      暂无知识库
+                    </div>
+                  </div>
+                </transition>
+              </div>
+
+              <!-- 快捷操作分隔 -->
+              <div class="chip-divider" />
+
+              <!-- 清空按钮 -->
+              <button v-if="hasKnowledgeSelected || selectedModel" class="action-chip clear"
+                @click="selectedKnowledgeIds = []">
+                <t-icon name="close" />
+                <span>Clear</span>
+              </button>
             </div>
           </div>
-        </template>
 
-        <!-- 发送中指示器 -->
-        <div v-if="sending" class="chat-bubble assistant">
-          <div class="bubble-avatar">🤖</div>
-          <div class="bubble-body">
-            <div class="bubble-content typing">
-              <span></span><span></span><span></span>
-            </div>
+          <!-- Suggestion cards -->
+          <div class="suggestions">
+            <button v-for="s in suggestions" :key="s.label" class="suggestion-card" @click="useSuggestion(s.label)">
+              <div class="suggestion-icon">
+                <t-icon :name="s.icon" />
+              </div>
+              <div class="suggestion-content">
+                <div class="suggestion-label">{{ s.label }}</div>
+                <div class="suggestion-desc">{{ s.desc }}</div>
+              </div>
+              <t-icon name="chevron-right" class="suggestion-arrow" />
+            </button>
           </div>
         </div>
       </div>
+    </template>
 
-      <!-- 输入区 -->
-      <div class="chat-input-area">
-        <div class="input-wrapper">
-          <t-textarea v-model="inputText" placeholder="输入你的问题，Enter 发送，Shift+Enter 换行" :autosize="{ minRows: 2, maxRows: 6 }"
-            :disabled="sending" @keydown="onKeydown" />
-          <div class="input-actions">
-            <t-button theme="primary" size="large" :loading="sending" :disabled="!canSend" @click="send">
-              <template #icon><t-icon name="send" /></template>
-              发送
-            </t-button>
+    <!-- 有对话后：标准聊天布局 -->
+    <template v-else>
+      <div class="chat-layout">
+        <!-- 消息区 -->
+        <div ref="chatContainerRef" class="chat-messages">
+          <div v-for="(msg, idx) in messages" :key="idx" class="message-item" :class="msg.role">
+            <div class="message-avatar">
+              <template v-if="msg.role === 'user'">👤</template>
+              <template v-else>✦</template>
+            </div>
+            <div class="message-body">
+              <div class="message-meta">
+                <span class="message-role">{{ msg.role === 'user' ? 'You' : 'AI' }}</span>
+                <span class="message-time">{{ msg.time }}</span>
+              </div>
+              <div class="message-content">{{ msg.content }}</div>
+            </div>
+          </div>
+
+          <!-- 发送中指示器 -->
+          <div v-if="sending" class="message-item assistant">
+            <div class="message-avatar">✦</div>
+            <div class="message-body">
+              <div class="message-content typing">
+                <span></span><span></span><span></span>
+              </div>
+            </div>
           </div>
         </div>
-        <div v-if="hasKnowledgeSelected || hasWorkflowSelected" class="input-tags">
-          <t-tag v-if="hasKnowledgeSelected" theme="primary" variant="light" closable @close="selectedKnowledgeIds = []">
-            📚 已选 {{ selectedKnowledgeIds.length }} 知识库
-          </t-tag>
-          <t-tag v-if="hasWorkflowSelected" theme="primary" variant="light" closable @close="selectedWorkflowIds = []">
-            🔗 已选 {{ selectedWorkflowIds.length }} 工作流
-          </t-tag>
+
+        <!-- 底部输入区 -->
+        <div class="chat-input-bottom">
+          <div class="prompt-box compact">
+            <div class="prompt-textarea">
+              <textarea ref="inputRef" v-model="inputText" placeholder="Continue the conversation..."
+                :disabled="sending" rows="1" @keydown="onKeydown" />
+              <button class="send-btn" :class="{ active: canSend }" :disabled="!canSend" @click="send">
+                <t-icon :name="sending ? 'loading' : 'send'" :spin="sending" />
+              </button>
+            </div>
+            <div class="prompt-actions">
+              <div ref="modelChipRefChat" class="chip-wrapper">
+                <button class="action-chip tiny" @click="showModelDropdown = !showModelDropdown">
+                  <t-icon name="server" />
+                  <span>{{ selectedModel }}</span>
+                </button>
+                <transition name="fast-fade">
+                  <div v-if="showModelDropdown" class="chip-dropdown model bottom-anchored">
+                    <div v-for="m in models" :key="m.name" class="dropdown-item"
+                      :class="{ active: selectedModel === m.name }"
+                      @click="selectedModel = m.name; showModelDropdown = false">
+                      {{ m.name }}
+                      <t-icon v-if="selectedModel === m.name" name="check" />
+                    </div>
+                  </div>
+                </transition>
+              </div>
+
+              <div ref="kbChipRefChat" class="chip-wrapper">
+                <button class="action-chip tiny" @click="showKbDropdown = !showKbDropdown">
+                  <t-icon name="library" />
+                  <span v-if="hasKnowledgeSelected">{{ selectedKnowledgeIds.length }} KB</span>
+                  <span v-else>Knowledge</span>
+                </button>
+                <transition name="fast-fade">
+                  <div v-if="showKbDropdown" class="chip-dropdown bottom-anchored">
+                    <div v-for="kb in knowledgeOptions" :key="kb.id" class="dropdown-item"
+                      :class="{ active: selectedKnowledgeIds.includes(kb.id) }" @click="toggleKnowledgeBase(kb.id)">
+                      {{ kb.name }}
+                      <t-icon v-if="selectedKnowledgeIds.includes(kb.id)" name="check" />
+                    </div>
+                  </div>
+                </transition>
+              </div>
+
+              <button v-if="messages.length > 0" class="action-chip tiny clear-all" @click="clearChat">
+                <t-icon name="delete" />
+                <span>New chat</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-    </main>
+    </template>
   </div>
 </template>
 
 <style scoped lang="less">
+@import "../../styles/variables.less";
+
 .chat-page {
-  display: flex;
-  min-height: 100%;
-  padding: var(--space-4) var(--space-8) var(--space-8);
-  box-sizing: border-box;
-  gap: var(--space-5);
+  height: 100%;
+  width: 100%;
 }
 
-// ===========================================================================
-// 左侧配置面板
-// ===========================================================================
+/* ============================================================
+ * Hero (空状态)
+ * ============================================================ */
+.hero-section {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: @space-12 @space-8;
+}
 
-.chat-sidebar {
-  width: 280px;
-  flex-shrink: 0;
-  background: var(--color-bg-white);
-  border-radius: var(--radius-lg);
-  padding: var(--space-5);
+.hero-content {
+  width: 100%;
+  max-width: 720px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  box-shadow: var(--shadow-base, 0 1px 2px rgba(0,0,0,0.04));
+  align-items: center;
+  gap: @space-6;
+  animation: fade-slide-up @duration-normal @ease-out;
+}
 
-  .sidebar-section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
+.hero-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: @radius-xl;
+  background: linear-gradient(135deg, @primary 0%, lighten(@primary, 8%) 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+  box-shadow: 0 4px 16px @primary-shadow;
+  animation: fade-slide-up @duration-normal @ease-out 50ms both;
+}
+
+.hero-title {
+  font-size: @font-hero;
+  font-weight: 700;
+  color: @color-text;
+  letter-spacing: -0.02em;
+  text-align: center;
+  margin: 0;
+  animation: fade-slide-up @duration-normal @ease-out 100ms both;
+}
+
+.hero-subtitle {
+  font-size: @font-base;
+  color: @color-text-secondary;
+  text-align: center;
+  margin: 0;
+  animation: fade-slide-up @duration-normal @ease-out 150ms both;
+}
+
+/* Prompt Box */
+.prompt-box {
+  width: 100%;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-card;
+  box-shadow: @shadow-card;
+  padding: @space-3;
+  animation: fade-slide-up @duration-normal @ease-out 200ms both;
+  transition: border-color @duration-fast, box-shadow @duration-fast;
+
+  &:focus-within {
+    border-color: @primary;
+    box-shadow: 0 0 0 3px @primary-glow, @shadow-card;
   }
 
-  .section-title {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: var(--font-sm);
-    font-weight: 600;
-    color: var(--color-text);
+  &.compact {
+    border-radius: @radius-lg;
+    box-shadow: @shadow-md;
+  }
+}
 
-    .count-tag {
-      margin-left: auto;
-      font-size: 11px;
+.prompt-textarea {
+  position: relative;
+
+  textarea {
+    width: 100%;
+    border: none;
+    outline: none;
+    resize: none;
+    padding: @space-3 @space-12 @space-3 @space-3;
+    font-size: @font-base;
+    font-family: inherit;
+    color: @color-text;
+    background: transparent;
+    line-height: 1.6;
+    max-height: 200px;
+
+    &::placeholder {
+      color: @color-text-tertiary;
     }
   }
 
-  .helper-text {
-    margin: 0;
-    font-size: 12px;
-    color: var(--color-text-tertiary);
-    line-height: 1.4;
-  }
+  .send-btn {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: @radius-md;
+    background: @color-bg-hover;
+    color: @color-text-tertiary;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all @duration-fast;
+    font-size: 16px;
 
-  .option-suffix {
-    margin-left: 8px;
-    font-size: 11px;
-    color: var(--color-text-tertiary);
-    font-weight: 400;
-  }
+    &.active {
+      background: @primary;
+      color: #fff;
+      box-shadow: 0 2px 8px @primary-shadow;
 
-  .sidebar-actions {
-    margin-top: auto;
+      &:hover {
+        background: @primary-hover;
+      }
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+    }
   }
 }
 
-// ===========================================================================
-// 中间聊天区
-// ===========================================================================
+.prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: @space-2;
+  padding: @space-2 @space-1;
+  flex-wrap: wrap;
+}
 
-.chat-main {
-  flex: 1;
+/* Action Chips */
+.chip-wrapper {
+  position: relative;
+}
+
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: @space-1;
+  padding: 4px @space-2;
+  border: 1px solid @color-border;
+  border-radius: @radius-pill;
+  background: transparent;
+  color: @color-text-secondary;
+  font-size: @font-xs;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all @duration-fast;
+
+  &:hover {
+    background: @color-bg-hover;
+    color: @color-text;
+    border-color: @color-border-strong;
+  }
+
+  &.tiny {
+    padding: 2px @space-2;
+    font-size: 11px;
+  }
+
+  &.clear {
+    color: @color-text-tertiary;
+  }
+
+  .caret {
+    font-size: 10px;
+  }
+}
+
+.chip-divider {
+  width: 1px;
+  height: 16px;
+  background: @color-border;
+  margin: 0 @space-1;
+}
+
+/* Chip Dropdowns */
+.chip-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  box-shadow: @shadow-float;
+  padding: @space-2;
+  z-index: 100;
+
+  &.model {
+    min-width: 220px;
+  }
+
+  &.bottom-anchored {
+    bottom: auto;
+    top: calc(100% + 6px);
+  }
+
+  .dropdown-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: @color-text-tertiary;
+    padding: @space-1 @space-2;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: @space-2 @space-3;
+    border-radius: @radius-md;
+    font-size: @font-sm;
+    color: @color-text;
+    cursor: pointer;
+    transition: background-color @duration-fast;
+
+    &:hover {
+      background: @color-bg-hover;
+    }
+
+    &.active {
+      background: @primary-light;
+      color: @primary;
+    }
+  }
+
+  .dropdown-empty {
+    padding: @space-3;
+    text-align: center;
+    font-size: @font-sm;
+    color: @color-text-tertiary;
+  }
+}
+
+/* Suggestion Cards */
+.suggestions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: @space-3;
+  width: 100%;
+  animation: fade-slide-up @duration-normal @ease-out 300ms both;
+}
+
+.suggestion-card {
+  display: flex;
+  align-items: center;
+  gap: @space-3;
+  padding: @space-4;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  cursor: pointer;
+  text-align: left;
+  transition: all 180ms @ease-standard;
+
+  &:hover {
+    border-color: @primary;
+    background: @primary-light;
+    transform: translateY(-2px);
+    box-shadow: @shadow-sm;
+
+    .suggestion-icon {
+      background: @primary;
+      color: #fff;
+    }
+
+    .suggestion-arrow {
+      opacity: 1;
+      transform: translateX(2px);
+    }
+  }
+
+  .suggestion-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: @radius-md;
+    background: @color-bg-hover;
+    color: @color-text-secondary;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    transition: all 180ms @ease-standard;
+  }
+
+  .suggestion-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .suggestion-label {
+    font-size: @font-sm;
+    font-weight: 600;
+    color: @color-text;
+    margin-bottom: 2px;
+  }
+
+  .suggestion-desc {
+    font-size: @font-xs;
+    color: @color-text-tertiary;
+  }
+
+  .suggestion-arrow {
+    color: @color-text-tertiary;
+    opacity: 0;
+    transform: translateX(-2px);
+    transition: all 180ms @ease-standard;
+  }
+}
+
+/* ============================================================
+ * 聊天布局（有对话后）
+ * ============================================================ */
+.chat-layout {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg-white);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  min-width: 0;
-}
-
-.chat-header {
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--color-border);
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  flex-shrink: 0;
-
-  .chat-title {
-    font-size: var(--font-lg);
-    font-weight: 600;
-    color: var(--color-text);
-  }
-
-  .chat-sub {
-    font-size: var(--font-sm);
-    color: var(--color-text-tertiary);
-  }
 }
 
 .chat-messages {
   flex: 1;
-  padding: var(--space-6);
   overflow-y: auto;
+  padding: @space-8 @space-12;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  min-height: 0;
+  gap: @space-6;
 }
 
-// 空状态
-.empty-state {
+.message-item {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: var(--space-10) var(--space-6);
-
-  .empty-avatar {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    background: var(--primary-bg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: var(--space-3);
-  }
-
-  .empty-title {
-    font-size: var(--font-lg);
-    font-weight: 600;
-    color: var(--color-text);
-    margin-bottom: 4px;
-  }
-
-  .empty-desc {
-    font-size: var(--font-sm);
-    color: var(--color-text-tertiary);
-    margin-bottom: var(--space-6);
-  }
-
-  .suggestions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    justify-content: center;
-    max-width: 520px;
-  }
-
-  .suggestion-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-4);
-    background: var(--color-bg-light);
-    border: 1px solid var(--color-border-dashed);
-    border-radius: var(--radius-md);
-    font-size: var(--font-sm);
-    color: var(--color-text);
-    cursor: pointer;
-    transition: all 0.15s ease;
-
-    &:hover {
-      background: var(--primary-bg);
-      border-color: var(--primary);
-      color: var(--primary);
-    }
-
-    .suggestion-icon {
-      font-size: 16px;
-    }
-  }
-
-  .rag-hint {
-    margin-top: var(--space-6);
-    padding: var(--space-2) var(--space-4);
-    background: var(--primary-bg);
-    border-radius: var(--radius-md);
-    font-size: var(--font-sm);
-    color: var(--primary);
-  }
-}
-
-// 消息气泡
-.chat-bubble {
-  display: flex;
-  gap: var(--space-3);
+  gap: @space-4;
+  max-width: 800px;
+  margin: 0 auto;
+  width: 100%;
+  animation: fade-slide-up @duration-normal @ease-out;
 
   &.user {
     flex-direction: row-reverse;
 
-    .bubble-body {
+    .message-body {
       align-items: flex-end;
     }
 
-    .bubble-content {
-      background: var(--primary);
+    .message-content {
+      background: @primary;
       color: #fff;
     }
 
-    .bubble-meta {
+    .message-meta {
       flex-direction: row-reverse;
     }
   }
 
-  &.assistant {
-    .bubble-content {
-      background: var(--color-bg-light);
-      color: var(--color-text);
-    }
-  }
-
-  .bubble-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: var(--color-bg-light);
+  .message-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: @radius-lg;
+    background: @color-bg-hover;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 16px;
+    font-size: 18px;
     flex-shrink: 0;
+
+    .assistant & {
+      background: linear-gradient(135deg, @primary 0%, lighten(@primary, 8%) 100%);
+      color: #fff;
+    }
   }
 
-  .bubble-body {
+  .message-body {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    max-width: 75%;
+    gap: @space-1;
+    max-width: 70%;
   }
 
-  .bubble-meta {
+  .message-meta {
     display: flex;
-    gap: var(--space-2);
-    font-size: 12px;
-    color: var(--color-text-tertiary);
+    gap: @space-2;
+    font-size: @font-xs;
+    color: @color-text-tertiary;
+
+    .message-role {
+      font-weight: 500;
+      color: @color-text-secondary;
+    }
   }
 
-  .bubble-content {
-    padding: var(--space-3) var(--space-4);
-    border-radius: 12px;
-    line-height: 1.6;
-    font-size: var(--font-sm);
+  .message-content {
+    padding: @space-3 @space-4;
+    background: @color-bg-surface;
+    border: 1px solid @color-border;
+    border-radius: @radius-lg;
+    line-height: 1.7;
+    font-size: @font-base;
     white-space: pre-wrap;
     word-break: break-word;
-  }
 
-  // 打字指示器
-  .typing {
-    display: flex;
-    gap: 4px;
-    padding: var(--space-3) var(--space-5);
+    .assistant & {
+      background: @color-bg-surface;
+    }
 
-    span {
-      width: 8px;
-      height: 8px;
-      background: var(--color-text-tertiary);
-      border-radius: 50%;
-      animation: bounce 1.4s infinite ease-in-out both;
+    .typing {
+      display: flex;
+      gap: 4px;
+      padding: @space-3 @space-5;
 
-      &:nth-child(1) { animation-delay: -0.32s; }
-      &:nth-child(2) { animation-delay: -0.16s; }
+      span {
+        width: 8px;
+        height: 8px;
+        background: @color-text-tertiary;
+        border-radius: 50%;
+        animation: typing-bounce 1.4s infinite ease-in-out both;
+
+        &:nth-child(1) {
+          animation-delay: -0.32s;
+        }
+
+        &:nth-child(2) {
+          animation-delay: -0.16s;
+        }
+      }
     }
   }
 }
 
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0); }
-  40% { transform: scale(1); }
-}
-
-// 输入区
-.chat-input-area {
-  padding: var(--space-4) var(--space-6);
-  border-top: 1px solid var(--color-border);
-  background: var(--color-bg-white);
-  flex-shrink: 0;
-
-  .input-wrapper {
-    display: flex;
-    gap: var(--space-3);
-    align-items: flex-end;
-  }
-
-  .input-actions {
-    flex-shrink: 0;
-  }
-
-  .input-tags {
-    margin-top: var(--space-2);
-    display: flex;
-    gap: var(--space-2);
-  }
+/* 底部输入区 */
+.chat-input-bottom {
+  padding: @space-4 @space-12 @space-8;
+  max-width: 800px;
+  margin: 0 auto;
+  width: 100%;
 }
 </style>

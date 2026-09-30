@@ -1,39 +1,89 @@
 <template>
   <div class="login-page">
-    <div class="login-card">
-      <!-- 品牌区 -->
-      <div class="brand">
-        <div class="brand-logo">AWS</div>
-        <div class="brand-title">AI WorkFlow Studio</div>
-        <div class="brand-subtitle">让每个想法，流动起来</div>
+    <!-- 左侧装饰区（桌面端） -->
+    <div class="login-decoration">
+      <div class="decoration-content">
+        <div class="deco-logo">✦</div>
+        <h2 class="deco-title">AI WorkFlow Studio</h2>
+        <p class="deco-tagline">
+          Build, run and connect AI workflows.<br />
+          Make your AI smarter with knowledge.
+        </p>
+        <div class="deco-features">
+          <div class="feature-item">
+            <t-icon name="flow" />
+            <span>Visual workflow builder</span>
+          </div>
+          <div class="feature-item">
+            <t-icon name="library" />
+            <span>RAG-powered knowledge bases</span>
+          </div>
+          <div class="feature-item">
+            <t-icon name="server" />
+            <span>Multiple LLM providers</span>
+          </div>
+        </div>
       </div>
+      <div class="deco-bg" />
+    </div>
 
-      <!-- 登录 / 注册 切换 -->
-      <t-tabs v-model="isRegister" class="mode-tabs">
-        <t-tab-panel :value="false" label="登录" />
-        <t-tab-panel :value="true" label="注册" />
-      </t-tabs>
+    <!-- 右侧表单区 -->
+    <div class="login-form-area">
+      <div class="login-card">
+        <!-- 品牌区（移动端） -->
+        <div class="brand-mobile">
+          <div class="brand-logo">✦</div>
+          <div class="brand-title">AI WorkFlow Studio</div>
+        </div>
 
-      <!-- 表单 -->
-      <t-form ref="formRef" class="login-form" :data="form" :rules="formRules" :disabled="loading" @submit="submitForm">
-        <t-form-item v-if="isRegister" label="用户名" name="username">
-          <t-input v-model="form.username" placeholder="请输入用户名" :autosize="false" />
-        </t-form-item>
+        <!-- 标题 -->
+        <h1 class="login-heading">
+          {{ isRegister ? "Create your account" : "Welcome back" }}
+        </h1>
+        <p class="login-sub">
+          {{ isRegister ? "Start building AI workflows in minutes" : "Sign in to continue your journey" }}
+        </p>
 
-        <t-form-item label="邮箱" name="email">
-          <t-input v-model="form.email" type="email" placeholder="name@example.com" />
-        </t-form-item>
+        <!-- 登录 / 注册 切换 -->
+        <t-tabs v-model="isRegister" class="mode-tabs" :placement="'top'">
+          <t-tab-panel :value="false" label="Sign In" />
+          <t-tab-panel :value="true" label="Sign Up" />
+        </t-tabs>
 
-        <t-form-item label="密码" name="password">
-          <t-input v-model="form.password" type="password" placeholder="请输入密码" show-password-on="click" />
-        </t-form-item>
+        <!-- 表单 -->
+        <t-form ref="formRef" class="login-form" :data="form" :rules="formRules" :disabled="loading" @submit="submitForm">
+          <t-form-item v-if="isRegister" label="Username" name="username">
+            <t-input v-model="form.username" placeholder="Your display name" :autosize="false" />
+          </t-form-item>
 
-        <t-alert v-if="errorMessage" theme="error" :message="errorMessage" class="form-alert" />
+          <t-form-item label="Email" name="email">
+            <t-input v-model="form.email" type="email" placeholder="name@example.com" />
+          </t-form-item>
 
-        <t-button theme="primary" type="submit" block :loading="loading" size="large" class="submit-btn">
-          {{ isRegister ? "创建账号" : "进入工作台" }}
-        </t-button>
-      </t-form>
+          <t-form-item label="Password" name="password">
+            <t-input v-model="form.password" type="password" placeholder="••••••••" show-password-on="click" />
+          </t-form-item>
+
+          <t-alert v-if="errorMessage" theme="error" :message="errorMessage" class="form-alert" />
+
+          <button type="submit" class="submit-btn" :class="{ loading }" :disabled="loading">
+            <span v-if="loading" class="btn-spinner" />
+            <span>{{ isRegister ? "Create Account" : "Sign In" }}</span>
+          </button>
+        </t-form>
+
+        <!-- Footer -->
+        <div class="login-footer">
+          <template v-if="!isRegister">
+            Don't have an account?
+            <button class="link-btn" @click="isRegister = true">Sign up</button>
+          </template>
+          <template v-else>
+            Already have an account?
+            <button class="link-btn" @click="isRegister = false">Sign in</button>
+          </template>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -61,7 +111,6 @@ const form = reactive({
   password: "",
 });
 
-// 表单校验规则
 const formRules: Record<string, FormRule[]> = {
   username: [
     { required: true, message: "请输入用户名", trigger: "blur" },
@@ -77,7 +126,6 @@ const formRules: Record<string, FormRule[]> = {
   ],
 };
 
-// 切换登录/注册时清空错误信息
 watch(isRegister, () => {
   errorMessage.value = "";
   formRef.value?.reset?.();
@@ -85,18 +133,13 @@ watch(isRegister, () => {
 
 const submitForm = async () => {
   errorMessage.value = "";
-
   const result = await formRef.value?.validate?.();
   if (result !== true) return;
 
   loading.value = true;
   try {
     const response = isRegister.value
-      ? await register({
-        username: form.username,
-        email: form.email,
-        password: form.password,
-      })
+      ? await register({ username: form.username, email: form.email, password: form.password })
       : await login({ email: form.email, password: form.password });
 
     userStore.setToken(response.accessToken);
@@ -118,71 +161,267 @@ const submitForm = async () => {
 };
 </script>
 
-<style scoped>
+<style scoped lang="less">
+@import "../../styles/variables.less";
+
 .login-page {
   min-height: 100vh;
   display: flex;
+  background: @color-bg;
+}
+
+/* ========== 左侧装饰 ========== */
+.login-decoration {
+  flex: 1;
+  position: relative;
+  background: linear-gradient(135deg, @primary 0%, darken(@primary, 12%) 100%);
+  display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-10) var(--space-6);
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4e9f2 100%);
+  overflow: hidden;
+
+  @media (max-width: 768px) {
+    display: none;
+  }
+
+  .decoration-content {
+    position: relative;
+    z-index: 2;
+    padding: @space-12;
+    max-width: 480px;
+    color: #fff;
+    animation: fade-slide-up @duration-slow @ease-out;
+  }
+
+  .deco-logo {
+    width: 64px;
+    height: 64px;
+    border-radius: @radius-xl;
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: @space-6;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  }
+
+  .deco-title {
+    font-size: @font-xxl;
+    font-weight: 700;
+    margin: 0 0 @space-4;
+    letter-spacing: -0.01em;
+  }
+
+  .deco-tagline {
+    font-size: @font-lg;
+    line-height: 1.6;
+    opacity: 0.9;
+    margin: 0 0 @space-10;
+  }
+
+  .deco-features {
+    display: flex;
+    flex-direction: column;
+    gap: @space-4;
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: @space-3;
+      font-size: @font-sm;
+      opacity: 0.9;
+
+      .t-icon {
+        font-size: 18px;
+      }
+    }
+  }
+
+  /* 背景装饰 */
+  .deco-bg {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+
+    &::before {
+      content: "";
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      top: -200px;
+      right: -200px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    &::after {
+      content: "";
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      bottom: -100px;
+      left: -100px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.03);
+    }
+  }
+}
+
+/* ========== 右侧表单区 ========== */
+.login-form-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: @space-12 @space-8;
+  background: @color-bg-surface;
+  animation: fade-slide-up @duration-slow @ease-out;
 }
 
 .login-card {
   width: 100%;
-  max-width: 420px;
-  background: var(--color-bg-card);
-  border-radius: var(--radius-card);
-  padding: var(--space-12) var(--space-10);
-  box-shadow: var(--shadow-card);
+  max-width: 400px;
+
+  .brand-mobile {
+    display: none;
+    text-align: center;
+    margin-bottom: @space-8;
+
+    @media (max-width: 768px) {
+      display: block;
+    }
+
+    .brand-logo {
+      width: 48px;
+      height: 48px;
+      border-radius: @radius-xl;
+      background: linear-gradient(135deg, @primary 0%, lighten(@primary, 8%) 100%);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 700;
+      margin: 0 auto @space-3;
+      box-shadow: 0 4px 16px @primary-shadow;
+    }
+
+    .brand-title {
+      font-size: @font-lg;
+      font-weight: 600;
+      color: @color-text;
+    }
+  }
+
+  .login-heading {
+    font-size: 26px;
+    font-weight: 700;
+    color: @color-text;
+    margin: 0 0 @space-2;
+    letter-spacing: -0.01em;
+  }
+
+  .login-sub {
+    font-size: @font-sm;
+    color: @color-text-secondary;
+    margin: 0 0 @space-6;
+  }
+
+  .mode-tabs {
+    margin-bottom: @space-6;
+    border-bottom: 1px solid @color-border;
+
+    :deep(.t-tabs__nav-item) {
+      font-weight: 500;
+    }
+  }
+
+  .submit-btn {
+    width: 100%;
+    height: 44px;
+    margin-top: @space-4;
+    background: @primary;
+    color: #fff;
+    border: none;
+    border-radius: @radius-lg;
+    font-size: @font-base;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: @space-2;
+    transition: all @duration-fast;
+    box-shadow: 0 2px 8px @primary-shadow;
+
+    &:hover:not(:disabled) {
+      background: @primary-hover;
+      box-shadow: 0 4px 16px @primary-shadow;
+    }
+
+    &:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &.loading {
+      gap: @space-2;
+    }
+
+    .btn-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: running-ring 0.8s linear infinite;
+    }
+  }
+
+  .login-footer {
+    margin-top: @space-6;
+    text-align: center;
+    font-size: @font-sm;
+    color: @color-text-tertiary;
+
+    .link-btn {
+      background: none;
+      border: none;
+      color: @primary;
+      font-size: inherit;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 0;
+      margin-left: 4px;
+
+      &:hover {
+        color: @primary-hover;
+        text-decoration: underline;
+      }
+    }
+  }
 }
 
-.brand {
-  text-align: center;
-  margin-bottom: var(--space-8);
+/* 表单通用 */
+.login-form {
+  :deep(.t-input__inner),
+  :deep(.t-textarea__inner) {
+    height: 44px;
+    border-radius: @radius-md;
+  }
 }
 
-.brand .brand-logo {
-  width: 50px;
-  height: 48px;
-  line-height: 48px;
-  margin: 0 auto var(--space-4);
-  background: var(--primary);
-  color: #fff;
-  font-size: var(--font-xl);
-  font-weight: 700;
-  border-radius: var(--radius-xl);
-  text-align: center;
-}
-
-.brand .brand-title {
-  font-size: var(--font-xl);
-  font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: 4px;
-}
-
-.brand .brand-subtitle {
-  font-size: var(--font-sm);
-  color: var(--color-text-tertiary);
-}
-
-.mode-tabs {
-  margin-bottom: var(--space-6);
-}
-
-.login-form .form-alert {
-  margin-bottom: var(--space-4);
-}
-
-.login-form .submit-btn {
-  margin-top: var(--space-2);
-}
-
-@media (max-width: 480px) {
-  .login-card {
-    padding: 36px var(--space-6);
-    border-radius: var(--radius-xl);
+/* 响应式 */
+@media (max-width: 768px) {
+  .login-form-area {
+    padding: @space-8 @space-6;
   }
 }
 </style>

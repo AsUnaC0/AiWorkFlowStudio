@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from '../prisma/prisma.module';
 import { KnowledgeService } from './knowledge.service';
 import { KnowledgeController } from './knowledge.controller';
@@ -15,7 +16,12 @@ import { VectorStoreService } from './vector/vector-store.service';
 import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.service';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [
+    PrismaModule,
+    BullModule.registerQueue({
+      name: 'document-processing',
+    }),
+  ],
   controllers: [KnowledgeController, DocumentsController],
   providers: [
     KnowledgeService,
@@ -33,6 +39,8 @@ import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.servi
   exports: [
     KnowledgeService,
     DocumentService,
+    DocumentParserService,
+    ChunkService,
     KnowledgeRetrievalService,
     VectorStoreService,
     EmbeddingService,

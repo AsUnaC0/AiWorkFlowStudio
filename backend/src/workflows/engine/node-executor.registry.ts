@@ -6,6 +6,8 @@ import { OutputNodeExecutor } from './executors/output.executor';
 import { StartNodeExecutor } from './executors/start.executor';
 import { PromptNodeExecutor } from './executors/prompt.executor';
 import { RAGNodeExecutor } from './executors/rag.executor';
+import { HttpNodeExecutor } from './executors/http.executor';
+import { ConditionNodeExecutor } from './executors/condition.executor';
 
 @Injectable()
 export class NodeExecutorRegistry {
@@ -18,6 +20,8 @@ export class NodeExecutorRegistry {
     private readonly outputExecutor: OutputNodeExecutor,
     private readonly promptExecutor: PromptNodeExecutor,
     private readonly ragExecutor: RAGNodeExecutor,
+    private readonly httpExecutor: HttpNodeExecutor,
+    private readonly conditionExecutor: ConditionNodeExecutor,
   ) {
     this.executors.set('start', startExecutor);
     this.executors.set('input', inputExecutor);
@@ -25,6 +29,8 @@ export class NodeExecutorRegistry {
     this.executors.set('output', outputExecutor);
     this.executors.set('prompt', promptExecutor);
     this.executors.set('rag', ragExecutor);
+    this.executors.set('http', httpExecutor);
+    this.executors.set('condition', conditionExecutor);
   }
 
   get(type: string): NodeExecutor {

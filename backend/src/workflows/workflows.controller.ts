@@ -9,6 +9,7 @@ import {
   Put,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { JwtUser } from '../auth/strategies/jwt.strategy';
@@ -16,7 +17,10 @@ import { CreateWorkflowDto } from './dto/create-workflow.dto';
 import { UpdateWorkflowDto } from './dto/update-workflow.dto';
 import { WorkflowsService } from './workflows.service';
 import { WorkflowEngine } from './engine/workflow.engine';
-import type { Response } from 'express';
+
+// ===========================================================================
+// Workflow 基础 CRUD + 入队运行 + Run 查询
+// ===========================================================================
 
 @Controller()
 @UseGuards(JwtAuthGuard)
@@ -56,17 +60,51 @@ export class WorkflowsController {
   ) {
     return this.workflowsService.update(user.id, id, dto);
   }
+
+  /** 入队运行工作流 → 立即返回 runId，后台 BullMQ 执行 */
+  @Post('workflows/:id/run')
+  enqueueRun(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { input?: unknown },
+  ) {
+    return this.workflowsService.enqueueRun(user.id, id, body.input);
+  }
+
+  /** 查询单次运行结果（前端轮询用） */
+  @Get('workflow-runs/:runId')
+  getRun(
+    @CurrentUser() user: JwtUser,
+    @Param('runId', ParseUUIDPipe) runId: string,
+  ) {
+    return this.workflowsService.getRun(user.id, runId);
+  }
+
+  /** 查询某工作流的运行历史 */
+  @Get('workflows/:id/runs')
+  listRuns(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.workflowsService.listRuns(user.id, id);
+  }
 }
+
+// ===========================================================================
+// 直接运行工作流（开发/调试用，接收 definition 对象，不经过 BullMQ）
+// ===========================================================================
 
 @Controller('workflow')
 export class WorkflowController {
   constructor(private readonly engine: WorkflowEngine) {}
 
+  /** 直接同步运行（开发测试） */
   @Post('run')
   async run(@Body() body: any) {
     return this.engine.run(body.workflow, body.input);
   }
 
+  /** 直接流式运行（开发测试） */
   @Post('run/stream')
   async runStream(@Body() body: any, @Res() response: Response) {
     response.status(200);

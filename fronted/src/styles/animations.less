@@ -1,0 +1,82 @@
+/* ============================================================
+ * AI WorkFlow Studio — Keyframe Animations
+ * 所有动画时长 ≤ 320ms，避免廉价感
+ * ============================================================ */
+
+/* ---- 打字指示器（三点跳动）---- */
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: scale(0); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* ---- Processing 小圆点呼吸 ---- */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* ---- 节点运行中旋转光环 ---- */
+@keyframes running-ring {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ---- 连接线流动粒子 ---- */
+@keyframes flow-particle {
+  0% { stroke-dashoffset: 20; }
+  100% { stroke-dashoffset: 0; }
+}
+
+/* ---- 侧边栏 active indicator 滑入 ---- */
+@keyframes indicator-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ---- Fade in ---- */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---- Fade + Slide up（页面进入）---- */
+@keyframes fade-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- Fade + Scale（弹出组件）---- */
+@keyframes fade-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ---- 抽屉从右滑入 ---- */
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+/* ---- Shimmer（加载骨架屏）---- */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}

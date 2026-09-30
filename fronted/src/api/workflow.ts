@@ -25,6 +25,10 @@ export type WorkflowStreamEvent =
       nodeId: string;
       nodeType: string;
       output: unknown;
+      /** Condition 节点执行的分支（'true' | 'false'），普通节点为空 */
+      branch?: string;
+      /** Condition 节点的详细判断元数据（各条件的实际值/运算符/结果） */
+      metadata?: Record<string, unknown>;
     }
   | { type: "complete"; data: Record<string, unknown> }
   | { type: "error"; message: string };

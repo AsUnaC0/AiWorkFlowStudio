@@ -1,0 +1,96 @@
+/* ============================================================
+ * AI WorkFlow Studio — Vue Transition Classes
+ * 统一页面 / 组件过渡效果
+ * ============================================================ */
+
+/* ---- 页面路由过渡（fade + slide up，220ms）---- */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity @duration-normal @ease-standard,
+    transform @duration-normal @ease-standard;
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ---- 组件淡入（快速）---- */
+.fast-fade-enter-active,
+.fast-fade-leave-active {
+  transition: opacity @duration-fast @ease-standard;
+}
+
+.fast-fade-enter-from,
+.fast-fade-leave-to {
+  opacity: 0;
+}
+
+/* ---- 抽屉 / Dialog（scale + fade）---- */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity @duration-normal @ease-standard,
+    transform @duration-normal @ease-standard;
+}
+
+.modal-enter-from {
+  opacity: 0;
+  transform: scale(0.98);
+}
+
+.modal-leave-to {
+  opacity: 0;
+  transform: scale(0.98);
+}
+
+/* ---- 右侧抽屉 ---- */
+.drawer-right-enter-active,
+.drawer-right-leave-active {
+  transition: transform @duration-slow @ease-out;
+}
+
+.drawer-right-enter-from,
+.drawer-right-leave-to {
+  transform: translateX(100%);
+}
+
+/* ---- 侧边栏折叠过渡 ---- */
+.sidebar-collapse-transition {
+  transition: width @duration-normal @ease-standard;
+}
+
+/* ---- 列表进入过渡（stagger 效果可通过 JS 控制）---- */
+.list-enter-active {
+  transition: opacity @duration-normal @ease-standard,
+    transform @duration-normal @ease-standard;
+}
+
+.list-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+/* ---- Hover 过渡（统一 180ms）---- */
+.hover-transition {
+  transition: transform 180ms @ease-standard,
+    box-shadow 180ms @ease-standard,
+    border-color 180ms @ease-standard,
+    background-color 180ms @ease-standard;
+}
+
+/* ---- Focus ring ---- */
+.focus-ring {
+  transition: box-shadow @duration-fast @ease-standard,
+    border-color @duration-fast @ease-standard;
+
+  &:focus {
+    box-shadow: 0 0 0 2px @primary-glow, 0 0 0 1px @primary;
+    border-color: @primary !important;
+    outline: none;
+  }
+}

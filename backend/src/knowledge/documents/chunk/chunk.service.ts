@@ -5,8 +5,8 @@ import { PrismaService } from '../../../prisma/prisma.service';
 @Injectable()
 export class ChunkService {
   private readonly splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 1000,
-    chunkOverlap: 200,
+    chunkSize: 100,
+    chunkOverlap: 50,
   });
 
   constructor(private readonly prisma: PrismaService) {}

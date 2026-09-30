@@ -60,6 +60,7 @@ model Workflow {
   workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   versions        WorkflowVersion[] @relation("WorkflowVersions")
   currentVersion  WorkflowVersion? @relation("WorkflowCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  runs            WorkflowRun[]
 
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -80,6 +81,31 @@ model WorkflowVersion {
 
   @@unique([workflowId, version])
   @@index([workflowId])
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowRun（工作流运行记录 —— BullMQ 异步执行结果持久化）
+// ---------------------------------------------------------------------------
+
+model WorkflowRun {
+  id            String   @id @default(uuid())
+  workflowId    String
+
+  input         Json?
+  output        Json?
+
+  status        String   @default("QUEUED")   // QUEUED / RUNNING / COMPLETED / FAILED
+  errorMessage  String?
+
+  startedAt     DateTime?
+  completedAt   DateTime?
+
+  createdAt     DateTime @default(now())
+
+  workflow      Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+  @@index([status])
 }
 
 // ---------------------------------------------------------------------------
