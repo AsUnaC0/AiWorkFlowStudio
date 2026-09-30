@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { VueFlow } from "@vue-flow/core";
 import { Background } from "@vue-flow/background";
@@ -7,8 +7,15 @@ import { Controls } from "@vue-flow/controls";
 import CustomNode from "@/components/workflow/CustomNode.vue";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useWorkflow } from "@/composables/useWorkflow";
-import { runWorkflowStream, type WorkflowStreamEvent } from "@/api/workflow";
-import { getKnowledgeBases, type KnowledgeBase } from "@/api/knowledge";
+import {
+  enqueueRun,
+  getRun,
+  runWorkflowStream,
+  type WorkflowRun,
+  type WorkflowStreamEvent,
+} from "@/api/workflow";
+import { getKnowledgeBases } from "@/api/knowledge";
+import type { KnowledgeBase } from "@/types/knowledge";
 import type { WorkflowDefinition } from "@/types/workflow";
 import { MessagePlugin } from "tdesign-vue-next";
 
@@ -55,17 +62,157 @@ const chatMessages = ref<{ role: "user" | "assistant"; content: string }[]>([]);
 const runResultText = computed(() =>
   runResult.value === null ? "" : JSON.stringify(runResult.value, null, 2),
 );
+const currentRun = ref<WorkflowRun | null>(null);
+let pollTimer: number | null = null;
+let pollCount = 0;
+const POLL_INTERVAL_MS = 2000;
+const POLL_MAX_COUNT = 150; // 150 × 2s = 5 分钟上限
 
-// 节点属性 Drawer 相关
+/** 停止轮询 */
+const stopRunPolling = () => {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  pollCount = 0;
+};
+
+/** 轮询运行结果直到 COMPLETED / FAILED 或超时 */
+const pollRunResult = async (runId: string) => {
+  pollCount = 0;
+  pollTimer = window.setInterval(async () => {
+    pollCount++;
+
+    // 超时保护：超过 5 分钟仍未结束 → 停止轮询并提示
+    if (pollCount > POLL_MAX_COUNT) {
+      stopRunPolling();
+      running.value = false;
+      runError.value = "运行超时（5分钟），请稍后查看运行历史或 Worker 日志";
+      currentNodeStatus.value = "";
+      MessagePlugin.warning(runError.value);
+      return;
+    }
+
+    try {
+      const run = await getRun(runId);
+      currentRun.value = run;
+      currentNodeStatus.value =
+        run.status === "QUEUED"
+          ? `任务排队中... (${pollCount}s)`
+          : run.status === "RUNNING"
+            ? `工作流运行中... (${pollCount}s)`
+            : "";
+
+      if (run.status === "COMPLETED" || run.status === "FAILED") {
+        stopRunPolling();
+        running.value = false;
+
+        if (run.status === "COMPLETED") {
+          runResult.value = run.output;
+          currentNodeStatus.value = "工作流运行完成";
+          MessagePlugin.success("工作流运行完成");
+        } else {
+          runError.value = run.errorMessage || "工作流运行失败";
+          MessagePlugin.error(runError.value);
+        }
+      }
+    } catch (err) {
+      console.error("轮询运行结果失败", err);
+      // 轮询失败继续等，不要直接报错
+    }
+  }, POLL_INTERVAL_MS);
+};
+
+// ---------- SSE 调试运行（保留给开发调试用） ----------
+const nodeLabel = (
+  event: Extract<WorkflowStreamEvent, { type: "node:start" }>,
+) => event.label || event.nodeType;
+
+/** BullMQ 异步运行（生产模式：入队 → 轮询 → 显示结果） */
+const handleRunWorkflow = async () => {
+  running.value = true;
+  runError.value = "";
+  runResult.value = null;
+  currentRun.value = null;
+
+  try {
+    // 关键：BullMQ Worker 读 DB 的 currentVersion
+    // 画布改动没保存就入队 → Worker 跑的是旧 definition
+    // 所以异步运行前先 auto-save
+    await saveWorkflow();
+
+    const run = await enqueueRun(workflowId, runInput.value);
+    currentRun.value = run;
+
+    chatMessages.value.push({ role: "user", content: runInput.value });
+    chatMessages.value.push({ role: "assistant", content: "任务已入队，正在后台执行..." });
+
+    currentNodeStatus.value = "任务已入队，等待 Worker 执行...";
+
+    // 启动轮询
+    pollRunResult(run.id);
+  } catch (error) {
+    runError.value = "保存或入队失败，请检查后端服务";
+    MessagePlugin.error(runError.value);
+    console.error("Workflow enqueue failed", error);
+    running.value = false;
+  }
+};
+
+/** SSE 实时运行（开发调试用 —— 同步执行，流式反馈） */
+const handleRunWorkflowStream = async () => {
+  running.value = true;
+  runError.value = "";
+
+  try {
+    const definition = getCurrentDefinition();
+    const workflow: WorkflowDefinition = {
+      nodes: definition.nodes.map((node) => ({
+        ...node,
+        type: String(node.data?.nodeType ?? node.type),
+        config: { ...node.data },
+      })),
+      edges: definition.edges,
+    };
+
+    chatMessages.value.push({ role: "user", content: runInput.value });
+    chatMessages.value.push({ role: "assistant", content: "" });
+
+    await runWorkflowStream(
+      {
+        workflow,
+        input: runInput.value,
+      },
+      (event) => {
+        if (event.type === "node:start") {
+          currentNodeStatus.value = `正在运行：${nodeLabel(event)}`;
+          if (event.nodeType === "llm" && chatMessages.value.at(-1)?.content) {
+            chatMessages.value.push({ role: "assistant", content: "" });
+          }
+        } else if (event.type === "token") {
+          const assistantMessage = chatMessages.value.at(-1);
+          if (assistantMessage?.role === "assistant") {
+            assistantMessage.content += event.content;
+          }
+        } else if (event.type === "node:complete") {
+          currentNodeStatus.value = `已完成：${event.nodeType}`;
+        } else if (event.type === "complete") {
+          runResult.value = { input: runInput.value, data: event.data };
+          currentNodeStatus.value = "工作流运行完成";
+        }
+      },
+    );
+    MessagePlugin.success("工作流运行完成");
+  } catch (error) {
+    runError.value = "工作流运行失败，请检查节点配置和后端服务";
+    MessagePlugin.error(runError.value);
+    console.error("Workflow run failed", error);
+  } finally {
+    running.value = false;
+  }
+};
 const propertyDrawerVisible = ref(false);
 const tempNodeData = ref<Record<string, any> | null>(null);
-
-/** 打开属性 Drawer（把 tempNodeData 深拷贝到 tempNodeData 做编辑缓冲） */
-const openPropertyDrawer = () => {
-  if (!selectedNode.value) return;
-  tempNodeData.value = JSON.parse(JSON.stringify(selectedNode.value.data));
-  propertyDrawerVisible.value = true;
-};
 
 /** 关闭属性 Drawer */
 const closePropertyDrawer = () => {
@@ -129,69 +276,19 @@ const fetchKnowledgeBases = async () => {
 onMounted(fetchKnowledgeBases);
 
 const openRunDialog = () => {
+  stopRunPolling();
   runInput.value = "";
   runResult.value = null;
   runError.value = "";
   currentNodeStatus.value = "";
   chatMessages.value = [];
+  currentRun.value = null;
   runDialogVisible.value = true;
 };
 
-const nodeLabel = (
-  event: Extract<WorkflowStreamEvent, { type: "node:start" }>,
-) => event.label || event.nodeType;
-
-const handleRunWorkflow = async () => {
-  running.value = true;
-  runError.value = "";
-
-  try {
-    const definition = getCurrentDefinition();
-    const workflow: WorkflowDefinition = {
-      nodes: definition.nodes.map((node) => ({
-        ...node,
-        type: String(node.data?.nodeType ?? node.type),
-        config: { ...node.data },
-      })),
-      edges: definition.edges,
-    };
-
-    chatMessages.value.push({ role: "user", content: runInput.value });
-    chatMessages.value.push({ role: "assistant", content: "" });
-
-    await runWorkflowStream(
-      {
-        workflow,
-        input: runInput.value,
-      },
-      (event) => {
-        if (event.type === "node:start") {
-          currentNodeStatus.value = `正在运行：${nodeLabel(event)}`;
-          if (event.nodeType === "llm" && chatMessages.value.at(-1)?.content) {
-            chatMessages.value.push({ role: "assistant", content: "" });
-          }
-        } else if (event.type === "token") {
-          const assistantMessage = chatMessages.value.at(-1);
-          if (assistantMessage?.role === "assistant") {
-            assistantMessage.content += event.content;
-          }
-        } else if (event.type === "node:complete") {
-          currentNodeStatus.value = `已完成：${event.nodeType}`;
-        } else if (event.type === "complete") {
-          runResult.value = { input: runInput.value, data: event.data };
-          currentNodeStatus.value = "工作流运行完成";
-        }
-      },
-    );
-    MessagePlugin.success("工作流运行完成");
-  } catch (error) {
-    runError.value = "工作流运行失败，请检查节点配置和后端服务";
-    MessagePlugin.error(runError.value);
-    console.error("Workflow run failed", error);
-  } finally {
-    running.value = false;
-  }
-};
+onBeforeUnmount(() => {
+  stopRunPolling();
+});
 
 // ---------- HTTP 节点辅助函数 ----------
 const addHeader = () => {
@@ -365,14 +462,14 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
               <label class="form-label">System Prompt</label>
               <textarea class="form-textarea" rows="6" placeholder="你是一个有用的助手..."
                 v-model="tempNodeData.prompt"></textarea>
-              <div class="form-hint">支持变量引用，如 <code v-pre>{{input}}</code>、<code v-pre>{{http_1.body}}</code></div>
+              <div class="form-hint" v-pre>支持变量引用，如 <code>{{input}}</code>、<code>{{http_1.body}}</code></div>
             </div>
 
             <div class="form-item">
               <label class="form-label">User Prompt（可选）</label>
               <textarea class="form-textarea" rows="4" placeholder="留空则自动使用上一个节点的输出。支持 {{变量}}"
                 v-model="tempNodeData.userPrompt"></textarea>
-              <div class="form-hint">自定义用户消息模板，支持 {{ input }}、{{ http_1.body.field }} 等</div>
+              <div class="form-hint" v-pre>自定义用户消息模板，支持 {{ input }}、{{ http_1.body.field }} 等</div>
             </div>
           </template>
 
@@ -470,7 +567,7 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
                   <input class="kv-input key" v-model="tempNodeData._headers[index].key" placeholder="Key" />
                   <input class="kv-input value" v-model="tempNodeData._headers[index].value"
                     placeholder="Value（支持 {{变量}}）" />
-                  <button class="kv-del" @click="removeHeader(index)">✕</button>
+                  <button class="kv-del" @click="removeHeader(Number(index))">✕</button>
                 </div>
                 <button class="kv-add" @click="addHeader">+ 添加 Header</button>
               </div>
@@ -484,7 +581,7 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
                   <input class="kv-input key" v-model="tempNodeData._query[index].key" placeholder="Key" />
                   <input class="kv-input value" v-model="tempNodeData._query[index].value"
                     placeholder="Value（支持 {{变量}}）" />
-                  <button class="kv-del" @click="removeQuery(index)">✕</button>
+                  <button class="kv-del" @click="removeQuery(Number(index))">✕</button>
                 </div>
                 <button class="kv-add" @click="addQuery">+ 添加参数</button>
               </div>
@@ -498,7 +595,7 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
               </select>
               <textarea class="form-textarea body-editor" rows="6" placeholder='{"name": "{{input}}"}'
                 v-model="tempNodeData.body"></textarea>
-              <div class="form-hint">默认 Content-Type: application/json。支持 {{ 变量 }} 引用。</div>
+              <div class="form-hint" v-pre>默认 Content-Type: application/json。支持 {{ 变量 }} 引用。</div>
             </div>
 
             <!-- Timeout -->
@@ -531,9 +628,9 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
               <div class="condition-list">
                 <div v-for="(rule, index) in (tempNodeData._conditions ?? [])" :key="rule.id" class="condition-rule">
                   <div class="condition-rule-header">
-                    <span class="rule-index">条件 {{ index + 1 }}</span>
+                    <span class="rule-index">条件 {{ Number(index) + 1 }}</span>
                     <button v-if="(tempNodeData._conditions?.length ?? 0) > 1" class="kv-del"
-                      @click="removeCondition(index)">✕</button>
+                      @click="removeCondition(Number(index))">✕</button>
                   </div>
 
                   <!-- 左值：变量选择器（支持分组 + 搜索 + 自由输入嵌套路径） -->
@@ -602,10 +699,20 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
       </t-drawer>
     </div>
 
-    <t-dialog v-model:visible="runDialogVisible" header="运行工作流" :confirm-btn="{ content: '运行', loading: running }"
-      :cancel-btn="{ content: '取消' }" :close-on-overlay-click="false" @confirm="handleRunWorkflow">
+    <t-dialog v-model:visible="runDialogVisible" header="运行工作流" :close-on-overlay-click="false" width="560px">
       <div class="run-dialog-content">
         <label class="form-label" for="workflow-run-input">输入内容</label>
+
+        <!-- 后台运行状态（BullMQ 异步） -->
+        <div v-if="currentRun" class="run-meta">
+          <span class="run-meta-item">
+            Run ID: <code>{{ currentRun.id.slice(0, 8) }}...</code>
+          </span>
+          <span class="run-meta-item" :class="'status-' + currentRun.status.toLowerCase()">
+            {{ currentRun.status }}
+          </span>
+        </div>
+
         <div v-if="currentNodeStatus" class="node-status">
           {{ currentNodeStatus }}
         </div>
@@ -627,6 +734,20 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
           <pre>{{ runResultText }}</pre>
         </div>
       </div>
+
+      <!-- 自定义 footer：两种运行模式 -->
+      <template #footer>
+        <div class="run-dialog-actions">
+          <t-button variant="outline" @click="runDialogVisible = false" :disabled="running">取消</t-button>
+          <t-button variant="outline" theme="default" :loading="running" :disabled="running"
+            @click="handleRunWorkflowStream" title="直接在前端传 definition 运行，未保存的画布改动也能试跑">
+            调试运行（SSE）
+          </t-button>
+          <t-button theme="primary" :loading="running" :disabled="running" @click="handleRunWorkflow">
+            运行（异步）
+          </t-button>
+        </div>
+      </template>
     </t-dialog>
   </div>
 </template>
@@ -990,6 +1111,51 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+
+  .run-meta {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-bg-light);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-sm);
+
+    .run-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--color-text-tertiary);
+
+      code {
+        font-family: "Menlo", "Consolas", monospace;
+        font-size: 11px;
+        color: var(--color-text-secondary);
+      }
+    }
+
+    .run-meta-item.status-queued {
+      color: var(--color-warning);
+    }
+
+    .run-meta-item.status-running {
+      color: var(--primary);
+    }
+
+    .run-meta-item.status-completed {
+      color: var(--color-success);
+    }
+
+    .run-meta-item.status-failed {
+      color: var(--color-error);
+    }
+  }
+
+  .run-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
 
   .run-error {
     color: var(--color-error);

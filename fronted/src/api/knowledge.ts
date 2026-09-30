@@ -86,16 +86,29 @@ export interface DocumentItem {
   updatedAt: string;
 }
 
+/** uploadDocument 返回 —— 后端入队后立即返回（异步处理中） */
+export interface UploadDocumentResult {
+  documentId: string;
+  jobId: string;
+  status: "UPLOADED";
+  message: string;
+}
+
 /** 获取知识库下的全部文档 */
 export const getDocuments = (kbId: string): Promise<DocumentItem[]> => {
   return request.get(`/knowledge-bases/${kbId}/documents`);
 };
 
-/** 上传文档（multipart/form-data） */
+/** 获取单个文档详情（含状态，前端轮询用） */
+export const getDocument = (id: string): Promise<DocumentItem> => {
+  return request.get(`/documents/${id}`);
+};
+
+/** 上传文档（multipart/form-data）—— 返回入队结果，后端异步处理 */
 export const uploadDocument = async (
   kbId: string,
   file: File,
-): Promise<DocumentItem> => {
+): Promise<UploadDocumentResult> => {
   const userStore = useUserStore();
   const formData = new FormData();
   formData.append("file", file);

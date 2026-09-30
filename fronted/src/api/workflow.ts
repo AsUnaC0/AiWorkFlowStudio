@@ -17,6 +17,21 @@ export interface WorkflowRunResult {
   data: Record<string, unknown>;
 }
 
+/** BullMQ 异步运行 —— 入队后立即返回，前端轮询 getRun 查结果 */
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  input: unknown | null;
+  output: unknown | null;
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+  errorMessage: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  /** getRun 会带 workflow 信息，listRuns / enqueueRun 返回不带 */
+  workflow?: { id: string; name: string };
+}
+
 export type WorkflowStreamEvent =
   | { type: "node:start"; nodeId: string; nodeType: string; label?: string }
   | { type: "token"; nodeId: string; content: string }
@@ -107,4 +122,26 @@ export const runWorkflowStream = async (
 
     if (done) break;
   }
+};
+
+// ===========================================================================
+// BullMQ 异步运行（生产模式：入队 → 轮询 → 取结果）
+// ===========================================================================
+
+/** 入队一次工作流运行 —— 立即返回 runId，后台 BullMQ 执行 */
+export const enqueueRun = (
+  workflowId: string,
+  input: unknown,
+): Promise<WorkflowRun> => {
+  return request.post(`/workflows/${workflowId}/run`, { input });
+};
+
+/** 查询单次运行结果（前端轮询用） */
+export const getRun = (runId: string): Promise<WorkflowRun> => {
+  return request.get(`/workflow-runs/${runId}`);
+};
+
+/** 查询某工作流的运行历史 */
+export const listRuns = (workflowId: string): Promise<WorkflowRun[]> => {
+  return request.get(`/workflows/${workflowId}/runs`);
 };

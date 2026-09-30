@@ -39,6 +39,24 @@ export class DocumentProcessor extends WorkerHost {
     });
 
     try {
+      // --- 幂等保护：重试时先清理上一次残留的 chunks ---
+      // 查已有 chunks 数量（用于回退 chunkCount）
+      const existingCount = await this.prisma.documentChunk.count({
+        where: { documentId },
+      });
+      if (existingCount > 0) {
+        await this.prisma.$transaction(async (tx) => {
+          // 删除残留 chunks
+          await tx.documentChunk.deleteMany({ where: { documentId } });
+          // 回退 chunkCount（减去已删数量）
+          await tx.knowledgeBase.update({
+            where: { id: knowledgeBaseId },
+            data: { chunkCount: { decrement: existingCount } },
+          });
+        });
+      }
+      // --- 幂等保护结束 ---
+
       await job.updateProgress(10);
 
       // 2. 解析 → 纯文本

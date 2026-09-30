@@ -21,15 +21,39 @@ export type WorkflowStreamEvent =
 export class WorkflowEngine {
   constructor(private readonly registry: NodeExecutorRegistry) {}
 
+  /**
+   * 把 DB/画布传来的 definition 统一成引擎可执行的格式。
+   * VueFlow 画布上所有节点 node.type 都是 "custom"，真正的语义类型存在 data.nodeType 里；
+   * 而 SSE 路径会前端手动把 data.nodeType 提升到 node.type。
+   * 这里统一归一化，保证两条链路行为一致。
+   */
+  private normalizeWorkflow(workflow: any): any {
+    return {
+      nodes: workflow.nodes.map((node: any) => ({
+        ...node,
+        // 优先取已提升的 type，否则从 data.nodeType 回退
+        type:
+          node.type && node.type !== 'custom'
+            ? node.type
+            : (node.data?.nodeType ?? node.type),
+      })),
+      edges: workflow.edges,
+    };
+  }
+
   // ================== 普通运行 ==================
   async run(workflow: any, input: unknown) {
+    const normalized = this.normalizeWorkflow(workflow);
+
     const context = {
       input,
       data: {},
       previousOutput: input,
     };
 
-    let currentNode = workflow.nodes.find((node: any) => node.type === 'start');
+    let currentNode = normalized.nodes.find(
+      (node: any) => node.type === 'start',
+    );
     if (!currentNode) {
       throw new Error('Workflow 缺少 Start Node');
     }
@@ -59,7 +83,7 @@ export class WorkflowEngine {
 
       context.previousOutput = result.output;
 
-      const outgoingEdges = workflow.edges.filter(
+      const outgoingEdges = normalized.edges.filter(
         (edge: any) => edge.source === currentNode.id,
       );
 
@@ -75,7 +99,7 @@ export class WorkflowEngine {
         );
       }
 
-      const nextNode = workflow.nodes.find(
+      const nextNode = normalized.nodes.find(
         (node: any) => node.id === targetEdge.target,
       );
 
@@ -98,8 +122,11 @@ export class WorkflowEngine {
     workflow: any,
     input: unknown,
   ): AsyncGenerator<WorkflowStreamEvent> {
+    const normalized = this.normalizeWorkflow(workflow);
     const context = { input, data: {}, previousOutput: input };
-    let currentNode = workflow.nodes.find((node: any) => node.type === 'start');
+    let currentNode = normalized.nodes.find(
+      (node: any) => node.type === 'start',
+    );
 
     if (!currentNode) throw new Error('Workflow 缺少 Start Node');
 
@@ -157,7 +184,7 @@ export class WorkflowEngine {
         metadata: result.metadata,
       };
 
-      const outgoingEdges = workflow.edges.filter(
+      const outgoingEdges = normalized.edges.filter(
         (edge: any) => edge.source === currentNode.id,
       );
 
@@ -171,7 +198,7 @@ export class WorkflowEngine {
         );
       }
 
-      currentNode = workflow.nodes.find(
+      currentNode = normalized.nodes.find(
         (node: any) => node.id === targetEdge.target,
       );
 
