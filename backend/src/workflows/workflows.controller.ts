@@ -61,6 +61,33 @@ export class WorkflowsController {
     return this.workflowsService.update(user.id, id, dto);
   }
 
+  /** 发布当前草稿版本 → 产生一个新的 WorkflowVersion 作为稳定调用对象 */
+  @Post('workflows/:id/publish')
+  publish(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.workflowsService.publish(user.id, id);
+  }
+
+  /** 归档工作流 → Agent 不再可调用（状态机：PUBLISHED → ARCHIVED） */
+  @Post('workflows/:id/archive')
+  archive(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.workflowsService.archive(user.id, id);
+  }
+
+  /** 把已归档工作流恢复为草稿（状态机：ARCHIVED → DRAFT） */
+  @Post('workflows/:id/restore')
+  restore(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.workflowsService.restore(user.id, id);
+  }
+
   /** 入队运行工作流 → 立即返回 runId，后台 BullMQ 执行 */
   @Post('workflows/:id/run')
   enqueueRun(
@@ -87,6 +114,15 @@ export class WorkflowsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.workflowsService.listRuns(user.id, id);
+  }
+
+  /** 查询某次运行的节点级执行记录（含耗时/状态/输入输出） */
+  @Get('workflow-runs/:runId/nodes')
+  listNodeRuns(
+    @CurrentUser() user: JwtUser,
+    @Param('runId', ParseUUIDPipe) runId: string,
+  ) {
+    return this.workflowsService.listNodeRuns(user.id, runId);
   }
 }
 

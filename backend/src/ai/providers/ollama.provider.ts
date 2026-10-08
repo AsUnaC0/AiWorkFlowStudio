@@ -6,6 +6,9 @@ import {
   ChatResult,
   EmbeddingOptions,
   EmbeddingResult,
+  ToolDefinition,
+  ToolCall,
+  ToolChatResult,
 } from '../ai-provider.interface';
 
 const OLLAMA_BASE_URL = 'http://localhost:11434';
@@ -153,8 +156,98 @@ export class OllamaProvider implements AiProvider {
   }
 
   // ---------------------------------------------------------------------------
+  // Tool Calling（Function Calling）
+  // ---------------------------------------------------------------------------
+
+  async chatWithTools(
+    messages: ChatMessage[],
+    options: ChatOptions,
+    tools: ToolDefinition[],
+  ): Promise<ToolChatResult> {
+    // Ollama 0.3.0+ 的 /api/chat 支持 tools 参数
+    // 把 ToolDefinition（OpenAI schema）直接透传给 Ollama —— Ollama 兼容同构 schema
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: options.model,
+        messages: this.toOllamaMessages(messages),
+        stream: false,
+        tools,
+        options: this.buildOllamaOptions(options),
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.buildError(response));
+    }
+
+    const data = (await response.json()) as {
+      message?: {
+        content?: string;
+        tool_calls?: Array<{
+          id?: string;
+          type: 'function';
+          function: { name: string; arguments: string };
+        }>;
+      };
+      eval_count?: number;
+      prompt_eval_count?: number;
+    };
+
+    // 解析 tool_calls
+    const rawCalls = data.message?.tool_calls ?? [];
+    const toolCalls: ToolCall[] = rawCalls.map((c, i) => ({
+      id: c.id ?? `call_${i}_${Date.now()}`,
+      type: 'function',
+      function: {
+        name: c.function.name,
+        arguments: c.function.arguments ?? '{}',
+      },
+    }));
+
+    return {
+      content: data.message?.content ?? '',
+      toolCalls,
+      model: options.model,
+      usage:
+        data.prompt_eval_count !== undefined && data.eval_count !== undefined
+          ? {
+              promptTokens: data.prompt_eval_count,
+              completionTokens: data.eval_count,
+              totalTokens: data.prompt_eval_count + data.eval_count,
+            }
+          : undefined,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // 内部工具
   // ---------------------------------------------------------------------------
+
+  /**
+   * 把 ChatMessage（含 tool role / tool_calls）转换成 Ollama 能接受的格式。
+   * Ollama 0.3+ 支持 tool role + tool_calls，schema 与 OpenAI 基本一致。
+   */
+  private toOllamaMessages(messages: ChatMessage[]): unknown[] {
+    return messages.map((m) => {
+      const base: Record<string, unknown> = {
+        role: m.role,
+        content: m.content,
+      };
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        base.tool_calls = m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: tc.type,
+          function: tc.function,
+        }));
+      }
+      if (m.tool_call_id) {
+        base.tool_call_id = m.tool_call_id;
+      }
+      return base;
+    });
+  }
 
   private buildOllamaOptions(options: ChatOptions): Record<string, unknown> {
     const result: Record<string, unknown> = {};

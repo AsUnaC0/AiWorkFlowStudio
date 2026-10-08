@@ -8,6 +8,10 @@ export interface VectorHit {
   knowledgeBaseId: string;
   content: string;
   distance: number;
+  /** chunk 元数据（页码、章节等） */
+  metadata?: Record<string, unknown> | null;
+  /** 所属文档文件名 */
+  fileName?: string;
 }
 
 /** 关键词检索结果 */
@@ -17,6 +21,10 @@ export interface KeywordHit {
   knowledgeBaseId: string;
   content: string;
   rank: number;
+  /** chunk 元数据（页码、章节等） */
+  metadata?: Record<string, unknown> | null;
+  /** 所属文档文件名 */
+  fileName?: string;
 }
 
 /**
@@ -89,6 +97,8 @@ export class VectorStoreService {
         dc."documentId",
         d."knowledgeBaseId",
         dc.content,
+        dc.metadata,
+        d."fileName",
         dc."embedding" <=> ${vectorString}::vector AS distance
       FROM "DocumentChunk" dc
       JOIN "Document" d ON d."id" = dc."documentId"
@@ -118,6 +128,8 @@ export class VectorStoreService {
         dc."documentId",
         d."knowledgeBaseId",
         dc.content,
+        dc.metadata,
+        d."fileName",
         ts_rank(to_tsvector('simple', dc.content), plainto_tsquery('simple', ${query})) AS rank
       FROM "DocumentChunk" dc
       JOIN "Document" d ON d."id" = dc."documentId"

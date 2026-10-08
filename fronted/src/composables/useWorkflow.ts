@@ -1,7 +1,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useVueFlow, type Node, type Edge } from "@vue-flow/core";
 import { getWorkflow, updateWorkflow } from "@/api/workflow";
-import type { WorkflowDefinition } from "@/types/workflow";
+import type { WorkflowDefinition, WorkflowStatus } from "@/types/workflow";
 import { MessagePlugin } from "tdesign-vue-next";
 
 /** 节点类型 → 显示中文名 */
@@ -90,6 +90,11 @@ export function useWorkflow(workflowId: string) {
   const errorMessage = ref("");
   const workflowName = ref("");
 
+  // 工作流状态（用于编辑器顶部按钮区显示 [发布] [归档] 等）
+  const workflowStatus = ref<WorkflowStatus>("DRAFT");
+  const publishedVersion = ref<number | null>(null);
+  const hasUnpublishedChanges = ref(false);
+
   // 当前选中的节点
   const selectedNode = ref<Node | null>(null);
 
@@ -116,6 +121,8 @@ export function useWorkflow(workflowId: string) {
     if (nodeType === "llm") {
       data.model ??= "qwen2.5:7b";
       data.temperature ??= 0.7;
+      data.skillIds ??= [];
+      data.mcpServerIds ??= [];
     }
 
     if (nodeType === "prompt") {
@@ -256,6 +263,8 @@ export function useWorkflow(workflowId: string) {
         model: type === "llm" ? "qwen2.5:7b" : undefined,
         prompt: type === "llm" || type === "prompt" ? "" : undefined,
         temperature: type === "llm" ? 0.7 : undefined,
+        skillIds: type === "llm" ? [] : undefined,
+        mcpServerIds: type === "llm" ? [] : undefined,
         // RAG 节点默认配置
         knowledgeBaseIds: type === "rag" ? [] : undefined,
         searchMode: type === "rag" ? "hybrid" : undefined,
@@ -296,6 +305,10 @@ export function useWorkflow(workflowId: string) {
     try {
       const workflow = await getWorkflow(workflowId);
       workflowName.value = workflow.name || "";
+      workflowStatus.value = workflow.status;
+      publishedVersion.value = workflow.publishedVersion?.version ?? null;
+      hasUnpublishedChanges.value =
+        workflow.currentVersionId !== workflow.publishedVersionId;
       const definition = workflow.currentVersion?.definition;
       if (definition) {
         const normalizedNodes = definition.nodes.map((n: Node) =>
@@ -323,7 +336,12 @@ export function useWorkflow(workflowId: string) {
     errorMessage.value = "";
     try {
       const definition = getCurrentDefinition();
-      await updateWorkflow(workflowId, { definition });
+      const updated = await updateWorkflow(workflowId, { definition });
+      // 保存后会产生一个新的 currentVersionId → 与 publishedVersionId 不同
+      workflowStatus.value = updated.status;
+      publishedVersion.value = updated.publishedVersion?.version ?? null;
+      hasUnpublishedChanges.value =
+        updated.currentVersionId !== updated.publishedVersionId;
       MessagePlugin.success("工作流保存成功");
       return true;
     } catch {
@@ -333,6 +351,22 @@ export function useWorkflow(workflowId: string) {
     } finally {
       saving.value = false;
     }
+  };
+
+  /**
+   * 由编辑器外部触发 publish/archive/restore 后调用：
+   * 把返回的 workflow 对象状态同步到本地 ref
+   */
+  const syncStatusFromWorkflow = (wf: {
+    status: WorkflowStatus;
+    publishedVersion?: { version: number } | null;
+    currentVersionId: string | null;
+    publishedVersionId: string | null;
+  }) => {
+    workflowStatus.value = wf.status;
+    publishedVersion.value = wf.publishedVersion?.version ?? null;
+    hasUnpublishedChanges.value =
+      wf.currentVersionId !== wf.publishedVersionId;
   };
 
   /** 把编辑态的节点数据转为持久化/运行时的干净格式 */
@@ -461,8 +495,12 @@ export function useWorkflow(workflowId: string) {
     saving,
     errorMessage,
     workflowName,
+    workflowStatus,
+    publishedVersion,
+    hasUnpublishedChanges,
     saveWorkflow,
     getCurrentDefinition,
     availableVariables,
+    syncStatusFromWorkflow,
   };
 }

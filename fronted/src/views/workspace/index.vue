@@ -2,9 +2,23 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useWorkspace } from "@/composables/useWorkspace";
-import { getWorkflows, createWorkflow } from "@/api/workflow";
-import { MessagePlugin } from "tdesign-vue-next";
-import type { Workflow, WorkflowDefinition } from "@/types/workflow";
+import {
+  getWorkflows,
+  createWorkflow,
+  publishWorkflow,
+  archiveWorkflow,
+  restoreWorkflow,
+} from "@/api/workflow";
+import {
+  getWorkspaceMembers,
+  inviteWorkspaceMember,
+  removeWorkspaceMember,
+  getFriendships,
+} from "@/api/friendship";
+import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
+import type { Workflow, WorkflowDefinition, WorkflowStatus } from "@/types/workflow";
+import type { FriendItem, WorkspaceMemberItem } from "@/api/friendship";
+import { useUserStore } from "@/stores/user";
 
 const route = useRoute();
 const router = useRouter();
@@ -140,6 +154,93 @@ const backToWorkspaceList = () => {
   router.push({ path: "/workspace" });
 };
 
+// ========== Workspace 成员管理 ==========
+const userStore = useUserStore();
+const members = ref<WorkspaceMemberItem[]>([]);
+const membersLoading = ref(false);
+const inviteDialogVisible = ref(false);
+const acceptedFriends = ref<FriendItem[]>([]);
+const friendsLoading = ref(false);
+const inviteLoadingId = ref<string | null>(null);
+
+const fetchMembers = async () => {
+  if (!workspaceId.value) return;
+  membersLoading.value = true;
+  try {
+    members.value = await getWorkspaceMembers(workspaceId.value);
+  } catch {
+    // 非致命错误
+  } finally {
+    membersLoading.value = false;
+  }
+};
+
+const fetchAcceptedFriends = async () => {
+  friendsLoading.value = true;
+  try {
+    const res = await getFriendships();
+    acceptedFriends.value = res.friends;
+  } catch {
+    MessagePlugin.error("好友列表加载失败");
+  } finally {
+    friendsLoading.value = false;
+  }
+};
+
+const openInviteDialog = async () => {
+  inviteDialogVisible.value = true;
+  await fetchAcceptedFriends();
+};
+
+// 过滤掉已是成员的好友
+const inviteCandidates = computed(() => {
+  const memberIds = new Set(members.value.map((m) => m.userId));
+  return acceptedFriends.value.filter((f) => !memberIds.has(f.id));
+});
+
+const isOwner = computed(() => {
+  const owner = members.value.find((m) => m.role === "OWNER");
+  return owner?.userId === userStore.userInfo?.id;
+});
+
+const handleInvite = async (friendId: string) => {
+  if (!workspaceId.value) return;
+  inviteLoadingId.value = friendId;
+  try {
+    await inviteWorkspaceMember(workspaceId.value, friendId);
+    MessagePlugin.success("已邀请好友加入 Workspace");
+    fetchMembers();
+    fetchAcceptedFriends();
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "邀请失败");
+  } finally {
+    inviteLoadingId.value = null;
+  }
+};
+
+const handleRemoveMember = async (member: WorkspaceMemberItem) => {
+  if (!workspaceId.value) return;
+  DialogPlugin.confirm({
+    header: "移除成员",
+    body: `确定要将 ${member.username} 从 Workspace 中移除吗？`,
+    confirmBtn: { content: "移除", theme: "danger" },
+    cancelBtn: { content: "取消" },
+    onConfirm: async () => {
+      try {
+        await removeWorkspaceMember(workspaceId.value!, member.userId);
+        MessagePlugin.success("已移除成员");
+        fetchMembers();
+      } catch (e: any) {
+        MessagePlugin.error(e?.response?.data?.message || "操作失败");
+      }
+    },
+  });
+};
+
+const getInitial = (username: string) => {
+  return username ? username.charAt(0).toUpperCase() : "?";
+};
+
 // 从 workflow definition 提取节点链预览
 const getNodeChain = (wf: Workflow): string[] => {
   const nodes = wf.currentVersion?.definition.nodes || [];
@@ -161,27 +262,92 @@ const formatRelativeTime = (dateStr: string) => {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
 
-const getStatusLabel = (status: string) => {
+const getStatusLabel = (status: WorkflowStatus | string) => {
   const map: Record<string, { label: string; cls: string }> = {
-    draft: { label: "Draft", cls: "draft" },
-    published: { label: "Published", cls: "published" },
-    running: { label: "Running", cls: "running" },
+    DRAFT: { label: "草稿", cls: "draft" },
+    PUBLISHED: { label: "已发布", cls: "published" },
+    ARCHIVED: { label: "已归档", cls: "archived" },
   };
   return map[status] || { label: status, cls: "draft" };
 };
 
+// 已发布版本号显示（v1 / v2 / ...）
+const getPublishedVersionLabel = (wf: Workflow): string => {
+  const v = wf.publishedVersion?.version;
+  return v ? `v${v}` : "";
+};
+
+// 当前草稿相对已发布版本是否有未发布改动
+const hasUnpublishedChanges = (wf: Workflow): boolean => {
+  // publishedVersionId 与 currentVersionId 不同 → 有改动未发布
+  return wf.currentVersionId !== wf.publishedVersionId;
+};
+
+// ========== 状态切换操作（发布 / 归档 / 恢复） ==========
+const actionLoadingId = ref<string | null>(null);
+
+const handlePublish = async (wf: Workflow) => {
+  actionLoadingId.value = wf.id;
+  try {
+    const updated = await publishWorkflow(wf.id);
+    Object.assign(wf, updated);
+    MessagePlugin.success(`工作流已发布 ${getPublishedVersionLabel(updated)}`);
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "发布失败");
+  } finally {
+    actionLoadingId.value = null;
+  }
+};
+
+const handleArchive = async (wf: Workflow) => {
+  actionLoadingId.value = wf.id;
+  try {
+    const updated = await archiveWorkflow(wf.id);
+    Object.assign(wf, updated);
+    MessagePlugin.success("工作流已归档");
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "归档失败");
+  } finally {
+    actionLoadingId.value = null;
+  }
+};
+
+const handleRestore = async (wf: Workflow) => {
+  actionLoadingId.value = wf.id;
+  try {
+    const updated = await restoreWorkflow(wf.id);
+    Object.assign(wf, updated);
+    MessagePlugin.success("工作流已恢复为草稿");
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "恢复失败");
+  } finally {
+    actionLoadingId.value = null;
+  }
+};
+
 // 监听
 watch(workspaceId, (id) => {
-  if (id) fetchWorkflows();
-  else workflows.value = [];
+  if (id) {
+    fetchWorkflows();
+    fetchMembers();
+  } else {
+    workflows.value = [];
+    members.value = [];
+  }
 });
 
 onMounted(() => {
   if (!workspaceId.value) fetchWorkspaces();
+  else {
+    fetchWorkflows();
+    fetchMembers();
+  }
 });
 
 onBeforeUnmount(() => {
   workflows.value = [];
+  members.value = [];
+  acceptedFriends.value = [];
 });
 </script>
 
@@ -273,6 +439,26 @@ onBeforeUnmount(() => {
           <p class="page-subtitle">Build AI workflows visually. Connect nodes to create powerful automations.</p>
         </div>
         <div class="page-header-actions">
+          <!-- 成员展示区 -->
+          <div class="members-bar">
+            <div class="members-stack">
+              <t-tooltip v-for="m in members.slice(0, 5)" :key="m.userId"
+                :content="`${m.username}${m.role === 'OWNER' ? ' (Owner)' : ''}`" placement="bottom">
+                <div class="member-avatar" :class="{ owner: m.role === 'OWNER' }"
+                  @click="m.role !== 'OWNER' && isOwner && handleRemoveMember(m)"
+                  :title="isOwner && m.role !== 'OWNER' ? '点击移除' : ''">
+                  {{ getInitial(m.username) }}
+                </div>
+              </t-tooltip>
+              <t-tooltip v-if="members.length > 5" :content="`还有 ${members.length - 5} 位成员`" placement="bottom">
+                <div class="member-avatar more">+{{ members.length - 5 }}</div>
+              </t-tooltip>
+            </div>
+            <t-button theme="primary" variant="outline" size="small" @click="openInviteDialog">
+              <template #icon><t-icon name="usergroup-add" /></template>
+              邀请好友
+            </t-button>
+          </div>
           <t-button theme="primary" @click="openWfCreateDialog">
             <template #icon><t-icon name="add" /></template>
             Create Workflow
@@ -305,13 +491,34 @@ onBeforeUnmount(() => {
                 <span class="status-badge" :class="getStatusLabel(wf.status).cls">
                   {{ getStatusLabel(wf.status).label }}
                 </span>
+                <span v-if="getPublishedVersionLabel(wf)" class="version-badge">
+                  {{ getPublishedVersionLabel(wf) }}
+                </span>
+                <span v-if="wf.status === 'PUBLISHED' && hasUnpublishedChanges(wf)" class="dirty-badge">
+                  有未发布改动
+                </span>
               </div>
 
               <div class="wf-updated">{{ formatRelativeTime(wf.updatedAt) }}</div>
 
               <div class="wf-row-actions">
-                <button class="run-btn" @click.stop="openWorkflow(wf)">
-                  <t-icon name="play" />
+                <!-- 状态切换按钮：根据 status 显示不同操作 -->
+                <t-button v-if="wf.status === 'DRAFT' || (wf.status === 'PUBLISHED' && hasUnpublishedChanges(wf))"
+                  size="small" theme="primary" variant="outline" :loading="actionLoadingId === wf.id"
+                  @click.stop="handlePublish(wf)">
+                  发布
+                </t-button>
+                <t-button v-else-if="wf.status === 'PUBLISHED'" size="small" theme="default" variant="outline"
+                  :loading="actionLoadingId === wf.id" @click.stop="handleArchive(wf)">
+                  归档
+                </t-button>
+                <t-button v-else-if="wf.status === 'ARCHIVED'" size="small" theme="default" variant="outline"
+                  :loading="actionLoadingId === wf.id" @click.stop="handleRestore(wf)">
+                  恢复
+                </t-button>
+
+                <button class="run-btn" @click.stop="openWorkflow(wf)" title="编辑工作流">
+                  <t-icon name="edit-1" />
                 </button>
                 <t-icon name="chevron-right" class="row-arrow" />
               </div>
@@ -344,6 +551,36 @@ onBeforeUnmount(() => {
           </div>
         </t-form>
       </t-dialog>
+
+      <!-- 邀请好友对话框 -->
+      <t-dialog v-model:visible="inviteDialogVisible" header="邀请好友加入 Workspace" :footer="false" width="480px">
+        <div class="invite-dialog-body">
+          <t-loading :loading="friendsLoading" text="加载中..." :delay="200">
+            <t-alert v-if="acceptedFriends.length === 0" theme="warning" :message="'还没有已接受的好友，先去好友页面添加吧'" />
+
+            <t-alert v-else-if="inviteCandidates.length === 0" theme="success" :message="'所有好友都已在 Workspace 中'" />
+
+            <div v-else class="invite-list">
+              <div v-for="friend in inviteCandidates" :key="friend.id" class="invite-row">
+                <div class="invite-avatar">{{ getInitial(friend.username) }}</div>
+                <div class="invite-info">
+                  <div class="invite-name">{{ friend.username }}</div>
+                  <div class="invite-email">{{ friend.email }}</div>
+                </div>
+                <t-button size="small" theme="primary" :loading="inviteLoadingId === friend.id"
+                  @click="handleInvite(friend.id)">
+                  邀请
+                </t-button>
+              </div>
+            </div>
+          </t-loading>
+
+          <div class="dialog-actions">
+            <t-button variant="outline" type="button" @click="inviteDialogVisible = false">关闭</t-button>
+          </div>
+        </div>
+      </t-dialog>
+
     </template>
   </div>
 </template>
@@ -583,6 +820,9 @@ onBeforeUnmount(() => {
 
   .wf-status {
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 
     .status-badge {
       font-size: 11px;
@@ -602,10 +842,28 @@ onBeforeUnmount(() => {
         color: @color-success;
       }
 
-      &.running {
-        background: @primary-light;
-        color: @primary;
+      &.archived {
+        background: lighten(@color-text-tertiary, 30%);
+        color: @color-text-tertiary;
       }
+    }
+
+    .version-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: @radius-pill;
+      background: lighten(@primary, 35%);
+      color: @primary;
+      font-family: "Menlo", "Consolas", monospace;
+    }
+
+    .dirty-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: @radius-pill;
+      background: lighten(@color-warning, 40%);
+      color: @color-warning;
     }
   }
 
@@ -705,5 +963,136 @@ onBeforeUnmount(() => {
   font-size: @font-sm;
   color: @color-text-tertiary;
   margin: 0;
+}
+
+/* ========== 成员展示区 ========== */
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: @space-3;
+  flex-shrink: 0;
+}
+
+.members-bar {
+  display: flex;
+  align-items: center;
+  gap: @space-3;
+  padding: @space-2 @space-3;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+}
+
+.members-stack {
+  display: flex;
+  align-items: center;
+}
+
+.member-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: @radius-md;
+  background: @color-bg-hover;
+  color: @color-text-secondary;
+  font-size: @font-sm;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -8px;
+  border: 2px solid @color-bg-surface;
+  transition: all 180ms @ease-standard;
+  cursor: default;
+
+  &:first-child {
+    margin-left: 0;
+  }
+
+  &.owner {
+    background: linear-gradient(135deg, @primary 0%, lighten(@primary, 10%) 100%);
+    color: #fff;
+  }
+
+  &.more {
+    background: @color-bg-hover;
+    color: @color-text-tertiary;
+    font-size: 10px;
+  }
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: @shadow-sm;
+  }
+}
+
+/* ========== 邀请对话框 ========== */
+.invite-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: @space-4;
+}
+
+.invite-list {
+  display: flex;
+  flex-direction: column;
+  gap: @space-2;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.invite-row {
+  display: flex;
+  align-items: center;
+  gap: @space-3;
+  padding: @space-3;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-md;
+  transition: all 180ms @ease-standard;
+
+  &:hover {
+    border-color: @color-border-strong;
+    box-shadow: @shadow-sm;
+  }
+}
+
+.invite-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: @radius-md;
+  background: linear-gradient(135deg, @primary 0%, lighten(@primary, 10%) 100%);
+  color: #fff;
+  font-size: @font-base;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.invite-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.invite-name {
+  font-size: @font-md;
+  font-weight: 600;
+  color: @color-text;
+}
+
+.invite-email {
+  font-size: @font-sm;
+  color: @color-text-secondary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: @space-2;
+  margin-top: @space-4;
 }
 </style>

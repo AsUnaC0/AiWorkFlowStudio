@@ -52,4 +52,35 @@ export class WorkspacesController {
   remove(@CurrentUser() user: JwtUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.workspacesService.remove(user.id, id);
   }
+
+  // ========== 成员管理 ==========
+
+  /** 列出 Workspace 成员 */
+  @Get(':id/members')
+  listMembers(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.workspacesService.listMembers(user.id, id);
+  }
+
+  /** 邀请好友加入 Workspace */
+  @Post(':id/members')
+  inviteMember(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { inviteeId: string },
+  ) {
+    return this.workspacesService.inviteMember(user.id, id, body.inviteeId);
+  }
+
+  /** 移除 Workspace 成员 */
+  @Delete(':id/members/:userId')
+  removeMember(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.workspacesService.removeMember(user.id, id, userId);
+  }
 }

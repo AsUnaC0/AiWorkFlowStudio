@@ -11,11 +11,18 @@ import {
   enqueueRun,
   getRun,
   runWorkflowStream,
+  publishWorkflow,
+  archiveWorkflow,
+  restoreWorkflow,
   type WorkflowRun,
   type WorkflowStreamEvent,
 } from "@/api/workflow";
 import { getKnowledgeBases } from "@/api/knowledge";
+import { getSkills } from "@/api/skill";
+import { getMcpServers } from "@/api/mcp";
 import type { KnowledgeBase } from "@/types/knowledge";
+import type { Skill } from "@/types/skill";
+import type { McpServer } from "@/types/mcp";
 import type { WorkflowDefinition } from "@/types/workflow";
 import { MessagePlugin } from "tdesign-vue-next";
 
@@ -38,9 +45,13 @@ const {
   saving,
   errorMessage,
   workflowName,
+  workflowStatus,
+  publishedVersion,
+  hasUnpublishedChanges,
   saveWorkflow,
   getCurrentDefinition,
   availableVariables,
+  syncStatusFromWorkflow,
 } = useWorkflow(workflowId);
 
 /** 包装 onNodeClick：每次点击节点都重新打开属性 Drawer + 深拷贝最新数据 */
@@ -67,6 +78,71 @@ let pollTimer: number | null = null;
 let pollCount = 0;
 const POLL_INTERVAL_MS = 2000;
 const POLL_MAX_COUNT = 150; // 150 × 2s = 5 分钟上限
+
+// ========== 工作流状态机：Publish / Archive / Restore ==========
+const publishing = ref(false);
+const archiving = ref(false);
+const restoring = ref(false);
+
+/** 发布当前草稿 → 产生新的稳定 WorkflowVersion */
+const handlePublish = async () => {
+  publishing.value = true;
+  try {
+    // 发布前先保存当前画布，避免发布的是旧版本
+    const ok = await saveWorkflow();
+    if (!ok) return;
+
+    const updated = await publishWorkflow(workflowId);
+    syncStatusFromWorkflow(updated);
+    MessagePlugin.success(
+      `工作流已发布 v${updated.publishedVersion?.version}`,
+    );
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "发布失败");
+  } finally {
+    publishing.value = false;
+  }
+};
+
+/** 归档工作流（PUBLISHED → ARCHIVED） */
+const handleArchive = async () => {
+  archiving.value = true;
+  try {
+    const updated = await archiveWorkflow(workflowId);
+    syncStatusFromWorkflow(updated);
+    MessagePlugin.success("工作流已归档");
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "归档失败");
+  } finally {
+    archiving.value = false;
+  }
+};
+
+/** 把已归档工作流恢复为草稿（ARCHIVED → DRAFT） */
+const handleRestore = async () => {
+  restoring.value = true;
+  try {
+    const updated = await restoreWorkflow(workflowId);
+    syncStatusFromWorkflow(updated);
+    MessagePlugin.success("工作流已恢复为草稿");
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "恢复失败");
+  } finally {
+    restoring.value = false;
+  }
+};
+
+// 状态显示用文本/样式映射
+const statusLabel = computed(() => {
+  switch (workflowStatus.value) {
+    case "PUBLISHED":
+      return { text: "已发布", cls: "published" };
+    case "ARCHIVED":
+      return { text: "已归档", cls: "archived" };
+    default:
+      return { text: "草稿", cls: "draft" };
+  }
+});
 
 /** 停止轮询 */
 const stopRunPolling = () => {
@@ -275,6 +351,45 @@ const fetchKnowledgeBases = async () => {
 
 onMounted(fetchKnowledgeBases);
 
+/** 当前用户可用的 Skills 列表（LLM 节点用） */
+const skills = ref<Skill[]>([]);
+const skillsLoading = ref(false);
+
+const fetchSkills = async () => {
+  skillsLoading.value = true;
+  try {
+    skills.value = await getSkills();
+  } catch (e) {
+    console.error("加载 Skills 列表失败", e);
+  } finally {
+    skillsLoading.value = false;
+  }
+};
+
+/** 当前用户可用的 MCP Servers 列表（LLM 节点用） */
+const mcpServers = ref<McpServer[]>([]);
+const mcpServersLoading = ref(false);
+
+const fetchMcpServers = async () => {
+  mcpServersLoading.value = true;
+  try {
+    mcpServers.value = await getMcpServers();
+  } catch (e) {
+    console.error("加载 MCP Servers 列表失败", e);
+  } finally {
+    mcpServersLoading.value = false;
+  }
+};
+
+onMounted(fetchSkills);
+onMounted(fetchMcpServers);
+
+/** 获取 MCP Server 的工具数量 */
+const getMcpToolCount = (server: McpServer): number => {
+  if (!server.availableTools || !Array.isArray(server.availableTools)) return 0;
+  return server.availableTools.length;
+};
+
 const openRunDialog = () => {
   stopRunPolling();
   runInput.value = "";
@@ -379,14 +494,44 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
       <span v-if="loading" class="header-status">正在加载工作流...</span>
       <span v-else-if="errorMessage" class="header-status error">{{ errorMessage }}</span>
 
+      <!-- 工作流状态徽章 + 已发布版本号 + 未发布改动提示 -->
+      <span v-else class="status-chip" :class="statusLabel.cls">
+        {{ statusLabel.text }}
+        <span v-if="publishedVersion" class="version-chip">v{{ publishedVersion }}</span>
+        <span v-if="workflowStatus === 'PUBLISHED' && hasUnpublishedChanges" class="dirty-chip">
+          有未发布改动
+        </span>
+      </span>
+
       <!-- 保存按钮 -->
-      <t-button variant="outline" :disabled="saving || loading" :loading="saving" @click="saveWorkflow">
-        {{ saving ? "保存中..." : "保存工作流" }}
+      <t-button variant="outline" :disabled="saving || loading || archiving || restoring" :loading="saving"
+        @click="saveWorkflow">
+        {{ saving ? "保存中..." : "保存" }}
       </t-button>
 
-      <!-- 运行按钮 -->
-      <t-button theme="primary" :disabled="loading || running" :loading="running" @click="openRunDialog">
-        运行
+      <!-- 测试运行按钮 -->
+      <t-button theme="default" variant="outline" :disabled="loading || publishing || archiving || restoring"
+        :loading="running" @click="openRunDialog">
+        测试运行
+      </t-button>
+
+      <!-- 发布按钮：DRAFT 或 PUBLISHED(有未发布改动) 时显示 -->
+      <t-button v-if="workflowStatus === 'DRAFT' || (workflowStatus === 'PUBLISHED' && hasUnpublishedChanges)"
+        theme="success" :disabled="loading || saving || archiving || restoring" :loading="publishing"
+        @click="handlePublish">
+        {{ publishing ? "发布中..." : "发布" }}
+      </t-button>
+
+      <!-- 归档按钮：PUBLISHED 且无未发布改动时显示 -->
+      <t-button v-else-if="workflowStatus === 'PUBLISHED'" theme="warning" variant="outline"
+        :disabled="loading || saving || publishing || restoring" :loading="archiving" @click="handleArchive">
+        {{ archiving ? "归档中..." : "归档" }}
+      </t-button>
+
+      <!-- 恢复按钮：ARCHIVED 时显示 -->
+      <t-button v-else-if="workflowStatus === 'ARCHIVED'" theme="primary" variant="outline"
+        :disabled="loading || saving || publishing || archiving" :loading="restoring" @click="handleRestore">
+        {{ restoring ? "恢复中..." : "恢复为草稿" }}
       </t-button>
     </PageHeader>
 
@@ -470,6 +615,38 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
               <textarea class="form-textarea" rows="4" placeholder="留空则自动使用上一个节点的输出。支持 {{变量}}"
                 v-model="tempNodeData.userPrompt"></textarea>
               <div class="form-hint" v-pre>自定义用户消息模板，支持 {{ input }}、{{ http_1.body.field }} 等</div>
+            </div>
+
+            <!-- Skills 选择 -->
+            <div class="form-item">
+              <label class="form-label">Skills（可多选）</label>
+              <t-select v-model="tempNodeData.skillIds" multiple
+                :disabled="skillsLoading || skills.length === 0" placeholder="选择要注入的 Skills">
+                <t-option v-for="skill in skills" :key="skill.id" :value="skill.id" :label="skill.name">
+                  {{ skill.name }}
+                  <span style="color:#bbb;margin-left:4px">({{ skill.type }})</span>
+                </t-option>
+              </t-select>
+              <div v-if="skills.length === 0 && !skillsLoading" class="form-hint">
+                暂无 Skills，请先去 Skills 页面创建
+              </div>
+              <div class="form-hint">选中后，对应 Skill 的 Instructions 将自动注入到 System Prompt 中</div>
+            </div>
+
+            <!-- MCP Servers 选择 -->
+            <div class="form-item">
+              <label class="form-label">MCP Servers（可多选）</label>
+              <t-select v-model="tempNodeData.mcpServerIds" multiple
+                :disabled="mcpServersLoading || mcpServers.length === 0" placeholder="选择要启用的 MCP Servers">
+                <t-option v-for="server in mcpServers" :key="server.id" :value="server.id" :label="server.name">
+                  {{ server.name }}
+                  <span style="color:#bbb;margin-left:4px">({{ getMcpToolCount(server) }} tools)</span>
+                </t-option>
+              </t-select>
+              <div v-if="mcpServers.length === 0 && !mcpServersLoading" class="form-hint">
+                暂无 MCP Servers，请先去 MCP 页面创建
+              </div>
+              <div class="form-hint">选中后，LLM 可调用这些 MCP Server 暴露的工具</div>
             </div>
           </template>
 
@@ -770,6 +947,50 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
 
     &.error {
       color: var(--color-error);
+    }
+  }
+
+  /* 工作流状态徽章 */
+  .status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    letter-spacing: 0.03em;
+
+    &.draft {
+      background: var(--color-bg-light);
+      color: var(--color-text-secondary);
+    }
+
+    &.published {
+      background: rgba(34, 197, 94, 0.12);
+      color: var(--color-success);
+    }
+
+    &.archived {
+      background: rgba(120, 120, 120, 0.12);
+      color: var(--color-text-tertiary);
+    }
+
+    .version-chip {
+      font-family: "Menlo", "Consolas", monospace;
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: var(--radius-pill);
+      background: rgba(0, 100, 250, 0.1);
+      color: var(--primary);
+    }
+
+    .dirty-chip {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: var(--radius-pill);
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--color-warning);
     }
   }
 

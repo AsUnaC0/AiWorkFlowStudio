@@ -4,6 +4,8 @@ import { AiModule } from '../ai/ai.module';
 import { AuthModule } from '../auth/auth.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { SkillModule } from '../skill/skill.module';
+import { McpModule } from '../mcp/mcp.module';
 import {
   WorkflowController,
   WorkflowsController,
@@ -21,6 +23,7 @@ import { HttpNodeExecutor } from './engine/executors/http.executor';
 import { ConditionNodeExecutor } from './engine/executors/condition.executor';
 import { VariableService } from './engine/variable.service';
 import { SsrfCheckService } from './engine/ssrf-check.service';
+import { RunMonitorService } from './engine/run-monitor.service';
 
 @Module({
   imports: [
@@ -28,6 +31,8 @@ import { SsrfCheckService } from './engine/ssrf-check.service';
     AuthModule,
     AiModule,
     KnowledgeModule,
+    SkillModule,
+    McpModule,
     BullModule.registerQueue({
       name: 'workflow-execution',
     }),
@@ -39,6 +44,7 @@ import { SsrfCheckService } from './engine/ssrf-check.service';
     NodeExecutorRegistry,
     VariableService,
     SsrfCheckService,
+    RunMonitorService,
     StartNodeExecutor,
     InputNodeExecutor,
     LLMNodeExecutor,

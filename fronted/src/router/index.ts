@@ -37,6 +37,27 @@ const router = createRouter({
           component: () => import("@/views/workspace/index.vue"),
           meta: { title: "工作空间" },
         },
+        // 好友列表
+        {
+          path: "friends",
+          name: "FriendList",
+          component: () => import("@/views/friends/index.vue"),
+          meta: { title: "好友" },
+        },
+        // Skills 管理
+        {
+          path: "skills",
+          name: "SkillList",
+          component: () => import("@/views/skills/index.vue"),
+          meta: { title: "Skills" },
+        },
+        // MCP Server 管理
+        {
+          path: "mcp",
+          name: "McpList",
+          component: () => import("@/views/mcp/index.vue"),
+          meta: { title: "MCP" },
+        },
       ],
     },
 
@@ -55,6 +76,8 @@ const router = createRouter({
       component: () => import("@/views/workspace/workflow.vue"),
       meta: { title: "工作流编辑", standalone: true },
     },
+
+
   ],
 });
 

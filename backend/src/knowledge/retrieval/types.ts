@@ -9,12 +9,14 @@ export interface SearchOptions {
   query: string;
   /** 返回前 K 条，默认 5 */
   topK?: number;
-  /** 最低相似度阈值 0~1，低于则过滤掉 */
+  /** 最低相似度阈值 0~1，低于则过滤掉（仅 vector 模式生效） */
   scoreThreshold?: number;
   /** 检索模式，默认 hybrid */
   mode?: SearchMode;
   /** 是否在返回中附带文档信息 */
   includeDocument?: boolean;
+  /** Embedding 模型名；不传则使用知识库绑定的 embeddingModel */
+  embeddingModel?: string;
 }
 
 /** 向量检索选项 */
@@ -39,6 +41,8 @@ export interface HybridSearchOptions {
   topK?: number;
   /** 向量和关键词结果的权重 / RRF k 参数 */
   rrfK?: number;
+  /** Embedding 模型名；不传则使用知识库绑定的 embeddingModel */
+  embeddingModel?: string;
 }
 
 /** 单条检索结果 */

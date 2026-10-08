@@ -7,6 +7,25 @@ import type {
   Workflow,
 } from "@/types/workflow";
 
+// ===========================================================================
+// 状态机：Publish / Archive / Restore
+// ===========================================================================
+
+/** 发布当前草稿版本 → 产生稳定 WorkflowVersion 供 Agent 调用 */
+export const publishWorkflow = (workflowId: string): Promise<Workflow> => {
+  return request.post(`/workflows/${workflowId}/publish`);
+};
+
+/** 归档工作流（PUBLISHED → ARCHIVED），Agent 不再可调用 */
+export const archiveWorkflow = (workflowId: string): Promise<Workflow> => {
+  return request.post(`/workflows/${workflowId}/archive`);
+};
+
+/** 把已归档工作流恢复为草稿（ARCHIVED → DRAFT） */
+export const restoreWorkflow = (workflowId: string): Promise<Workflow> => {
+  return request.post(`/workflows/${workflowId}/restore`);
+};
+
 export interface RunWorkflowRequest {
   workflow: WorkflowDefinition;
   input: unknown;

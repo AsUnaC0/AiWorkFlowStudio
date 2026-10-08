@@ -12,14 +12,18 @@ export interface WorkflowVersion {
   createdAt: string;
 }
 
+export type WorkflowStatus = "DRAFT" | "PUBLISHED" | "ARCHIVED";
+
 export interface Workflow {
   id: string;
   workspaceId: string;
   name: string;
   description: string | null;
-  status: string;
+  status: WorkflowStatus;
   currentVersionId: string | null;
+  publishedVersionId: string | null;
   currentVersion: WorkflowVersion | null;
+  publishedVersion: WorkflowVersion | null;
   createdAt: string;
   updatedAt: string;
 }

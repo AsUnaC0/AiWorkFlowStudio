@@ -53,13 +53,14 @@ export class WorkflowProcessor extends WorkerHost {
     });
 
     try {
-      // 3. 执行工作流
+      // 3. 执行工作流（传 runId 让 engine 记录 NodeRun + 监控日志）
       const result = await this.workflowEngine.run(
         workflow.currentVersion.definition as {
           nodes: unknown[];
           edges: unknown[];
         },
         input,
+        { runId, workflowId },
       );
 
       // 4. 成功 → COMPLETED + output

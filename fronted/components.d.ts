@@ -17,6 +17,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     TAlert: typeof import('tdesign-vue-next')['Alert']
     TButton: typeof import('tdesign-vue-next')['Button']
+    TCheckbox: typeof import('tdesign-vue-next')['Checkbox']
     TDialog: typeof import('tdesign-vue-next')['Dialog']
     TDrawer: typeof import('tdesign-vue-next')['Drawer']
     TDropdown: typeof import('tdesign-vue-next')['Dropdown']
@@ -32,11 +33,14 @@ declare module 'vue' {
     TOption: typeof import('tdesign-vue-next')['Option']
     TPopup: typeof import('tdesign-vue-next')['Popup']
     TProgress: typeof import('tdesign-vue-next')['Progress']
+    TRadio: typeof import('tdesign-vue-next')['Radio']
+    TRadioGroup: typeof import('tdesign-vue-next')['RadioGroup']
     TSelect: typeof import('tdesign-vue-next')['Select']
     TTable: typeof import('tdesign-vue-next')['Table']
     TTabPanel: typeof import('tdesign-vue-next')['TabPanel']
     TTabs: typeof import('tdesign-vue-next')['Tabs']
     TTag: typeof import('tdesign-vue-next')['Tag']
     TTextarea: typeof import('tdesign-vue-next')['Textarea']
+    TTooltip: typeof import('tdesign-vue-next')['Tooltip']
   }
 }

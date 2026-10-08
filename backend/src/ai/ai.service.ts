@@ -6,6 +6,8 @@ import type {
   ChatResult,
   EmbeddingOptions,
   EmbeddingResult,
+  ToolDefinition,
+  ToolChatResult,
 } from './ai-provider.interface';
 import { AI_PROVIDER } from './ai-provider.interface';
 
@@ -43,5 +45,14 @@ export class AIService {
     options: EmbeddingOptions,
   ): Promise<EmbeddingResult> {
     return this.provider.embedding(texts, options);
+  }
+
+  /** 带工具的对话（Function Calling）—— Agent 核心入口 */
+  async chatWithTools(
+    messages: ChatMessage[],
+    options: ChatOptions,
+    tools: ToolDefinition[],
+  ): Promise<ToolChatResult> {
+    return this.provider.chatWithTools(messages, options, tools);
   }
 }

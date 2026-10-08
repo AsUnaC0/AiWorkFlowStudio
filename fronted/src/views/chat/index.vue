@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, nextTick } from "vue";
-import { getModels, chat as chatApi, type AiModel } from "@/api/ai";
-import { getKnowledgeBases, type KnowledgeBase } from "@/api/knowledge";
+import { getModels, type AiModel } from "@/api/ai";
+import {
+  getAgentResources,
+  runAgentStream,
+  type AgentResourceWorkflow,
+  type AgentResourceKnowledgeBase,
+} from "@/api/agent";
+import type { AgentStreamEvent } from "@/types/agent";
 import { useClickOutside } from "@/composables/useClickOutside";
 import { MessagePlugin } from "tdesign-vue-next";
 
@@ -13,24 +19,42 @@ const models = ref<AiModel[]>([]);
 const selectedModel = ref("");
 const modelsLoading = ref(false);
 
-const knowledgeOptions = ref<KnowledgeBase[]>([]);
-const kbLoading = ref(false);
+const knowledgeOptions = ref<AgentResourceKnowledgeBase[]>([]);
+const workflowOptions = ref<AgentResourceWorkflow[]>([]);
+const resourcesLoading = ref(false);
 const selectedKnowledgeIds = ref<string[]>([]);
+const selectedWorkflowIds = ref<string[]>([]);
 
 const inputText = ref("");
 const sending = ref(false);
 const inputRef = ref<HTMLTextAreaElement | null>(null);
 
 // 聊天历史
+interface TrailStep {
+  type: "thinking" | "tool_call" | "tool_result";
+  message: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: string;
+  durationMs?: number;
+}
+
 interface ChatItem {
   role: "user" | "assistant";
   content: string;
   time: string;
+  trail?: TrailStep[];
 }
 const messages = ref<ChatItem[]>([]);
 const chatContainerRef = ref<HTMLElement | null>(null);
 
-// 快捷操作
+// 展开/折叠 trail
+const expandedTrails = ref<Set<number>>(new Set());
+const toggleTrail = (idx: number) => {
+  if (expandedTrails.value.has(idx)) expandedTrails.value.delete(idx);
+  else expandedTrails.value.add(idx);
+};
+
 const suggestions = [
   { icon: "flow", label: "Build a workflow", desc: "构建 AI 工作流" },
   { icon: "library", label: "Ask my knowledge base", desc: "查询知识库" },
@@ -65,18 +89,24 @@ const loadModels = async () => {
   }
 };
 
-const loadKnowledge = async () => {
-  kbLoading.value = true;
+// 一次性加载可用资源（已发布工作流 + 知识库）
+const loadResources = async () => {
+  resourcesLoading.value = true;
   try {
-    knowledgeOptions.value = await getKnowledgeBases().catch(() => []);
+    const res = await getAgentResources();
+    workflowOptions.value = res.workflows;
+    knowledgeOptions.value = res.knowledgeBases;
+  } catch {
+    workflowOptions.value = [];
+    knowledgeOptions.value = [];
   } finally {
-    kbLoading.value = false;
+    resourcesLoading.value = false;
   }
 };
 
 onMounted(() => {
   loadModels();
-  loadKnowledge();
+  loadResources();
 });
 
 onBeforeUnmount(() => {
@@ -93,14 +123,6 @@ const canSend = computed(
 
 const isEmpty = computed(() => messages.value.length === 0);
 
-const appendMessage = (role: "user" | "assistant", content: string) => {
-  messages.value.push({
-    role,
-    content,
-    time: new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
-  });
-};
-
 const scrollToBottom = async () => {
   await nextTick();
   if (chatContainerRef.value) {
@@ -111,32 +133,139 @@ const scrollToBottom = async () => {
   }
 };
 
+// SSE 事件处理 —— 把 trail 事件聚合到最后一条 assistant 消息
+let pendingAssistantIndex = -1;
+
+const handleAgentEvent = (event: AgentStreamEvent) => {
+  switch (event.type) {
+    case "thinking": {
+      if (pendingAssistantIndex === -1) {
+        messages.value.push({
+          role: "assistant",
+          content: "",
+          trail: [],
+          time: new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        });
+        pendingAssistantIndex = messages.value.length - 1;
+      }
+      messages.value[pendingAssistantIndex].trail!.push({
+        type: "thinking",
+        message: event.message,
+      });
+      break;
+    }
+
+    case "tool_call": {
+      if (pendingAssistantIndex === -1) {
+        messages.value.push({
+          role: "assistant",
+          content: "",
+          trail: [],
+          time: new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        });
+        pendingAssistantIndex = messages.value.length - 1;
+      }
+      messages.value[pendingAssistantIndex].trail!.push({
+        type: "tool_call",
+        message: `调用工具 ${event.tool}`,
+        tool: event.tool,
+        args: event.args,
+      });
+      break;
+    }
+
+    case "tool_result": {
+      const trail = messages.value[pendingAssistantIndex]?.trail;
+      if (trail && trail.length > 0) {
+        trail[trail.length - 1].result = event.result;
+        trail[trail.length - 1].durationMs = event.durationMs;
+      }
+      break;
+    }
+
+    case "message": {
+      if (pendingAssistantIndex >= 0) {
+        messages.value[pendingAssistantIndex].content = event.content;
+        pendingAssistantIndex = -1;
+      } else {
+        messages.value.push({
+          role: "assistant",
+          content: event.content,
+          time: new Date().toLocaleTimeString("zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        });
+      }
+      break;
+    }
+
+    case "error": {
+      messages.value.push({
+        role: "assistant",
+        content: `⚠️ Agent 出错：${event.message}`,
+        time: new Date().toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      });
+      pendingAssistantIndex = -1;
+      break;
+    }
+  }
+  scrollToBottom();
+};
+
 const send = async () => {
   if (!canSend.value) return;
 
   const userText = inputText.value.trim();
   inputText.value = "";
-  appendMessage("user", userText);
+  messages.value.push({
+    role: "user",
+    content: userText,
+    time: new Date().toLocaleTimeString("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+  });
   sending.value = true;
+  pendingAssistantIndex = -1;
   scrollToBottom();
 
   try {
     const history = messages.value
-      .slice(-10)
+      .slice(0, -1)
+      .filter((m) => !m.trail || m.trail.length === 0)
       .map((m) => ({ role: m.role, content: m.content }));
 
-    const res = await chatApi({
-      model: selectedModel.value,
-      messages: history,
-      temperature: 0.7,
-      knowledgeBaseIds: selectedKnowledgeIds.value,
-    });
-
-    appendMessage("assistant", res.content);
+    await runAgentStream(
+      {
+        input: userText,
+        history,
+        model: selectedModel.value,
+        workflowIds: selectedWorkflowIds.value,
+        knowledgeBaseIds: selectedKnowledgeIds.value,
+      },
+      handleAgentEvent,
+    );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "请求失败";
-    MessagePlugin.error(`AI 响应失败：${msg}`);
-    appendMessage("assistant", `❌ 抱歉，请求失败了：${msg}`);
+    const msg = err instanceof Error ? err.message : "Agent 请求失败";
+    MessagePlugin.error(msg);
+    messages.value.push({
+      role: "assistant",
+      content: `❌ 抱歉，请求失败：${msg}`,
+      time: new Date().toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    });
   } finally {
     sending.value = false;
     scrollToBottom();
@@ -157,35 +286,59 @@ const useSuggestion = (text: string) => {
 
 const clearChat = () => {
   messages.value = [];
+  pendingAssistantIndex = -1;
 };
 
 // 模型下拉控制
 const showModelDropdown = ref(false);
 const showKbDropdown = ref(false);
+const showWfDropdown = ref(false);
 const modelChipRef = ref<HTMLElement | null>(null);
 const modelChipRefChat = ref<HTMLElement | null>(null);
 const kbChipRef = ref<HTMLElement | null>(null);
 const kbChipRefChat = ref<HTMLElement | null>(null);
+const wfChipRef = ref<HTMLElement | null>(null);
+const wfChipRefChat = ref<HTMLElement | null>(null);
 
-// 点击外部关闭 chips 下拉（两组 ref 分别对应空状态和有对话状态）
 useClickOutside([modelChipRef, modelChipRefChat], () => {
   showModelDropdown.value = false;
 });
 useClickOutside([kbChipRef, kbChipRefChat], () => {
   showKbDropdown.value = false;
 });
+useClickOutside([wfChipRef, wfChipRefChat], () => {
+  showWfDropdown.value = false;
+});
 
-// 切换知识库选中（提取出来避免 inline const）
 const toggleKnowledgeBase = (kbId: string) => {
   const idx = selectedKnowledgeIds.value.indexOf(kbId);
-  if (idx > -1) {
-    selectedKnowledgeIds.value.splice(idx, 1);
-  } else {
-    selectedKnowledgeIds.value.push(kbId);
-  }
+  if (idx > -1) selectedKnowledgeIds.value.splice(idx, 1);
+  else selectedKnowledgeIds.value.push(kbId);
+};
+
+const toggleWorkflow = (wfId: string) => {
+  const idx = selectedWorkflowIds.value.indexOf(wfId);
+  if (idx > -1) selectedWorkflowIds.value.splice(idx, 1);
+  else selectedWorkflowIds.value.push(wfId);
 };
 
 const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 0);
+const hasWorkflowSelected = computed(() => selectedWorkflowIds.value.length > 0);
+
+// Trail 格式化
+const formatToolArgs = (args?: Record<string, unknown>) => {
+  if (!args) return "";
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
+};
+const formatToolResult = (result?: string) => {
+  if (!result) return "";
+  if (result.length > 500) return result.slice(0, 500) + "...";
+  return result;
+};
 </script>
 
 <template>
@@ -194,27 +347,22 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
     <template v-if="isEmpty">
       <div class="hero-section">
         <div class="hero-content">
-          <!-- Logo -->
           <div class="hero-logo">✦</div>
 
-          <!-- 标题 -->
           <h1 class="hero-title">How can I help you?</h1>
           <p class="hero-subtitle">
-            Build, run and connect AI workflows. Ask anything about your knowledge base.
+            选择工作流、知识库或直接提问，Agent 会自动判断调用什么工具。
           </p>
 
-          <!-- 主输入框 -->
           <div class="prompt-box">
             <div class="prompt-textarea">
               <textarea ref="inputRef" v-model="inputText" placeholder="Ask anything..." :disabled="sending" rows="1"
                 @keydown="onKeydown" />
-              <!-- 发送按钮 -->
               <button class="send-btn" :class="{ active: canSend }" :disabled="!canSend" @click="send">
                 <t-icon :name="sending ? 'loading' : 'send'" :spin="sending" />
               </button>
             </div>
 
-            <!-- 输入框底部 chips -->
             <div class="prompt-actions">
               <!-- Model chip -->
               <div ref="modelChipRef" class="chip-wrapper">
@@ -240,7 +388,7 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
               <div ref="kbChipRef" class="chip-wrapper">
                 <button class="action-chip" @click="showKbDropdown = !showKbDropdown">
                   <t-icon name="library" />
-                  <span>{{ hasKnowledgeSelected ? `${selectedKnowledgeIds.length} Knowledge` : 'Knowledge' }}</span>
+                  <span>{{ hasKnowledgeSelected ? `${selectedKnowledgeIds.length} KB` : 'Knowledge' }}</span>
                   <t-icon name="caret-down-small" class="caret" />
                 </button>
                 <transition name="fast-fade">
@@ -251,26 +399,43 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
                       <span class="item-name">{{ kb.name }}</span>
                       <t-icon v-if="selectedKnowledgeIds.includes(kb.id)" name="check" />
                     </div>
-                    <div v-if="knowledgeOptions.length === 0" class="dropdown-empty">
-                      暂无知识库
+                    <div v-if="knowledgeOptions.length === 0" class="dropdown-empty">暂无知识库</div>
+                  </div>
+                </transition>
+              </div>
+
+              <!-- ========== 新增：Workflow chip ========== -->
+              <div ref="wfChipRef" class="chip-wrapper">
+                <button class="action-chip" @click="showWfDropdown = !showWfDropdown">
+                  <t-icon name="flow" />
+                  <span>{{ hasWorkflowSelected ? `${selectedWorkflowIds.length} Workflow` : 'Workflow' }}</span>
+                  <t-icon name="caret-down-small" class="caret" />
+                </button>
+                <transition name="fast-fade">
+                  <div v-if="showWfDropdown" class="chip-dropdown">
+                    <div class="dropdown-title">Select Published Workflows</div>
+                    <div v-for="wf in workflowOptions" :key="wf.id" class="dropdown-item"
+                      :class="{ active: selectedWorkflowIds.includes(wf.id) }" @click="toggleWorkflow(wf.id)">
+                      <span class="item-name">{{ wf.name }} (v{{ wf.publishedVersion?.version ?? '-' }})</span>
+                      <t-icon v-if="selectedWorkflowIds.includes(wf.id)" name="check" />
+                    </div>
+                    <div v-if="workflowOptions.length === 0" class="dropdown-empty">
+                      暂无可绑定的已发布工作流
                     </div>
                   </div>
                 </transition>
               </div>
 
-              <!-- 快捷操作分隔 -->
               <div class="chip-divider" />
 
-              <!-- 清空按钮 -->
-              <button v-if="hasKnowledgeSelected || selectedModel" class="action-chip clear"
-                @click="selectedKnowledgeIds = []">
+              <button v-if="hasKnowledgeSelected || hasWorkflowSelected" class="action-chip clear"
+                @click="selectedKnowledgeIds = []; selectedWorkflowIds = []">
                 <t-icon name="close" />
                 <span>Clear</span>
               </button>
             </div>
           </div>
 
-          <!-- Suggestion cards -->
           <div class="suggestions">
             <button v-for="s in suggestions" :key="s.label" class="suggestion-card" @click="useSuggestion(s.label)">
               <div class="suggestion-icon">
@@ -290,7 +455,6 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
     <!-- 有对话后：标准聊天布局 -->
     <template v-else>
       <div class="chat-layout">
-        <!-- 消息区 -->
         <div ref="chatContainerRef" class="chat-messages">
           <div v-for="(msg, idx) in messages" :key="idx" class="message-item" :class="msg.role">
             <div class="message-avatar">
@@ -299,25 +463,47 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
             </div>
             <div class="message-body">
               <div class="message-meta">
-                <span class="message-role">{{ msg.role === 'user' ? 'You' : 'AI' }}</span>
+                <span class="message-role">{{ msg.role === 'user' ? 'You' : 'Agent' }}</span>
                 <span class="message-time">{{ msg.time }}</span>
               </div>
-              <div class="message-content">{{ msg.content }}</div>
-            </div>
-          </div>
 
-          <!-- 发送中指示器 -->
-          <div v-if="sending" class="message-item assistant">
-            <div class="message-avatar">✦</div>
-            <div class="message-body">
-              <div class="message-content typing">
+              <!-- 执行轨迹 trail（只有 assistant 有） -->
+              <div v-if="msg.trail && msg.trail.length > 0" class="trail">
+                <div v-for="(step, sIdx) in msg.trail" :key="sIdx" class="trail-step" :class="step.type">
+                  <template v-if="step.type === 'thinking'">
+                    <span class="step-icon">💭</span>
+                    <span class="step-text">{{ step.message }}</span>
+                  </template>
+
+                  <template v-else-if="step.type === 'tool_call'">
+                    <span class="step-icon">🔧</span>
+                    <button class="tool-toggle" @click="toggleTrail(idx)">
+                      调用 <code>{{ step.tool }}</code>
+                    </button>
+                    <pre v-if="expandedTrails.has(idx)" class="tool-args">{{ formatToolArgs(step.args) }}</pre>
+                  </template>
+
+                  <template v-else-if="step.type === 'tool_result'">
+                    <span class="step-icon">✅</span>
+                    <span class="step-text" v-if="step.durationMs">返回结果（{{ step.durationMs }}ms）</span>
+                    <button v-else class="tool-toggle" @click="toggleTrail(idx)">返回结果</button>
+                    <pre v-if="expandedTrails.has(idx)" class="tool-result">{{ formatToolResult(step.result) }}</pre>
+                  </template>
+                </div>
+              </div>
+
+              <div class="message-content">{{ msg.content }}</div>
+
+              <!-- typing 指示器：正在等待 SSE -->
+              <div
+                v-if="sending && idx === messages.length - 1 && msg.role === 'assistant' && !msg.content && (!msg.trail || msg.trail.length === 0)"
+                class="typing">
                 <span></span><span></span><span></span>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 底部输入区 -->
         <div class="chat-input-bottom">
           <div class="prompt-box compact">
             <div class="prompt-textarea">
@@ -362,6 +548,23 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
                 </transition>
               </div>
 
+              <div ref="wfChipRefChat" class="chip-wrapper">
+                <button class="action-chip tiny" @click="showWfDropdown = !showWfDropdown">
+                  <t-icon name="flow" />
+                  <span v-if="hasWorkflowSelected">{{ selectedWorkflowIds.length }} WF</span>
+                  <span v-else>Workflow</span>
+                </button>
+                <transition name="fast-fade">
+                  <div v-if="showWfDropdown" class="chip-dropdown bottom-anchored">
+                    <div v-for="wf in workflowOptions" :key="wf.id" class="dropdown-item"
+                      :class="{ active: selectedWorkflowIds.includes(wf.id) }" @click="toggleWorkflow(wf.id)">
+                      {{ wf.name }} (v{{ wf.publishedVersion?.version ?? '-' }})
+                      <t-icon v-if="selectedWorkflowIds.includes(wf.id)" name="check" />
+                    </div>
+                  </div>
+                </transition>
+              </div>
+
               <button v-if="messages.length > 0" class="action-chip tiny clear-all" @click="clearChat">
                 <t-icon name="delete" />
                 <span>New chat</span>
@@ -382,9 +585,87 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
   width: 100%;
 }
 
-/* ============================================================
- * Hero (空状态)
- * ============================================================ */
+/* ========== Trail 样式（新增） ========== */
+.trail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: @space-2;
+  margin-bottom: @space-1;
+  width: 100%;
+
+  .trail-step {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+
+    &.thinking {
+      color: @color-text-tertiary;
+      background: rgba(0, 0, 0, 0.03);
+    }
+
+    &.tool_call {
+      background: @primary-light;
+      color: @primary;
+    }
+
+    &.tool_result {
+      background: rgba(34, 197, 94, 0.08);
+      color: @color-success;
+    }
+
+    .step-icon {
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .step-text {
+      color: @color-text-tertiary;
+    }
+
+    code {
+      font-family: "Menlo", "Consolas", monospace;
+      background: rgba(0, 0, 0, 0.06);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+
+    .tool-toggle {
+      background: transparent;
+      border: none;
+      color: inherit;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 4px;
+
+      &:hover {
+        background: rgba(0, 0, 0, 0.06);
+      }
+    }
+
+    .tool-args,
+    .tool-result {
+      margin: 2px 0 0 20px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.04);
+      font-size: 11px;
+      font-family: "Menlo", "Consolas", monospace;
+      max-height: 250px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      width: 100%;
+    }
+  }
+}
+
+/* ========== Hero (空状态) ========== */
 .hero-section {
   height: 100%;
   display: flex;
@@ -436,7 +717,6 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
   animation: fade-slide-up @duration-normal @ease-out 150ms both;
 }
 
-/* Prompt Box */
 .prompt-box {
   width: 100%;
   background: @color-bg-surface;
@@ -520,7 +800,6 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
   flex-wrap: wrap;
 }
 
-/* Action Chips */
 .chip-wrapper {
   position: relative;
 }
@@ -566,7 +845,6 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
   margin: 0 @space-1;
 }
 
-/* Chip Dropdowns */
 .chip-dropdown {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -628,7 +906,6 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
   }
 }
 
-/* Suggestion Cards */
 .suggestions {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -705,9 +982,7 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
   }
 }
 
-/* ============================================================
- * 聊天布局（有对话后）
- * ============================================================ */
+/* ========== 聊天布局 ========== */
 .chat-layout {
   height: 100%;
   display: flex;
@@ -770,6 +1045,7 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
     flex-direction: column;
     gap: @space-1;
     max-width: 70%;
+    min-width: 0;
   }
 
   .message-meta {
@@ -793,6 +1069,7 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
     font-size: @font-base;
     white-space: pre-wrap;
     word-break: break-word;
+    width: 100%;
 
     .assistant & {
       background: @color-bg-surface;
@@ -822,7 +1099,6 @@ const hasKnowledgeSelected = computed(() => selectedKnowledgeIds.value.length > 
   }
 }
 
-/* 底部输入区 */
 .chat-input-bottom {
   padding: @space-4 @space-12 @space-8;
   max-width: 800px;

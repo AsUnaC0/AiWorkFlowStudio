@@ -5,19 +5,22 @@ import {
   NodeExecutionResult,
 } from '../node-executor.interface';
 import { VariableService } from '../variable.service';
-import { EmbeddingService } from '../../../knowledge/embedding/embedding.service';
-import { VectorStoreService } from '../../../knowledge/vector/vector-store.service';
+import { KnowledgeRetrievalService } from '../../../knowledge/retrieval/knowledge-retrieval.service';
+import type { SearchMode } from '../../../knowledge/retrieval/types';
 
 export interface RagNodeConfig {
   /** 要检索的知识库 ID 列表 */
   knowledgeBaseIds: string[];
   /** 返回前 K 条，默认 5 */
   topK?: number;
-  /** 向量检索距离阈值，默认 0.8 */
+  /**
+   * 相似度阈值 0~1（越大越严格），低于则过滤掉。
+   * 默认 0.2（对应距离 0.8，兼容旧的 distance 阈值语义）。
+   */
   threshold?: number;
   /** 检索模式：vector / keyword / hybrid，默认 hybrid */
-  searchMode?: 'vector' | 'keyword' | 'hybrid';
-  /** embedding 模型名 */
+  searchMode?: SearchMode;
+  /** embedding 模型名；不传则使用知识库绑定的 embeddingModel */
   embeddingModel?: string;
   /** 输出格式：text（纯文本拼接）/ json（结构化），默认 text */
   outputFormat?: 'text' | 'json';
@@ -33,8 +36,7 @@ export interface RagNodeConfig {
 export class RAGNodeExecutor implements NodeExecutor {
   constructor(
     private readonly variableService: VariableService,
-    private readonly embeddingService: EmbeddingService,
-    private readonly vectorStoreService: VectorStoreService,
+    private readonly knowledgeRetrievalService: KnowledgeRetrievalService,
   ) {}
 
   async execute(
@@ -75,73 +77,55 @@ export class RAGNodeExecutor implements NodeExecutor {
     }
 
     const topK = config.topK ?? 5;
-    const threshold = config.threshold ?? 0.8;
+    // threshold 在 config 里历史上是"距离阈值"（0.8 = 宽松），
+    // KnowledgeRetrievalService.scoreThreshold 是"相似度阈值"（0.7 = 严格）。
+    // 旧默认 0.8 距离 ≈ 0.2 相似度，保持兼容。
+    const scoreThreshold = config.threshold ?? 0.2;
     const mode = config.searchMode ?? 'hybrid';
-    const model = config.embeddingModel ?? 'nomic-embed-text';
+    const embeddingModel = config.embeddingModel;
 
-    let hits: Array<{
-      content: string;
-      score?: number;
-      distance?: number;
-      chunkId: string;
-    }> = [];
+    // ⭐ 统一走 KnowledgeRetrievalService（v1.4 共享检索服务）
+    const results = await this.knowledgeRetrievalService.search({
+      knowledgeBaseIds: kbIds,
+      query,
+      topK,
+      scoreThreshold,
+      mode,
+      embeddingModel,
+    });
 
-    if (mode === 'keyword') {
-      const keywordHits = await this.vectorStoreService.keywordSearch(
-        kbIds,
-        query,
-        topK,
-      );
-      hits = keywordHits.map((h) => ({
-        chunkId: h.chunkId,
-        content: h.content,
-        score: h.rank,
-      }));
-      console.log('keywordHits', hits);
-    } else {
-      // vector / hybrid 都需要 query embedding
-      const [queryVector] = await this.embeddingService.embedBatch(
-        [query],
-        model,
-      );
-
-      if (mode === 'vector') {
-        const vectorHits = await this.vectorStoreService.vectorSearch(
-          kbIds,
-          queryVector,
-          topK,
-          threshold,
-        );
-        hits = vectorHits.map((h) => ({
-          chunkId: h.chunkId,
-          content: h.content,
-          distance: h.distance,
-        }));
-        console.log('vectorHits', hits);
-      } else {
-        const hybridHits = await this.vectorStoreService.hybridSearch(
-          kbIds,
-          query,
-          queryVector,
-          topK,
-        );
-        hits = hybridHits.map((h) => ({
-          chunkId: h.chunkId,
-          content: h.content,
-          score: h.score,
-        }));
-        console.log('hybridHits', hits);
-      }
-    }
+    console.log(
+      '[RAG] 检索完成，命中',
+      results.length,
+      '条，模式:',
+      mode,
+    );
 
     if (config.outputFormat === 'json') {
-      return { output: { query, hits } };
+      return {
+        output: {
+          query,
+          hits: results.map((r) => ({
+            chunkId: r.chunkId,
+            documentId: r.documentId,
+            content: r.content,
+            score: r.score,
+            metadata: r.metadata,
+            fileName: r.fileName,
+          })),
+        },
+      };
     }
 
     // 默认输出纯文本，明确区分【问题】和【知识库参考】，下游 LLM 节点才能正确理解
     const contextBlock =
-      hits.length > 0
-        ? hits.map((h, i) => `[${i + 1}] ${h.content}`).join('\n\n')
+      results.length > 0
+        ? results
+            .map(
+              (r, i) =>
+                `[${i + 1}]${r.fileName ? ` 来源：${r.fileName}` : ''}\n${r.content}`,
+            )
+            .join('\n\n')
         : '（未检索到相关内容）';
 
     const text = `【问题】\n${query}\n\n【知识库参考】\n${contextBlock}`;

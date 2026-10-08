@@ -517,13 +517,17 @@ await this.prisma.$executeRawUnsafe(sql, ids, vectors);
 
 ## 5. ★ 检索路：RAG 节点怎么找到「答案段落」
 
-### 5.1 三种检索模式总览（`VectorStoreService`）
+### 5.1 三种检索模式总览（`KnowledgeRetrievalService` → `VectorStoreService`）
+
+> **两个服务的分工**：`KnowledgeRetrievalService`（`knowledge/retrieval/`）是**统一检索入口**，按 `mode` 路由到 vector / keyword / hybrid，并负责「查询向量化 + 相似度阈值换算」；真正写 SQL 的是底层 `VectorStoreService`（`knowledge/vector/`）。RAG 节点、Agent 的知识库工具都只依赖上层入口。
+>
+> 入口签名：`search({ knowledgeBaseIds, query, mode?, topK?, embeddingModel?, scoreThreshold? })`，返回统一的 `SearchResult[]`（`score` 语义为**越大越相似**）。
 
 | 模式 | 检索 SQL 核心 | 适合 |
 |------|--------------|------|
 | **vector** | `embedding <=> query` 余弦距离 | 语义相近但字面不同的提问 |
 | **keyword** | PostgreSQL `to_tsvector` 全文检索 | 精确名词（型号、人名、专有名词） |
-| **hybrid** | 两路并跑 + RRF 融合 | ★ 日常推荐 |
+| **hybrid** | 两路并跑 + RRF 融合 | ★ 日常推荐（默认） |
 
 ### 5.2 向量检索（`vectorSearch`）
 
@@ -669,8 +673,8 @@ RAG 节点（第 4 篇讲过）把 hits 拼成：
 |---|------|------|------|
 | 1 | `embeddingModel` 填错或维度填错 | **后台任务**报 `expected 768 dimensions, not 1024`，文档转 `FAILED` | 建库就填对；检索报维度错先查这个 |
 | 2 | DOCX 解析未实现 | 传 docx → **上传返回 201，但后台任务失败** → 文档 `FAILED` | 用 `mammoth` 补 `DocxParser` |
-| 3 | Chat 页 `knowledgeBaseIds` 被无视 | 网页聊天不带知识库 | 接 `/ai/chat` 前面的 TODO 或用 RAG 工作流 |
-| 4 | `KnowledgeRetrievalService` 是**半成品** | 里面的 `vectorSearch` / `keywordSearch` / `embed` 全 `throw`，只 RRF 骨架可用 | 需要统一检索入口时再把它接进 `VectorStoreService` |
+| ~~3~~ | ~~Chat 页 `knowledgeBaseIds` 被无视~~ **已修** | — | ✅ Chat 页改成 Agent，通过 Knowledge 工具走统一检索；`/ai/chat` 本身仍不带知识库 |
+| ~~4~~ | ~~`KnowledgeRetrievalService` 是半成品~~ **已实现** | — | ✅ 现在按 `mode` 路由到 `vector` / `keyword` / `hybrid`（RRF，`rrfK=60`），底层调 `VectorStoreService` + `EmbeddingService`，不再 `throw` |
 | 5 | ~~上传是同步的~~ | ✅ **已解决**：现在走 `document-processing` 队列，接口毫秒级返回 | —— |
 | 6 | `pageCount`、`tokenCount` 字段声明了但不赋值 | 永远 null | 真用的时候再补逻辑 |
 | 7 | 原始 SQL 里表名大小写 | `"DocumentChunk"` 双引号区分大小写 | 写 SQL 时保持一致，别用 `document_chunk` |
@@ -736,6 +740,6 @@ SELECT "fileName", "status", "errorMessage" FROM "Document" ORDER BY "createdAt"
 
 ---
 
-上一篇把前端五条链路串到底；下一篇是**全书收尾**：把全部 31 个接口逐字段列出 JSON 示例，前后端字段一一对照，顺便复核前面所有文档的准确性。
+上一篇把前端五条链路串到底；下一篇是**全书收尾**：把全部 58 个接口逐字段列出 JSON 示例，前后端字段一一对照，顺便复核前面所有文档的准确性。
 
 → 打开 [`08-前后端数据对照总表.md`](./08-前后端数据对照总表.md)

@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { AgentModule } from './agent/agent.module';
 import { AiModule } from './ai/ai.module';
 import { AuthModule } from './auth/auth.module';
+import { FriendshipModule } from './friendship/friendship.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
+import { McpModule } from './mcp/mcp.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueuesModule } from './queues/queues.module';
+import { SkillModule } from './skill/skill.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
 import { WorkflowsModule } from './workflows/workflows.module';
 
@@ -19,10 +23,14 @@ import { WorkflowsModule } from './workflows/workflows.module';
     PrismaModule,
     AiModule,
     AuthModule,
+    FriendshipModule,
     KnowledgeModule,
     WorkspacesModule,
     WorkflowsModule,
     QueuesModule,
+    AgentModule,
+    SkillModule,
+    McpModule,
   ],
 })
 export class AppModule {}

@@ -11,6 +11,8 @@ model User {
   username     String   @unique
   email        String   @unique
   passwordHash String
+  avatar       String?
+  status       String   @default("OFFLINE") // ONLINE / OFFLINE / BUSY
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -18,6 +20,12 @@ model User {
   workspaces   Workspace[] @relation("WorkspaceOwner")
   memberships  WorkspaceMember[]
   knowledgeBases KnowledgeBase[] @relation("KnowledgeBaseOwner")
+  skills       Skill[] @relation("SkillOwner")
+  mcpServers   McpServer[] @relation("McpServerOwner")
+
+  // 好友关系（双向查询用 OR：userId = me 或 friendId = me）
+  friendshipsInitiated Friendship[] @relation("FriendshipInitiator")
+  friendshipsReceived  Friendship[] @relation("FriendshipReceiver")
 }
 
 model Workspace {
@@ -33,6 +41,7 @@ model Workspace {
   members         WorkspaceMember[]
   workflows       Workflow[]
   knowledgeBases  WorkspaceKnowledgeBase[]
+  agents          Agent[]
 }
 
 model WorkspaceMember {
@@ -54,12 +63,14 @@ model Workflow {
   workspaceId     String
   name            String
   description     String?
-  status          String           @default("DRAFT")
-  currentVersionId String?
+  status          String           @default("DRAFT")   // DRAFT / PUBLISHED / ARCHIVED
+  currentVersionId String?                              // 草稿版本（最新编辑版本）
+  publishedVersionId String?                           // 已发布版本（Agent 调用的稳定版本）
 
   workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   versions        WorkflowVersion[] @relation("WorkflowVersions")
   currentVersion  WorkflowVersion? @relation("WorkflowCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  publishedVersion WorkflowVersion? @relation("WorkflowPublishedVersion", fields: [publishedVersionId], references: [id], onDelete: SetNull)
   runs            WorkflowRun[]
 
   createdAt       DateTime         @default(now())
@@ -67,6 +78,7 @@ model Workflow {
 
   @@index([workspaceId])
   @@unique([currentVersionId])
+  @@unique([publishedVersionId])
 }
 
 model WorkflowVersion {
@@ -78,6 +90,7 @@ model WorkflowVersion {
 
   workflow       Workflow  @relation("WorkflowVersions", fields: [workflowId], references: [id], onDelete: Cascade)
   currentWorkflow Workflow? @relation("WorkflowCurrentVersion")
+  publishedWorkflow Workflow? @relation("WorkflowPublishedVersion")
 
   @@unique([workflowId, version])
   @@index([workflowId])
@@ -103,10 +116,42 @@ model WorkflowRun {
   createdAt     DateTime @default(now())
 
   workflow      Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  nodeRuns      WorkflowNodeRun[]
 
   @@index([workflowId])
   @@index([status])
 }
+
+// ---------------------------------------------------------------------------
+// WorkflowNodeRun（节点级执行记录 —— 每个 Node 的执行明细）
+// ---------------------------------------------------------------------------
+
+model WorkflowNodeRun {
+  id            String   @id @default(uuid())
+  runId         String
+  nodeId        String
+  nodeType      String
+  label         String?
+
+  status        String   @default("PENDING")   // PENDING / RUNNING / SUCCESS / FAILED
+  input         Json?
+  output        Json?
+  branch        String?
+  metadata      Json?
+  errorMessage  String?
+
+  startedAt     DateTime?
+  endedAt       DateTime?
+  durationMs    Int?
+
+  createdAt     DateTime @default(now())
+
+  run           WorkflowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([runId, nodeId])
+}
+
 
 // ---------------------------------------------------------------------------
 // Knowledge Base（知识库 —— 独立资源，可关联到多个 Workspace）
@@ -203,4 +248,142 @@ model DocumentChunk {
 
   @@index([documentId])
   @@index([chunkIndex])
+}
+
+// ---------------------------------------------------------------------------
+// Agent —— 可配置的 AI Agent（绑定 Workflow / Knowledge / LLM Prompt）
+// ---------------------------------------------------------------------------
+
+model Agent {
+  id                  String   @id @default(uuid())
+  workspaceId         String
+  name                String
+  description         String?
+
+  // LLM 配置
+  model               String   @default("qwen2.5:7b")
+  systemPrompt        String?  // System Prompt，支持 {{变量}}
+
+  // 绑定的工具资源（JSON 存储 ID 数组，避免多对多中间表爆炸）
+  /** 绑定的 Workflow ID 列表 —— Agent 可调用这些已发布工作流 */
+  workflowIds         String[]
+  /** 绑定的 KnowledgeBase ID 列表 —— Agent 可检索这些知识库 */
+  knowledgeBaseIds    String[]
+  /** 绑定的 Skill ID 列表 —— Agent 可执行这些 Skill */
+  skillIds            String[]
+  /** 绑定的 McpServer ID 列表 —— Agent 可调用这些 MCP Server 的 tools */
+  mcpServerIds        String[]
+
+  // 运行参数
+  maxToolIterations   Int      @default(10)   // ReAct 循环上限，防无限调用
+  temperature         Float    @default(0.7)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workspace           Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+// ---------------------------------------------------------------------------
+// Friendship（好友关系 —— 单向存储，列表查询用 OR 双向匹配）
+// ---------------------------------------------------------------------------
+
+model Friendship {
+  id        String   @id @default(uuid())
+
+  userId    String   // 发起者
+  friendId  String   // 接收者
+
+  status    String   @default("PENDING") // PENDING / ACCEPTED / REJECTED / BLOCKED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation("FriendshipInitiator", fields: [userId], references: [id], onDelete: Cascade)
+  friend    User     @relation("FriendshipReceiver", fields: [friendId], references: [id], onDelete: Cascade)
+
+  // 同一对用户只能有一条 Friendship 记录
+  @@unique([userId, friendId])
+  @@index([friendId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Skill —— 可复用的 Agent 能力定义（Prompt / Workflow / Tool 三种类型）
+// ---------------------------------------------------------------------------
+
+model Skill {
+  id          String   @id @default(uuid())
+  ownerId     String
+
+  name        String
+  description String?
+
+  // Skill 类型：PROMPT（指令模板）/ WORKFLOW（调用工作流）/ TOOL（调用 MCP）
+  type        String   @default("PROMPT")
+
+  // System Instructions（Prompt 类型的核心 —— 告诉 Agent 如何完成某类任务）
+  instructions String?
+
+  // 输入参数 schema（JSON Schema 格式，LLM 可见的 function parameters）
+  inputSchema  Json?
+
+  // 输出格式（Markdown / JSON / Text）
+  outputFormat String   @default("Markdown")
+
+  // WORKFLOW 类型：绑定的 Workflow ID
+  workflowId   String?
+
+  // TOOL 类型：绑定的 McpServer ID + Tool Name
+  mcpServerId  String?
+  mcpToolName  String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  owner        User     @relation("SkillOwner", fields: [ownerId], references: [id])
+
+  @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// McpServer —— MCP (Model Context Protocol) 外部能力连接
+// ---------------------------------------------------------------------------
+
+model McpServer {
+  id          String   @id @default(uuid())
+  ownerId     String
+
+  name        String
+  description String?
+
+  // 传输方式：SSE / STREAMABLE_HTTP
+  transport   String   @default("STREAMABLE_HTTP")
+
+  // MCP Server URL
+  serverUrl   String
+
+  // 认证方式：NONE / API_KEY / BEARER_TOKEN
+  authType    String   @default("NONE")
+
+  // 凭证（API Key / Bearer Token 值，生产环境应加密存储）
+  credentials Json?
+
+  // 连接状态：DISCONNECTED / CONNECTED / ERROR
+  status      String   @default("DISCONNECTED")
+
+  // 最近错误信息
+  lastError   String?
+
+  // 可用 Tools 列表（连接成功后缓存，JSON 数组）
+  availableTools Json?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  owner        User     @relation("McpServerOwner", fields: [ownerId], references: [id])
+
+  @@index([ownerId])
 }

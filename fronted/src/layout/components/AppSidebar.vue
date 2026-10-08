@@ -17,17 +17,21 @@ const router = useRouter();
 const activeMenu = computed(() => {
   if (route.path.startsWith("/workspace")) return "/workspace";
   if (route.path.startsWith("/knowledge")) return "/knowledge";
+  if (route.path.startsWith("/friends")) return "/friends";
+  if (route.path.startsWith("/skills")) return "/skills";
+  if (route.path.startsWith("/mcp")) return "/mcp";
   return route.path;
 });
 
 // 菜单项分组
 const menuGroups = computed(() => [
   {
-    id: "main",
+    id: "chat",
+    title: "CHAT",
     items: [
       {
         value: "/chat",
-        label: "Chat",
+        label: "AI Chat",
         labelZh: "AI 对话",
         icon: "chat",
         badge: null as string | null,
@@ -46,10 +50,43 @@ const menuGroups = computed(() => [
         badge: null,
       },
       {
+        value: "/skills",
+        label: "Skills",
+        labelZh: "Skills",
+        icon: "code",
+        badge: null,
+      },
+      {
+        value: "/mcp",
+        label: "MCP",
+        labelZh: "MCP",
+        icon: "plugin",
+        badge: null,
+      },
+    ],
+  },
+  {
+    id: "knowledge",
+    title: "KNOWLEDGE",
+    items: [
+      {
         value: "/knowledge",
-        label: "Knowledge",
+        label: "Knowledge Bases",
         labelZh: "知识库",
         icon: "data",
+        badge: null,
+      },
+    ],
+  },
+  {
+    id: "social",
+    title: "SOCIAL",
+    items: [
+      {
+        value: "/friends",
+        label: "Friends",
+        labelZh: "好友",
+        icon: "usergroup",
         badge: null,
       },
     ],
