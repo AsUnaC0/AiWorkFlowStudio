@@ -23,10 +23,19 @@ request.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
-      MessagePlugin.error("登录过期，请重新登录");
+      const msg = error.response?.data?.message || "登录过期，请重新登录";
+      MessagePlugin.error(msg);
       const userStore = useUserStore();
       userStore.logout();
       router.replace({ path: "/login" });
+    } else {
+      // 其他错误：优先显示后端返回的 message
+      const msg =
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        error.message ||
+        "请求失败";
+      MessagePlugin.error(msg);
     }
     return Promise.reject(error);
   },

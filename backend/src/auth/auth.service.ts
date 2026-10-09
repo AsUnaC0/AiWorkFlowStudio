@@ -30,14 +30,14 @@ export class AuthService {
       where: { email: dto.email },
     });
     if (existingEmail) {
-      throw new ConflictException('Email already registered');
+      throw new ConflictException('该邮箱已被注册');
     }
 
     const existingUsername = await this.prisma.user.findUnique({
       where: { username: dto.username },
     });
     if (existingUsername) {
-      throw new ConflictException('Username already taken');
+      throw new ConflictException('该用户名已被占用');
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
@@ -57,12 +57,12 @@ export class AuthService {
       where: { email: dto.email },
     });
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('邮箱或密码不正确');
     }
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('邮箱或密码不正确');
     }
 
     return this.buildAuthResult(user);

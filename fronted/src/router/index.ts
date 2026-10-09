@@ -58,6 +58,19 @@ const router = createRouter({
           component: () => import("@/views/mcp/index.vue"),
           meta: { title: "MCP" },
         },
+        // Agent 管理
+        {
+          path: "agents",
+          name: "AgentList",
+          component: () => import("@/views/agents/index.vue"),
+          meta: { title: "Agent 管理" },
+        },
+        {
+          path: "agents/:id",
+          name: "AgentDetail",
+          component: () => import("@/views/agents/detail.vue"),
+          meta: { title: "Agent 配置" },
+        },
       ],
     },
 

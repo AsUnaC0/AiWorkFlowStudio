@@ -20,6 +20,7 @@ const activeMenu = computed(() => {
   if (route.path.startsWith("/friends")) return "/friends";
   if (route.path.startsWith("/skills")) return "/skills";
   if (route.path.startsWith("/mcp")) return "/mcp";
+  if (route.path.startsWith("/agents")) return "/agents";
   return route.path;
 });
 
@@ -43,6 +44,13 @@ const menuGroups = computed(() => [
     title: "BUILD",
     items: [
       {
+        value: "/agents",
+        label: "Agents",
+        labelZh: "Agent 管理",
+        icon: "chat",
+        badge: null,
+      },
+      {
         value: "/workspace",
         label: "Workspaces",
         labelZh: "工作空间",
@@ -60,7 +68,7 @@ const menuGroups = computed(() => [
         value: "/mcp",
         label: "MCP",
         labelZh: "MCP",
-        icon: "plugin",
+        icon: "link",
         badge: null,
       },
     ],
@@ -107,7 +115,7 @@ const handleToggle = () => emit("toggle");
     <div class="sidebar-logo">
       <div class="logo-icon">✦</div>
       <div v-if="!props.collapsed" class="logo-text">
-        <span class="logo-title">AI WorkFlow</span>
+        <span class="logo-title">LUMOBI</span>
         <span class="logo-sub">Studio</span>
       </div>
     </div>

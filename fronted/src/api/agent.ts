@@ -1,9 +1,50 @@
 import { request } from "@/utils/request";
 import { useUserStore } from "@/stores/user";
-import type { AgentStreamEvent } from "@/types/agent";
+import type {
+  Agent,
+  CreateAgentRequest,
+  UpdateAgentRequest,
+  ChatSession,
+  ChatSessionListItem,
+  ChatSessionDetail,
+  ChatMessage,
+  AgentStreamEvent,
+} from "@/types/agent";
 
 // ===========================================================================
-// 资源查询（前端聊天页下拉用）
+// Agent CRUD
+// ===========================================================================
+
+/** 列出当前用户可见的所有 Agent */
+export const listAgents = (): Promise<Agent[]> => {
+  return request.get(`/agents`);
+};
+
+/** 创建新 Agent */
+export const createAgent = (data: CreateAgentRequest): Promise<Agent> => {
+  return request.post(`/agents`, data);
+};
+
+/** 获取 Agent 详情 */
+export const getAgent = (agentId: string): Promise<Agent> => {
+  return request.get(`/agents/${agentId}`);
+};
+
+/** 更新 Agent */
+export const updateAgent = (
+  agentId: string,
+  data: UpdateAgentRequest,
+): Promise<Agent> => {
+  return request.patch(`/agents/${agentId}`, data);
+};
+
+/** 删除 Agent */
+export const deleteAgent = (agentId: string): Promise<void> => {
+  return request.delete(`/agents/${agentId}`);
+};
+
+// ===========================================================================
+// 资源查询（前端下拉用）
 // ===========================================================================
 
 export interface AgentResourceWorkflow {
@@ -24,44 +65,82 @@ export interface AgentResourceKnowledgeBase {
 export const getAgentResources = async (): Promise<{
   workflows: AgentResourceWorkflow[];
   knowledgeBases: AgentResourceKnowledgeBase[];
+  skills: Array<{ id: string; name: string; description: string | null; type: string }>;
+  mcpServers: Array<{ id: string; name: string; description: string | null; status: string }>;
 }> => {
   return request.get(`/agent/resources`);
 };
 
 // ===========================================================================
-// Agent 无状态聊天（SSE 流式）
+// ChatSession CRUD
 // ===========================================================================
 
-export interface AgentChatRequest {
+/** 列出某 Agent 下的所有会话 */
+export const listSessions = (
+  agentId: string,
+): Promise<ChatSessionListItem[]> => {
+  return request.get(`/agents/${agentId}/sessions`);
+};
+
+/** 创建新会话 */
+export const createSession = (
+  agentId: string,
+  title?: string,
+): Promise<ChatSession> => {
+  return request.post(`/agents/${agentId}/sessions`, { title });
+};
+
+/** 获取会话详情 + 消息 */
+export const getSession = (sessionId: string): Promise<ChatSessionDetail> => {
+  return request.get(`/sessions/${sessionId}`);
+};
+
+/** 更新会话（标题） */
+export const updateSession = (
+  sessionId: string,
+  title: string,
+): Promise<ChatSession> => {
+  return request.patch(`/sessions/${sessionId}`, { title });
+};
+
+/** 删除会话 */
+export const deleteSession = (sessionId: string): Promise<void> => {
+  return request.delete(`/sessions/${sessionId}`);
+};
+
+// ===========================================================================
+// Agent SSE 流式聊天
+// ===========================================================================
+
+export interface AgentChatStreamRequest {
   input: string;
-  history?: Array<{ role: string; content: string }>;
-  model?: string;
-  workflowIds?: string[];
-  knowledgeBaseIds?: string[];
-  systemPrompt?: string;
-  temperature?: number;
-  maxToolIterations?: number;
+  /** Agent ID（必填） */
+  agentId: string;
+  /** Session ID（可选，传入则持久化 + 加载历史） */
+  sessionId?: string;
 }
 
 /**
- * 运行 Agent —— SSE 流式事件推送。
- * 工具（Workflow / KnowledgeBase）由请求体动态传入，不再依赖持久化 Agent 记录。
- * 返回一个 Promise，resolve 在流结束时；事件通过 onEvent 回调推送。
+ * SSE 流式聊天 —— 推事件给前端。
+ * 基于 Agent ID 从后端读取配置，不需要前端传模型/知识库等。
  *
  * 事件类型：thinking → tool_call → tool_result → message → error
  */
 export const runAgentStream = async (
-  data: AgentChatRequest,
+  data: AgentChatStreamRequest,
   onEvent: (event: AgentStreamEvent) => void,
 ): Promise<void> => {
   const userStore = useUserStore();
-  const response = await fetch(`/api/agent/chat/stream`, {
+  const response = await fetch(`/api/agents/${data.agentId}/chat/stream`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(userStore.token ? { Authorization: `Bearer ${userStore.token}` } : {}),
     },
-    body: JSON.stringify(data),
+    body: JSON.stringify({
+      input: data.input,
+      sessionId: data.sessionId,
+    }),
   });
 
   if (!response.ok || !response.body) {

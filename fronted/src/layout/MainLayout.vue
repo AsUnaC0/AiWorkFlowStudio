@@ -56,9 +56,10 @@ const toggleSidebar = () => {
 
 .main-content {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: scroll;        /* 始终显示滚动条，防止页面切换时宽度抖动 */
   overflow-x: hidden;
   background: @color-bg;
+  scrollbar-gutter: stable;  /* 现代浏览器：滚动条轨道始终占位 */
 }
 
 /* 页面过渡 */

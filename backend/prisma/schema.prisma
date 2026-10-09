@@ -22,6 +22,7 @@ model User {
   knowledgeBases KnowledgeBase[] @relation("KnowledgeBaseOwner")
   skills       Skill[] @relation("SkillOwner")
   mcpServers   McpServer[] @relation("McpServerOwner")
+  agents       Agent[]
 
   // 好友关系（双向查询用 OR：userId = me 或 friendId = me）
   friendshipsInitiated Friendship[] @relation("FriendshipInitiator")
@@ -256,22 +257,25 @@ model DocumentChunk {
 
 model Agent {
   id                  String   @id @default(uuid())
-  workspaceId         String
+  workspaceId         String?          // 可空：系统 Agent 不属于任何 Workspace
+  createdBy           String?          // 可空：系统 Agent 无创建者
+
   name                String
   description         String?
+  avatar              String?          // 头像或图标标识
+  type                String   @default("GENERAL")  // GENERAL / KNOWLEDGE / WORKFLOW / TOOL / CUSTOM
+  isDefault           Boolean  @default(false)      // 是否为用户的默认 Agent
+  isSystem            Boolean  @default(false)      // 系统预设 Agent（不可删除）
+  status              String   @default("PUBLISHED") // DRAFT / PUBLISHED / DISABLED
 
   // LLM 配置
   model               String   @default("qwen2.5:7b")
   systemPrompt        String?  // System Prompt，支持 {{变量}}
 
   // 绑定的工具资源（JSON 存储 ID 数组，避免多对多中间表爆炸）
-  /** 绑定的 Workflow ID 列表 —— Agent 可调用这些已发布工作流 */
   workflowIds         String[]
-  /** 绑定的 KnowledgeBase ID 列表 —— Agent 可检索这些知识库 */
   knowledgeBaseIds    String[]
-  /** 绑定的 Skill ID 列表 —— Agent 可执行这些 Skill */
   skillIds            String[]
-  /** 绑定的 McpServer ID 列表 —— Agent 可调用这些 MCP Server 的 tools */
   mcpServerIds        String[]
 
   // 运行参数
@@ -281,9 +285,60 @@ model Agent {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  workspace           Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace           Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  creator             User?          @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  sessions            ChatSession[]
 
   @@index([workspaceId])
+  @@index([createdBy])
+  @@index([isSystem])
+}
+
+// ---------------------------------------------------------------------------
+// ChatSession —— 每个 Agent 拥有独立的会话列表
+// ---------------------------------------------------------------------------
+
+model ChatSession {
+  id          String      @id @default(uuid())
+  userId      String
+  agentId     String
+
+  title       String      @default("新对话")
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  agent       Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  messages    ChatMessage[]
+
+  @@index([userId, agentId, updatedAt])
+}
+
+// ---------------------------------------------------------------------------
+// ChatMessage —— 会话中的消息（用户 + Agent 回复 + 执行轨迹）
+// ---------------------------------------------------------------------------
+
+model ChatMessage {
+  id          String      @id @default(uuid())
+  sessionId   String
+
+  role        String      // user / assistant / system / tool
+  content     String
+
+  /** Assistant 消息的 LLM 原始 tool_calls —— JSON 存储（用于多轮对话历史重建） */
+  toolCalls   Json?
+  /** Assistant 消息的执行轨迹（thinking / tool_call / tool_result）—— JSON 存储 */
+  trail       Json?
+
+  /** tool 消息关联的 tool_call_id */
+  toolCallId  String?
+
+  createdAt   DateTime    @default(now())
+
+  session     ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([createdAt])
 }
 
 // ---------------------------------------------------------------------------
