@@ -28,4 +28,10 @@ export class CreateKnowledgeBaseDto {
   @Min(1)
   @Max(8192)
   embeddingDimension!: number;
+
+  /** 关联用户在「模型管理」中添加的 Embedding 模型 id（优先于 embeddingModel） */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  embeddingLlmModelId?: string;
 }

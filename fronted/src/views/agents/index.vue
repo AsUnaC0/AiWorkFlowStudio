@@ -8,14 +8,41 @@ import {
   type Agent,
 } from "@/api/agent";
 import { AGENT_TEMPLATES, type AgentType } from "@/types/agent";
+import { getLlmModels } from "@/api/provider";
+import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
-import { useUserStore } from "@/stores/user";
 
 const router = useRouter();
-const userStore = useUserStore();
 
 const agents = ref<Agent[]>([]);
 const loading = ref(false);
+
+// 创建对话框状态
+const showCreateDialog = ref(false);
+const creatingLoading = ref(false);
+const creating = ref<{
+  name: string;
+  type: AgentType;
+  description: string;
+  llmModelId: string;
+}>({ name: "", type: "CUSTOM", description: "", llmModelId: "" });
+
+// 用户在「模型管理」中添加的对话模型（创建时可选择）
+const userModels = ref<LlmModel[]>([]);
+const loadModels = async () => {
+  try {
+    userModels.value = await getLlmModels("CHAT");
+  } catch {
+    userModels.value = [];
+  }
+};
+const modelOptions = computed(() => [
+  { value: "", label: "Ollama 本地（默认 qwen2.5:7b）" },
+  ...userModels.value.map((m) => ({
+    value: m.id,
+    label: `${m.displayName || m.modelId}（${PROVIDER_LABELS[m.provider]}）`,
+  })),
+]);
 
 const loadAgents = async () => {
   loading.value = true;
@@ -28,7 +55,19 @@ const loadAgents = async () => {
   }
 };
 
-onMounted(loadAgents);
+/** 卡片上显示的模型名：优先展示自定义模型的显示名，否则回退本地 model */
+const agentModelLabel = (agent: Agent): string => {
+  if (agent.llmModelId) {
+    const m = userModels.value.find((x) => x.id === agent.llmModelId);
+    if (m) return m.displayName || m.modelId;
+  }
+  return agent.model;
+};
+
+onMounted(() => {
+  loadAgents();
+  loadModels();
+});
 
 const getTemplate = (type: AgentType) =>
   AGENT_TEMPLATES.find((t) => t.type === type);
@@ -63,12 +102,17 @@ const handleDelete = async (agent: Agent) => {
 };
 
 const openCreateDialog = () => {
-  creating.value = { name: "", type: "CUSTOM", description: "" };
+  creating.value = {
+    name: "",
+    type: "CUSTOM",
+    description: "",
+    llmModelId: "",
+  };
   showCreateDialog.value = true;
 };
 
 const handleCreate = async () => {
-  const { name, type, description } = creating.value;
+  const { name, type, description, llmModelId } = creating.value;
   if (!name.trim()) {
     MessagePlugin.warning("请输入 Agent 名称");
     return;
@@ -80,6 +124,7 @@ const handleCreate = async () => {
       name: name.trim(),
       type,
       description: description.trim() || undefined,
+      llmModelId: llmModelId || undefined,
     });
     showCreateDialog.value = false;
     MessagePlugin.success("Agent 创建成功");
@@ -149,7 +194,7 @@ const goDetail = (agentId: string) => {
         <div class="card-config">
           <span class="config-chip">
             <t-icon name="server" />
-            {{ agent.model }}
+            {{ agentModelLabel(agent) }}
           </span>
           <span v-if="agent.workflowIds.length > 0" class="config-chip">
             <t-icon name="flow" />
@@ -178,7 +223,7 @@ const goDetail = (agentId: string) => {
     </div>
 
     <!-- 创建对话框 -->
-    <t-dialog v-if="showCreateDialog" header="创建 Agent" :footer="false" :width="520" @close="showCreateDialog = false">
+    <t-dialog v-model:visible="showCreateDialog" header="创建 Agent" :footer="false" :width="520">
       <div class="create-form">
         <div class="form-item">
           <label>选择类型</label>
@@ -204,6 +249,15 @@ const goDetail = (agentId: string) => {
           <label>描述（可选）</label>
           <textarea v-model="creating.description" class="form-textarea" placeholder="帮助我分析销售数据并生成结论。" rows="2"
             maxlength="200" />
+        </div>
+
+        <div class="form-item">
+          <label>LLM 模型</label>
+          <select v-model="creating.llmModelId" class="form-input">
+            <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
         </div>
 
         <div class="form-actions">

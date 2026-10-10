@@ -2,11 +2,14 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIService } from '../ai/ai.service';
-import type { ChatMessage } from '../ai/ai-provider.interface';
+import type { AiProvider, ChatMessage } from '../ai/ai-provider.interface';
+import { parseToolArguments } from '../ai/tool-args.util';
+import { LlmConfigService } from '../llm-config/llm-config.service';
 import { ToolRegistry } from './tool-registry.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
@@ -24,6 +27,13 @@ export type AgentType =
 export type AgentStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED';
 
 export type AgentStreamEvent =
+  | {
+      type: 'meta';
+      agentId: string;
+      agentName: string;
+      model: string;
+      provider: string;
+    }
   | { type: 'thinking'; message: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   | { type: 'tool_result'; tool: string; result: string; durationMs: number }
@@ -36,6 +46,9 @@ export interface AgentRunOptions {
   sessionId?: string;
 }
 
+/** 未绑定自定义模型时使用的本地 Ollama 默认模型 */
+const DEFAULT_LOCAL_MODEL = 'qwen2.5:7b';
+
 /** 系统预设 Agent（启动时或首次访问时自动创建） */
 const SYSTEM_AGENTS = [
   {
@@ -43,7 +56,7 @@ const SYSTEM_AGENTS = [
     description: '默认聊天助手',
     type: 'CUSTOM' as AgentType,
     isDefault: true,
-    model: 'qwen2.5:7b',
+    model: DEFAULT_LOCAL_MODEL,
     systemPrompt: '你是一个友好、专业的 AI 助手。直接回答用户问题即可。',
   },
 ];
@@ -81,10 +94,13 @@ const USER_TEMPLATES: Record<AgentType, Partial<CreateAgentDto>> = {
 
 @Injectable()
 export class AgentService {
+  private readonly logger = new Logger(AgentService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly aiService: AIService,
     private readonly toolRegistry: ToolRegistry,
+    private readonly llmConfigService: LlmConfigService,
   ) {}
 
   // ===========================================================================
@@ -191,6 +207,11 @@ export class AgentService {
       orderBy: { createdAt: 'asc' },
     });
 
+    // 绑定自定义模型时，model 列存真实模型标识（如 deepseek-ai/DeepSeek-V4-Flash）；
+    // 未绑定时回退本地默认模型。
+    const llmModelId = dto.llmModelId?.trim() || null;
+    const model = await this.resolveModelName(llmModelId, dto.model);
+
     return this.prisma.agent.create({
       data: {
         workspaceId: workspace?.id ?? null,
@@ -202,7 +223,8 @@ export class AgentService {
         isDefault: false,
         isSystem: false,
         status: 'PUBLISHED',
-        model: dto.model ?? 'qwen2.5:7b',
+        model,
+        llmModelId,
         systemPrompt: dto.systemPrompt ?? template.systemPrompt,
         workflowIds: dto.workflowIds ?? [],
         knowledgeBaseIds: dto.knowledgeBaseIds ?? [],
@@ -212,6 +234,23 @@ export class AgentService {
         temperature: dto.temperature ?? 0.7,
       },
     });
+  }
+
+  /**
+   * 根据 llmModelId 解析出要写入 `Agent.model` 的真实模型名。
+   * - 有 llmModelId 且能查到 → 用模型标识（如 deepseek-ai/DeepSeek-V4-Flash）
+   * - 有 llmModelId 但查不到 → 回退调用方传入的 fallback
+   * - 无 llmModelId → 用 fallback（本地 Ollama 模型名），默认 DEFAULT_LOCAL_MODEL
+   */
+  private async resolveModelName(
+    llmModelId: string | null,
+    fallback?: string,
+  ): Promise<string> {
+    if (llmModelId) {
+      const name = await this.llmConfigService.getModelName(llmModelId);
+      if (name) return name;
+    }
+    return fallback?.trim() || DEFAULT_LOCAL_MODEL;
   }
 
   async update(userId: string, agentId: string, dto: UpdateAgentDto) {
@@ -227,9 +266,19 @@ export class AgentService {
       throw new ForbiddenException('无权修改此 Agent');
     }
 
+    const data: Record<string, unknown> = { ...dto };
+
+    // llmModelId 传空字符串表示清除（回退本地默认 model）；undefined 表示不改。
+    // 同时把 model 列同步为真实模型名，保证「模型名」字段始终正确。
+    if (dto.llmModelId !== undefined) {
+      const llmModelId = dto.llmModelId?.trim() || null;
+      data.llmModelId = llmModelId;
+      data.model = await this.resolveModelName(llmModelId, dto.model);
+    }
+
     return this.prisma.agent.update({
       where: { id: agentId },
-      data: dto,
+      data: data as never,
     });
   }
 
@@ -345,6 +394,13 @@ export class AgentService {
       agent.knowledgeBaseIds,
     );
 
+    this.logger.log(
+      `run agent "${agent.name}" → tools=${tools.length} (workflowIds=${agent.workflowIds?.length ?? 0} kbIds=${agent.knowledgeBaseIds?.length ?? 0})` +
+        (tools.length > 0
+          ? ` [${tools.map((t) => t.function.name).join(', ')}]`
+          : '（无工具可用——检查 workflowIds 是否已发布）'),
+    );
+
     // 4. 持久化用户消息
     if (options.sessionId) {
       await this.prisma.chatMessage.create({
@@ -360,11 +416,68 @@ export class AgentService {
       });
     }
 
+    // 4.5 解析运行时 Provider：优先用户所选自定义模型，否则回退全局 Ollama
+    let chatBackend: AiProvider = this.aiService.getProvider();
+    let chatModel = agent.model;
+    if (agent.llmModelId) {
+      const runtime = await this.llmConfigService.resolveModelRuntime(
+        agent.llmModelId,
+      );
+      chatBackend = runtime.provider;
+      chatModel = runtime.modelId;
+    }
+
+    // 4.6 把「本次实际使用的模型」推给前端 + 打日志，便于核对（避免"改了模型但感觉没生效"）
+    this.logger.log(
+      `run agent "${agent.name}"(${agent.id}) -> model="${chatModel}" provider=${chatBackend.name} llmModelId=${agent.llmModelId ?? 'null'}`,
+    );
+    yield {
+      type: 'meta',
+      agentId: agent.id,
+      agentName: agent.name,
+      model: chatModel,
+      provider: chatBackend.name,
+    };
+
     // 5. ReAct 循环
     let currentMessages = messages;
     const maxIters = agent.maxToolIterations;
     const allTrailSteps: Array<Record<string, unknown>> = [];
+    const chatOptions = { model: chatModel, temperature: agent.temperature };
 
+    // 5a. 无工具 → 直接用 streamChat 做 token 级流式（最常见的纯聊天场景）
+    if (tools.length === 0) {
+      yield { type: 'thinking', message: '思考中...' };
+      allTrailSteps.push({ type: 'thinking', message: '思考中...' });
+
+      let fullContent = '';
+      for await (const token of chatBackend.streamChat(
+        currentMessages,
+        chatOptions,
+      )) {
+        fullContent += token;
+        yield { type: 'message', content: fullContent };
+      }
+
+      if (options.sessionId && fullContent) {
+        await this.prisma.chatMessage.create({
+          data: {
+            sessionId: options.sessionId,
+            role: 'assistant',
+            content: fullContent,
+            trail:
+              allTrailSteps.length > 0 ? (allTrailSteps as any) : undefined,
+          },
+        });
+        await this.prisma.chatSession.update({
+          where: { id: options.sessionId },
+          data: { updatedAt: new Date() },
+        });
+      }
+      return;
+    }
+
+    // 5b. 有工具 → ReAct 循环（先用非流式 chatWithTools 判断 tool_calls）
     for (let i = 0; i < maxIters; i++) {
       yield { type: 'thinking', message: `思考中... (第 ${i + 1} 轮)` };
       allTrailSteps.push({
@@ -372,22 +485,39 @@ export class AgentService {
         message: `思考中... (第 ${i + 1} 轮)`,
       });
 
-      const result = await this.aiService.chatWithTools(
+      const result = await chatBackend.chatWithTools(
         currentMessages,
-        { model: agent.model, temperature: agent.temperature },
+        chatOptions,
         tools,
       );
 
-      // LLM 直接回答
+      // LLM 直接回答 —— 用 streamChat 做最终流式输出
       if (result.toolCalls.length === 0) {
-        yield { type: 'message', content: result.content };
+        // 如果 result.content 已有内容（LLM 直接给了答案），先快速 chunk 推送
+        // 再用 streamChat 做真正的 token 级流式（体验更流畅）
+        if (result.content) {
+          // 立刻推送已有的 content（chunk 化模拟首次输出）
+          yield { type: 'message', content: result.content };
+        }
 
-        if (options.sessionId) {
+        // 用 streamChat 重新流式输出，用户能看到真正的打字机效果
+        // 把最终 content 逐步累积 yield 给前端
+        let streamedContent = '';
+        for await (const token of chatBackend.streamChat(
+          currentMessages,
+          chatOptions,
+        )) {
+          streamedContent += token;
+          yield { type: 'message', content: streamedContent };
+        }
+
+        const finalContent = streamedContent || result.content;
+        if (options.sessionId && finalContent) {
           await this.prisma.chatMessage.create({
             data: {
               sessionId: options.sessionId,
               role: 'assistant',
-              content: result.content,
+              content: finalContent,
               trail:
                 allTrailSteps.length > 0 ? (allTrailSteps as any) : undefined,
             },
@@ -419,12 +549,8 @@ export class AgentService {
       }
 
       for (const tc of result.toolCalls) {
-        let args: Record<string, unknown> = {};
-        try {
-          args = JSON.parse(tc.function.arguments);
-        } catch {
-          args = { raw: tc.function.arguments };
-        }
+        // 兼容 arguments 为「JSON 字符串」或「对象」两种形态（后者见于部分 OpenAI 兼容服务）
+        const args = parseToolArguments(tc.function.arguments);
 
         yield { type: 'tool_call', tool: tc.function.name, args };
         allTrailSteps.push({ type: 'tool_call', tool: tc.function.name, args });

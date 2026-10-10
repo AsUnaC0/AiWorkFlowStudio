@@ -15,6 +15,9 @@ export interface ProcessDocumentJobData {
   storagePath: string; // local: 绝对路径；qiniu: 对象 Key
 }
 
+/** pgvector 向量列维度（与 DocumentChunk.embedding vector(768) 保持一致） */
+const EMBEDDING_DIMENSION = 768;
+
 @Processor('document-processing')
 export class DocumentProcessor extends WorkerHost {
   constructor(
@@ -90,21 +93,32 @@ export class DocumentProcessor extends WorkerHost {
         select: { id: true, content: true },
       });
 
-      // 5. 查询知识库 embeddingModel 配置
+      // 5. 查询知识库 embedding 配置（本地模型名 + 可选的自定义 Embedding 模型 id）
       const kb = await this.prisma.knowledgeBase.findUnique({
         where: { id: knowledgeBaseId },
-        select: { embeddingModel: true },
+        select: { embeddingModel: true, embeddingLlmModelId: true },
       });
       if (!kb) {
         throw new Error('知识库不存在');
       }
 
-      // 6. 批量向量化
+      // 6. 批量向量化（优先用户所选 Embedding 模型，否则回退本地 Ollama）
       if (storedChunks.length > 0) {
         const vectors = await this.embeddingService.embedBatch(
           storedChunks.map((c) => c.content),
           kb.embeddingModel,
+          kb.embeddingLlmModelId,
         );
+
+        // 维度校验：pgvector 列为 vector(768)，维度不符会导致写入失败，
+        // 这里提前抛出可读的错误信息，提示用户改用 768 维模型。
+        const dim = vectors[0]?.length;
+        if (dim !== undefined && dim !== EMBEDDING_DIMENSION) {
+          throw new Error(
+            `Embedding 维度不匹配：所选模型输出 ${dim} 维，但知识库向量列固定为 ${EMBEDDING_DIMENSION} 维。` +
+              `请改用 ${EMBEDDING_DIMENSION} 维的 Embedding 模型（如 Ollama nomic-embed-text）。`,
+          );
+        }
 
         await job.updateProgress(80);
 

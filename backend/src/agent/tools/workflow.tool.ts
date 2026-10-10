@@ -103,7 +103,7 @@ export class WorkflowTool {
       throw new Error(`工作流「${workflow.name}」没有已发布版本`);
     }
 
-    const input = String(args.input ?? '');
+    const input = this.extractInput(args);
     console.log(
       `[WorkflowTool] 调用 ${workflow.name} (v${workflow.publishedVersion.version}) input=`,
       input,
@@ -123,5 +123,33 @@ export class WorkflowTool {
     console.log(`[WorkflowTool] ${workflow.name} 输出长度: ${output.length}`);
 
     return `工作流「${workflow.name}」(v${workflow.publishedVersion.version}) 运行结果：\n${output}`;
+  }
+
+  /**
+   * 从工具入参里提取工作流输入，兼容多种形态：
+   *   - { input: "..." }              ← 标准
+   *   - { raw: { input: "..." } }     ← 历史兜底包裹
+   *   - { raw: "..." }
+   *   - 其它未知字段                   ← 整体 JSON 化作为输入
+   */
+  private extractInput(args: Record<string, unknown>): string {
+    const raw = args.raw;
+
+    const candidate =
+      args.input ??
+      (raw && typeof raw === 'object'
+        ? (raw as Record<string, unknown>).input
+        : undefined) ??
+      raw;
+
+    if (candidate === undefined || candidate === null) {
+      const rest: Record<string, unknown> = { ...args };
+      delete rest.raw;
+      return Object.keys(rest).length > 0 ? JSON.stringify(rest) : '';
+    }
+
+    return typeof candidate === 'string'
+      ? candidate
+      : JSON.stringify(candidate);
   }
 }

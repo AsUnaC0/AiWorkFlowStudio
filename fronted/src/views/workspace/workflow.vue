@@ -20,9 +20,12 @@ import {
 import { getKnowledgeBases } from "@/api/knowledge";
 import { getSkills } from "@/api/skill";
 import { getMcpServers } from "@/api/mcp";
+import { getLlmModels } from "@/api/provider";
 import type { KnowledgeBase } from "@/types/knowledge";
 import type { Skill } from "@/types/skill";
 import type { McpServer } from "@/types/mcp";
+import type { LlmModel } from "@/types/provider";
+import { PROVIDER_LABELS } from "@/types/provider";
 import type { WorkflowDefinition } from "@/types/workflow";
 import { MessagePlugin } from "tdesign-vue-next";
 
@@ -384,6 +387,28 @@ const fetchMcpServers = async () => {
 onMounted(fetchSkills);
 onMounted(fetchMcpServers);
 
+/** 当前用户可用的对话模型列表（LLM 节点 Model 选择用） */
+const userModels = ref<LlmModel[]>([]);
+const fetchUserModels = async () => {
+  try {
+    userModels.value = await getLlmModels("CHAT");
+  } catch (e) {
+    console.error("加载模型列表失败", e);
+    userModels.value = [];
+  }
+};
+
+/** Model 下拉选项：默认 Ollama 本地 + 用户自定义模型 */
+const modelOptions = computed(() => [
+  { value: "", label: "Ollama 本地（默认 qwen2.5:7b）" },
+  ...userModels.value.map((m) => ({
+    value: m.id,
+    label: `${m.displayName || m.modelId}（${PROVIDER_LABELS[m.provider]}）`,
+  })),
+]);
+
+onMounted(fetchUserModels);
+
 /** 获取 MCP Server 的工具数量 */
 const getMcpToolCount = (server: McpServer): number => {
   if (!server.availableTools || !Array.isArray(server.availableTools)) return 0;
@@ -592,9 +617,14 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
           <template v-if="tempNodeData.nodeType === 'llm'">
             <div class="form-item">
               <label class="form-label">Model</label>
-              <select class="form-select" v-model="tempNodeData.model">
-                <option value="qwen2.5:7b">Ollama (qwen2.5:7b)</option>
+              <select class="form-select" v-model="tempNodeData.llmModelId">
+                <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </option>
               </select>
+              <div class="form-hint">
+                选择你在「模型管理」中添加的模型；选「Ollama 本地」则使用本地默认模型。
+              </div>
             </div>
 
             <div class="form-item">

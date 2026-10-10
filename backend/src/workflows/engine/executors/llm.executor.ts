@@ -1,10 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { AIService } from '../../../ai/ai.service';
 import type {
+  AiProvider,
   ChatMessage,
   ChatOptions,
   ToolDefinition,
 } from '../../../ai/ai-provider.interface';
+import { LlmConfigService } from '../../../llm-config/llm-config.service';
+import { parseToolArguments } from '../../../ai/tool-args.util';
 import { NodeExecutionContext } from '../node-executor.interface';
 import { VariableService } from '../variable.service';
 import { KnowledgeRetrievalService } from '../../../knowledge/retrieval/knowledge-retrieval.service';
@@ -16,6 +19,8 @@ import { McpService } from '../../../mcp/mcp.service';
 interface LlmNodeConfig {
   // 基础配置
   model?: string;
+  /** 关联用户在「模型管理」中添加的自定义模型 id（优先于 model）；不传则回退 Ollama 本地 model */
+  llmModelId?: string;
   temperature?: number;
   maxTokens?: number;
   /** System Prompt，支持 {{变量}} 引用 */
@@ -52,17 +57,17 @@ export class LLMNodeExecutor {
     private readonly knowledgeRetrievalService: KnowledgeRetrievalService,
     private readonly skillService: SkillService,
     private readonly mcpService: McpService,
+    private readonly llmConfigService: LlmConfigService,
   ) {}
 
   async execute(context: NodeExecutionContext, node: any) {
-    const { messages, options, tools, mcpServerMap } = await this.createParams(
-      context,
-      node,
-    );
+    const { messages, options, tools, mcpServerMap, provider } =
+      await this.createParams(context, node);
 
     // 有 MCP 工具 → 走 chatWithTools 循环
     if (tools && tools.length > 0) {
       return await this.executeWithTools(
+        provider,
         messages,
         options,
         tools,
@@ -70,7 +75,7 @@ export class LLMNodeExecutor {
       );
     }
 
-    const result = await this.aiService.chat(messages, options);
+    const result = await provider.chat(messages, options);
     return { output: result.content };
   }
 
@@ -78,8 +83,11 @@ export class LLMNodeExecutor {
     context: NodeExecutionContext,
     node: any,
   ): AsyncGenerator<string> {
-    const { messages, options } = await this.createParams(context, node);
-    for await (const chunk of this.aiService.streamChat(messages, options)) {
+    const { messages, options, provider } = await this.createParams(
+      context,
+      node,
+    );
+    for await (const chunk of provider.streamChat(messages, options)) {
       yield chunk;
     }
   }
@@ -91,6 +99,7 @@ export class LLMNodeExecutor {
    * 3. 最多循环 5 轮，防止无限调用
    */
   private async executeWithTools(
+    provider: AiProvider,
     messages: ChatMessage[],
     options: ChatOptions,
     tools: ToolDefinition[],
@@ -108,7 +117,7 @@ export class LLMNodeExecutor {
     let currentMessages = [...messages];
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const result = await this.aiService.chatWithTools(
+      const result = await provider.chatWithTools(
         currentMessages,
         options,
         tools,
@@ -141,7 +150,7 @@ export class LLMNodeExecutor {
           }
 
           try {
-            const args = JSON.parse(call.function.arguments || '{}');
+            const args = parseToolArguments(call.function.arguments);
             const toolResult = await this.mcpService.callTool(
               server,
               call.function.name,
@@ -194,6 +203,7 @@ export class LLMNodeExecutor {
         credentials: unknown;
       }
     >;
+    provider: AiProvider;
   }> {
     const config = (node.config ?? {}) as LlmNodeConfig;
 
@@ -372,15 +382,29 @@ export class LLMNodeExecutor {
       }
     }
 
+    // ------------------------------------------------------------------
+    // 运行时 Provider：优先用户所选自定义模型，否则回退全局 Ollama
+    // ------------------------------------------------------------------
+    let provider: AiProvider = this.aiService.getProvider();
+    let model = config.model ?? 'qwen2.5:7b';
+    if (config.llmModelId) {
+      const runtime = await this.llmConfigService.resolveModelRuntime(
+        config.llmModelId,
+      );
+      provider = runtime.provider;
+      model = runtime.modelId;
+    }
+
     return {
       messages,
       options: {
-        model: config.model ?? 'qwen2.5:7b',
+        model,
         temperature: config.temperature,
         maxTokens: config.maxTokens,
       },
       tools,
       mcpServerMap,
+      provider,
     };
   }
 }

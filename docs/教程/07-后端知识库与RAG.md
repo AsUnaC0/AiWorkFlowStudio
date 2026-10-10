@@ -24,7 +24,8 @@
 ┌──────────────────┐                    nomic-embed-text → 768 维向量
 │ 建 Document 记录  │                            ▼
 │ status=UPLOADED  │                   VectorStoreService.vectorSearch
-└────────┬─────────┘                 SQL: embedding <=> 你的向量 < 0.8
+└────────┬─────────┘        SQL: embedding <=> 你的向量 < 0.8（距离）
+                            ↑ 由 RAG 节点 threshold=0.2（相似度）换算而来
          │                                排最像的前 5
          │  queue.add('process-document')          ▼
          ▼  ══════ Redis ══════          命中文本拼成【知识库参考】
@@ -105,10 +106,35 @@ schema 里用 `Unsupported("vector(768)")?` 占位，**Prisma 客户端不能增
 | GET | `/knowledge-bases` | 登录即可 | 只列 `ownerId = 我` 的库 |
 | GET | `/knowledge-bases/:id` | **owner** | 404 不存在 / 403 不是我的 |
 | PUT | `/knowledge-bases/:id` | **owner** | 更新 |
-| DELETE | `/knowledge-bases/:id` | **owner** | 删库（级联删文档+chunks+磁盘目录） |
+| DELETE | `/knowledge-bases/:id` | **owner** | 删库（级联删文档+chunks；删除前按 `storagePath` 逐个清本地文件 / 七牛对象，见下方） |
 | GET | `/workspaces/:wsId/knowledge-bases` | workspace member | 该空间关联的库 |
 | POST | `/workspaces/:wsId/knowledge-bases/:kbId` | **workspace member 且 kb owner** | 关联到空间 |
 | DELETE | `/workspaces/:wsId/knowledge-bases/:kbId` | workspace member | 解绑 |
+
+> ### ✅ 已修复：删知识库按 `storagePath` 逐个清文件（local / qiniu 都清理）
+>
+> 旧实现用 `fs.rm(join(UPLOAD_DIR, id))` 删 `uploads/<kbId>` 目录，但文档实际上传落盘在：
+> ```typescript
+> // storage.service.ts（uploadLocal）
+> join(uploadDir, 'documents', `${randomUUID()}${ext}`)       // uploads/documents/<uuid>.pdf  （local）
+> // uploadQiniu
+> `${subDir}/${datePath}/${randomUUID()}${ext}`                // documents/<date>/<uuid>.pdf  （qiniu 对象 key）
+> ```
+> 路径对不上，且 `fs.rm` 根本不会碰七牛云，**local 残留目录、qiniu 残留对象**。
+>
+> 现 `knowledge.service.ts` 的 `remove()` 改成：
+> ```typescript
+> // 1) 先取出该库全部文档的存储路径（DB 记录级联删除后就拿不到了）
+> const docs = await this.prisma.document.findMany({
+>   where: { knowledgeBaseId: id },
+>   select: { storagePath: true },
+> });
+> // 2) 逐个调 StorageService.delete()：local→unlink，qiniu→删对象
+> await Promise.all(docs.map((d) => this.storageService.delete(d.storagePath).catch(...)));
+> // 3) 再级联删 KnowledgeBase（documents / chunks / links 一并删）
+> return this.prisma.knowledgeBase.delete({ where: { id }, select: kbSelection });
+> ```
+> 因为用的是库里存的 `storagePath`（而非拼接目录），**两种存储模式都能删干净**，且与「删单个文档」走同一套 `StorageService`，行为一致。
 
 **创建接口的 DTO：**
 
@@ -124,15 +150,17 @@ export class CreateKnowledgeBaseDto {
 前端默认提交 `embeddingModel: "nomic-embed-text"`、`embeddingDimension: 768`。
 **这是一对容易配错的参数**：必须和 Ollama 里真实存在的模型、模型真实输出维度一致（第 5 节讲症状）。
 
-**删除还删了磁盘文件（两种删）：**
+**删除会清掉底层存储文件（两种删，现已一致）：**
 
 ```typescript
-// 删知识库：先删整个目录，再删 DB 记录
-const storageDir = join(UPLOAD_DIR, id);
-await rm(storageDir, { recursive: true, force: true });   // ← force 不存在的目录不报错
-return this.prisma.knowledgeBase.delete({ ... });
+// 删知识库（knowledge.service.remove）：先按 storagePath 逐个删文件，再级联删 DB 记录
+const docs = await this.prisma.document.findMany({
+  where: { knowledgeBaseId: id }, select: { storagePath: true },
+});
+await Promise.all(docs.map((d) => this.storageService.delete(d.storagePath)));
+return this.prisma.knowledgeBase.delete({ ... });   // documents / chunks / links 级联删
 
-// 删单个文档：先删文件（StorageService 自动 local/qiniu），再删记录，然后重算两个计数
+// 删单个文档（document.service.remove）：先删文件（StorageService 自动 local/qiniu），再删记录，然后重算两个计数
 await this.storageService.delete(doc.storagePath);        // local→unlink；qiniu→删对象
 await this.prisma.document.delete({ where: { id } });
 const [documentCount, chunkCount] = await Promise.all([  // ★ 删除时重算，保证准确
@@ -142,7 +170,7 @@ const [documentCount, chunkCount] = await Promise.all([  // ★ 删除时重算�
 await this.prisma.knowledgeBase.update({ data: { documentCount, chunkCount } });
 ```
 
-> ⚠️ **注意**：上面「删知识库」用的是 `rm(本地目录)`，只清本地磁盘。如果 `STORAGE_TYPE=qiniu`，**删知识库不会删除七牛云上的对象**（只有「删单个文档」走 `storageService.delete` 才会删七牛对象）。切七牛云后这点要留意，详见附录 09。
+> 删知识库与删单个文档**都通过 `StorageService.delete()` 清底层文件**：local 模式 `unlink` 真实绝对路径，qiniu 模式删除七牛对象。**两种存储模式都能删干净**，不再有「删库不删七牛对象」的问题（详见附录 09 坑⑦）。
 
 注意两种计数维护策略不同：
 
@@ -499,9 +527,23 @@ async embedBatch(texts: string[], model: string): Promise<number[][]> {
 }
 ```
 
-- 交给 `AIService` → Ollama `/api/embed`
+- 交给 `AIService` → Ollama **`/api/embeddings`**（⚠️ 旧文档写的 `/api/embed` 是错的，少了结尾的 `s`）
 - **一批 100 条**，防止单次请求体太大
 - `model` 必须和 `nomic-embed-text` 一致（取决于你建库时填的）
+
+> **⚠️ 「一批 100 条」≠ 一次请求**：`ollama.provider.ts:135-155` 的实际实现是
+> ```typescript
+> const embeddings: number[][] = [];
+> for (const text of texts) {                       // ★ 逐条循环
+>   const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {...});
+>   embeddings.push(data.embedding);
+> }
+> return { embeddings, model };
+> ```
+> **Ollama 没有批量 embeddings 接口**，只能一条一条请求。
+> 所以 `BATCH_SIZE = 100` 只是把大任务**分成若干组**避免内存峰值，**并没有减少 HTTP 请求次数**——
+> 1000 个 chunk 就是 1000 次 HTTP 往返。这是「上传大文档慢」的主要原因之一。
+> 想加速的话，可以改成 `Promise.all` 并发（注意限流）或换支持批量的 embedding 服务。
 
 ### 4.8 ★ 批量写向量：一次 UPDATE 100 个 chunk
 
@@ -604,9 +646,25 @@ const rows = await this.prisma.$queryRaw<VectorHit[]>`
 | **必须 JOIN Document** | `knowledgeBaseId` 在 `Document` 表上，`DocumentChunk` 没有这列 |
 | **`ANY(${ids}::text[])`** | `knowledgeBaseId IN (多个库)` —— RAG 节点可能选了多个知识库 |
 
-**threshold（距离阈值）怎么理解：**
-传 `threshold = 0.8` = **只保留距离 ≤ 0.8 的 chunk**。0 是完美匹配，1 以上基本不相关。
-RAG 节点默认 `0.8`，前端提示"0.5~0.8 常用"。阈值设太大 → 召回一些没关系的片段；太小 → 可能没有命中。
+**threshold（阈值）怎么理解 —— ⚠️ 这里有两条不同语义，别混：**
+
+| 层 | 变量 | 语义 | 默认 | 方向 |
+|----|------|------|------|------|
+| **RAG 节点配置**（对外的 `config.threshold`） | `scoreThreshold` | **相似度** | **0.2** | **越大越严格** |
+| **SQL 过滤**（`vector-store.service.ts` 内部） | 距离阈值 | **余弦距离** | `1 - scoreThreshold` = **0.8** | 越小越严格 |
+
+`rag.executor.ts:83` 那行 `const scoreThreshold = config.threshold ?? 0.2;` 拿的是**相似度**，
+传到 `knowledge-retrieval.service.ts:84` 才换算成距离：`distanceThreshold = 1 - scoreThreshold`。
+
+**所以：**
+
+- 你在 RAG 节点里填 `threshold = 0.2`（默认）→ SQL 实际筛 `距离 ≤ 0.8`
+- 0 = 完美匹配，1 以上基本不相关（**这是距离的说法**）
+- **想更严格（只留高度相关的）就把 `threshold` 调大**：0.5 → 距离 ≤ 0.5
+- **想召回更多就调小**：0.1 → 距离 ≤ 0.9
+
+> ⚠️ 旧文档写「RAG 节点默认 `0.8`」是**上一版距离语义的遗留**，与当前代码不符。
+> 顺带一提 hybrid 模式下这个阈值形同虚设 —— `vectorSearch` 被硬编码传 `1.0`（几乎不筛），交给 RRF 融合层筛。
 
 ### 5.3 关键词检索（`keywordSearch`）
 
@@ -641,8 +699,8 @@ score(chunk) = Σ  1 / (k + rank_i)
 const k = 60;   // RRF 常数（业界常用值）
 
 const [vectorHits, keywordHits] = await Promise.all([
-  this.vectorSearch(ids, queryVector, topK * 2, 1.0),   // 向量多取一倍
-  this.keywordSearch(ids, query, topK * 2),
+  this.vectorStoreService.vectorSearch(ids, queryVector, topK * 4, 1.0), // ★ 实际是 ×4 不是 ×2
+  this.vectorStoreService.keywordSearch(ids, query, topK * 4),
 ]);
 
 vectorHits.forEach((h, rank) => {
@@ -663,6 +721,10 @@ RRF 只关心「你排第几」，两个检索各给排名分（`1/(60+rank+1)`�
 
 > 注意：`vectorSearch` 在 hybrid 里传了 `threshold = 1.0`（几乎不筛），
 > 因为融合层已经够保守了，先不要太激进地丢。
+>
+> ⚠️ **旧文档写的是 `topK * 2`，实际代码是 `topK * 4`**（`knowledge-retrieval.service.ts:136-142`）。
+> 也就是说 topK=5 时，两路各召回 **20** 条再融合，最后取前 5。
+> 召回倍数越大，RRF 越不容易漏掉「只在某一路排第 6~20 名」的相关片段，代价是每次多查一些行。
 
 ### 5.5 结果从上到下到 LLM 的「标准格式」
 

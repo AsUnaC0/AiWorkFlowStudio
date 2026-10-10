@@ -24,9 +24,9 @@ interface KBInfo {
   description: string | null;
   embeddingModel: string;
   embeddingDimension: number;
+  embeddingLlmModelId: string | null;
   documentCount: number;
   chunkCount: number;
-  workspaceId: string;
   updatedAt: string;
 }
 const kbInfo = ref<KBInfo | null>(null);

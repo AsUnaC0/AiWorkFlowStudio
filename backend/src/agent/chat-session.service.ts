@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { ChatMessage as LlmChatMessage } from '../ai/ai-provider.interface';
+import { stringifyToolArguments } from '../ai/tool-args.util';
 
 /**
  * ChatSession 服务 —— 会话隔离。
@@ -104,12 +105,17 @@ export class ChatSessionService {
         content: m.content,
       };
 
-      if (m.role === 'assistant' && m.toolCalls) {
-        try {
-          base.tool_calls = m.toolCalls as any;
-        } catch {
-          // ignore
-        }
+      if (m.role === 'assistant' && Array.isArray(m.toolCalls)) {
+        // 历史里的 arguments 可能是对象（旧数据），回放前统一归一化为 JSON 字符串
+        base.tool_calls = (m.toolCalls as any[]).map((tc) => ({
+          ...tc,
+          function: tc?.function
+            ? {
+                ...tc.function,
+                arguments: stringifyToolArguments(tc.function.arguments),
+              }
+            : tc?.function,
+        }));
       }
 
       if (m.role === 'tool' && m.toolCallId) {

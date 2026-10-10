@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useWorkspace } from "@/composables/useWorkspace";
 import {
@@ -92,7 +92,9 @@ const workspaceId = computed(() => route.query.workspaceId as string | undefined
 const hasWorkspaceSelected = computed(() => !!workspaceId.value);
 
 // ========== 工作流列表视图（有 workspaceId 时显示）==========
-const workflows = ref<Workflow[]>([]);
+// 注意：Workflow 内含 vue-flow 的 Node/Edge 递归泛型，用 ref 会被深度 Unwrap 触发
+// TS2589（Type instantiation is excessively deep）。用 shallowRef 规避，整体替换 .value 即可。
+const workflows = shallowRef<Workflow[]>([]);
 const wfLoading = ref(false);
 const wfError = ref("");
 const wfCreateDialogVisible = ref(false);

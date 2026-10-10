@@ -18,6 +18,15 @@ export class AIService {
 
   constructor(@Inject(AI_PROVIDER) private readonly provider: AiProvider) {}
 
+  /**
+   * 暴露底层默认 Provider（默认是全局单例 Ollama）。
+   * 供需要「自定义模型优先、否则回退默认」的调用方使用：
+   *   const backend = customProvider ?? aiService.getProvider();
+   */
+  getProvider(): AiProvider {
+    return this.provider;
+  }
+
   /** 多轮对话 */
   async chat(
     messages: ChatMessage[],

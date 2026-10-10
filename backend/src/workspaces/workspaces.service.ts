@@ -111,7 +111,18 @@ export class WorkspacesService {
 
     const members = await this.prisma.workspaceMember.findMany({
       where: { workspaceId },
-      include: { user: true },
+      select: {
+        createdAt: true,
+        user: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            avatar: true,
+            status: true,
+          },
+        },
+      },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -167,7 +178,18 @@ export class WorkspacesService {
     // 5. 创建成员记录（直接加入，不经过邀请确认流程）
     const member = await this.prisma.workspaceMember.create({
       data: { workspaceId, userId: inviteeId },
-      include: { user: true },
+      select: {
+        createdAt: true,
+        user: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            avatar: true,
+            status: true,
+          },
+        },
+      },
     });
 
     return {

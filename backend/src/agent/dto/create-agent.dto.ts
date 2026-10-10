@@ -28,6 +28,11 @@ export class CreateAgentDto {
   @IsOptional()
   model?: string;
 
+  /** 关联用户在「模型管理」中添加的自定义模型 id（优先于 model）；不传则回退 Ollama 本地 model */
+  @IsString()
+  @IsOptional()
+  llmModelId?: string;
+
   @IsString()
   @IsOptional()
   systemPrompt?: string;

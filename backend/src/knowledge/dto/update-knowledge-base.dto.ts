@@ -28,4 +28,10 @@ export class UpdateKnowledgeBaseDto {
   @Min(1)
   @Max(8192)
   embeddingDimension?: number;
+
+  /** 自定义 Embedding 模型 id；传空字符串表示清除（回退本地 embeddingModel） */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  embeddingLlmModelId?: string;
 }

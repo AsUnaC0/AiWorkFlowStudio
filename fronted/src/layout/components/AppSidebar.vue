@@ -22,11 +22,26 @@ const activeMenu = computed(() => {
   if (route.path.startsWith("/skills")) return "/skills";
   if (route.path.startsWith("/mcp")) return "/mcp";
   if (route.path.startsWith("/agents")) return "/agents";
+  if (route.path.startsWith("/providers")) return "/providers";
   return route.path;
 });
 
 // 菜单项分组
-const menuGroups = computed(() => [
+interface SidebarMenuItem {
+  value: string;
+  label: string;
+  labelZh: string;
+  icon: string;
+  badge: string | null;
+  disabled?: boolean;
+}
+interface SidebarMenuGroup {
+  id: string;
+  title: string;
+  items: SidebarMenuItem[];
+}
+
+const menuGroups = computed<SidebarMenuGroup[]>(() => [
   {
     id: "chat",
     title: "CHAT",
@@ -109,6 +124,19 @@ const menuGroups = computed(() => [
         label: "Dashboard",
         labelZh: "控制台",
         icon: "dashboard",
+        badge: null as string | null,
+      },
+    ],
+  },
+  {
+    id: "settings",
+    title: "SETTINGS",
+    items: [
+      {
+        value: "/providers",
+        label: "LLM Providers",
+        labelZh: "模型管理",
+        icon: "server",
         badge: null as string | null,
       },
     ],

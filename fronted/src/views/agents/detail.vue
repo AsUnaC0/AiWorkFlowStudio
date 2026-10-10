@@ -10,6 +10,8 @@ import {
     type AgentResourceKnowledgeBase,
 } from "@/api/agent";
 import { AGENT_TEMPLATES } from "@/types/agent";
+import { getLlmModels } from "@/api/provider";
+import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin } from "tdesign-vue-next";
 
 const route = useRoute();
@@ -23,13 +25,30 @@ const agent = ref<Agent | null>(null);
 const form = ref({
     name: "",
     description: "",
-    model: "",
+    llmModelId: "",
     systemPrompt: "",
     workflowIds: [] as string[],
     knowledgeBaseIds: [] as string[],
     maxToolIterations: 10,
     temperature: 0.7,
 });
+
+// 用户在「模型管理」中添加的对话模型（供下拉选择）
+const userModels = ref<LlmModel[]>([]);
+const loadModels = async () => {
+    try {
+        userModels.value = await getLlmModels("CHAT");
+    } catch {
+        userModels.value = [];
+    }
+};
+const modelOptions = computed(() => [
+    { value: "", label: "Ollama 本地（默认 qwen2.5:7b）" },
+    ...userModels.value.map((m) => ({
+        value: m.id,
+        label: `${m.displayName || m.modelId}（${PROVIDER_LABELS[m.provider]}）`,
+    })),
+]);
 
 const resources = ref<{
     workflows: AgentResourceWorkflow[];
@@ -45,7 +64,7 @@ const loadAgent = async () => {
         form.value = {
             name: a.name,
             description: a.description ?? "",
-            model: a.model,
+            llmModelId: a.llmModelId ?? "",
             systemPrompt: a.systemPrompt ?? "",
             workflowIds: [...a.workflowIds],
             knowledgeBaseIds: [...a.knowledgeBaseIds],
@@ -71,6 +90,7 @@ const loadResources = async () => {
 onMounted(() => {
     loadAgent();
     loadResources();
+    loadModels();
 });
 
 watch(() => route.params.id, loadAgent);
@@ -95,7 +115,7 @@ const hasChanges = computed(() => {
     return (
         form.value.name !== agent.value.name ||
         form.value.description !== (agent.value.description ?? "") ||
-        form.value.model !== agent.value.model ||
+        form.value.llmModelId !== (agent.value.llmModelId ?? "") ||
         form.value.systemPrompt !== (agent.value.systemPrompt ?? "") ||
         JSON.stringify(form.value.workflowIds) !== JSON.stringify(agent.value.workflowIds) ||
         JSON.stringify(form.value.knowledgeBaseIds) !== JSON.stringify(agent.value.knowledgeBaseIds) ||
@@ -116,7 +136,7 @@ const handleSave = async () => {
         await updateAgent(agent.value.id, {
             name: form.value.name.trim(),
             description: form.value.description || undefined,
-            model: form.value.model,
+            llmModelId: form.value.llmModelId,
             systemPrompt: form.value.systemPrompt || undefined,
             workflowIds: form.value.workflowIds,
             knowledgeBaseIds: form.value.knowledgeBaseIds,
@@ -200,8 +220,14 @@ const goChat = () => {
                     <div class="form-grid">
                         <div class="form-item">
                             <label>LLM 模型</label>
-                            <input v-model="form.model" type="text" class="form-input" placeholder="qwen2.5:7b" />
-                            <p class="form-hint">Ollama 本地模型名，如 qwen2.5:7b / deepseek-r1:7b</p>
+                            <select v-model="form.llmModelId" class="form-input">
+                                <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">
+                                    {{ opt.label }}
+                                </option>
+                            </select>
+                            <p class="form-hint">
+                                选择你在「模型管理」中添加的模型；选「Ollama 本地」则使用本地默认模型。
+                            </p>
                         </div>
                         <div class="form-item">
                             <label for="temp">温度 ({{ form.temperature }})</label>

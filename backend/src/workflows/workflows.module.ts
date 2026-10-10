@@ -6,6 +6,7 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { SkillModule } from '../skill/skill.module';
 import { McpModule } from '../mcp/mcp.module';
+import { LlmConfigModule } from '../llm-config/llm-config.module';
 import {
   WorkflowController,
   WorkflowsController,
@@ -33,6 +34,7 @@ import { RunMonitorService } from './engine/run-monitor.service';
     KnowledgeModule,
     SkillModule,
     McpModule,
+    LlmConfigModule,
     BullModule.registerQueue({
       name: 'workflow-execution',
     }),

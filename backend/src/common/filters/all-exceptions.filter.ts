@@ -51,13 +51,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     } else {
       statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
       error = 'Internal Server Error';
-      message =
-        exception instanceof Error
-          ? exception.message
-          : '未知服务器错误';
+      // 不向客户端泄露内部错误细节（如 Prisma 报错码/SQL/堆栈摘要等）
+      message = '服务器内部错误，请稍后重试或联系管理员';
 
-      // 只在开发环境打印完整堆栈
-      this.logger.error(`[${request.method}] ${request.url}`, exception instanceof Error ? exception.stack : String(exception));
+      // 完整堆栈仅记录在服务端日志，便于排障
+      this.logger.error(
+        `[${request.method}] ${request.url}`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
     }
 
     // 敏感错误信息保护：401 时不泄露"邮箱不存在" vs "密码错误"

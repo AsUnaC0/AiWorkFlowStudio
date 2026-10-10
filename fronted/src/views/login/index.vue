@@ -4,64 +4,60 @@
     <div class="login-decoration">
       <div class="decoration-content">
         <div class="deco-logo">✦</div>
-        <h2 class="deco-title">AI WorkFlow Studio</h2>
+        <h2 class="deco-title">LUMOBI Studio</h2>
         <p class="deco-tagline">
-          Build, run and connect AI workflows.<br />
-          Make your AI smarter with knowledge.
+          连接模型、知识与工具，构建智能工作流。<br />
+          让每一个 AI 创意，都能转化为实际生产力。
         </p>
         <div class="deco-features">
           <div class="feature-item">
-            <t-icon name="flow" />
-            <span>Visual workflow builder</span>
+            <t-icon name="flowchart" />
+            <span>可视化工作流编排</span>
           </div>
           <div class="feature-item">
-            <t-icon name="library" />
-            <span>RAG-powered knowledge bases</span>
+            <t-icon name="data-search" />
+            <span>知识库检索与增强生成</span>
           </div>
           <div class="feature-item">
-            <t-icon name="server" />
-            <span>Multiple LLM providers</span>
+            <t-icon name="system-sum" />
+            <span>多模型接入与统一管理</span>
           </div>
         </div>
       </div>
       <div class="deco-bg" />
     </div>
+    ```
 
     <!-- 右侧表单区 -->
     <div class="login-form-area">
       <div class="login-card">
-        <!-- 品牌区（移动端） -->
-        <div class="brand-mobile">
-          <div class="brand-logo">✦</div>
-          <div class="brand-title">AI WorkFlow Studio</div>
-        </div>
-
         <!-- 标题 -->
         <h1 class="login-heading">
           {{ isRegister ? "Create your account" : "Welcome back" }}
         </h1>
         <p class="login-sub">
-          {{ isRegister ? "Start building AI workflows in minutes" : "Sign in to continue your journey" }}
+          {{ isRegister ? "开启您的旅程" : "开始构建 AI 工作流" }}
         </p>
 
         <!-- 登录 / 注册 切换 -->
         <t-tabs v-model="isRegister" class="mode-tabs" :placement="'top'">
-          <t-tab-panel :value="false" label="Sign In" />
-          <t-tab-panel :value="true" label="Sign Up" />
+          <t-tab-panel :value="false" label="登录" />
+          <t-tab-panel :value="true" label="注册" />
         </t-tabs>
 
         <!-- 表单 -->
-        <t-form ref="formRef" class="login-form" :data="form" :rules="formRules" :disabled="loading" @submit="submitForm">
-          <t-form-item v-if="isRegister" label="Username" name="username">
-            <t-input v-model="form.username" placeholder="Your display name" :autosize="false" />
+        <t-form ref="formRef" class="login-form" :data="form" :rules="formRules" :disabled="loading"
+          @submit="submitForm" requiredMarkPosition="right">
+          <t-form-item v-if="isRegister" label="用户名" name="username">
+            <t-input v-model="form.username" placeholder="请输入用户名" :autosize="false" />
           </t-form-item>
 
-          <t-form-item label="Email" name="email">
-            <t-input v-model="form.email" type="email" placeholder="name@example.com" />
+          <t-form-item label="邮箱" name="email">
+            <t-input v-model="form.email" type="email" placeholder="请输入邮箱" />
           </t-form-item>
 
-          <t-form-item label="Password" name="password">
-            <t-input v-model="form.password" type="password" placeholder="••••••••" show-password-on="click" />
+          <t-form-item label="密码" name="password">
+            <t-input v-model="form.password" type="password" placeholder="请输入密码" show-password-on="click" />
           </t-form-item>
 
           <t-alert v-if="errorMessage" theme="error" :message="errorMessage" class="form-alert" />
@@ -75,12 +71,12 @@
         <!-- Footer -->
         <div class="login-footer">
           <template v-if="!isRegister">
-            Don't have an account?
-            <button class="link-btn" @click="isRegister = true">Sign up</button>
+            还没有账号？
+            <button class="link-btn" @click="isRegister = true">注册</button>
           </template>
           <template v-else>
-            Already have an account?
-            <button class="link-btn" @click="isRegister = false">Sign in</button>
+            已有账号？
+            <button class="link-btn" @click="isRegister = false">登录</button>
           </template>
         </div>
       </div>
@@ -179,10 +175,6 @@ const submitForm = async () => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-
-  @media (max-width: 768px) {
-    display: none;
-  }
 
   .decoration-content {
     position: relative;
@@ -285,37 +277,6 @@ const submitForm = async () => {
   width: 100%;
   max-width: 400px;
 
-  .brand-mobile {
-    display: none;
-    text-align: center;
-    margin-bottom: @space-8;
-
-    @media (max-width: 768px) {
-      display: block;
-    }
-
-    .brand-logo {
-      width: 48px;
-      height: 48px;
-      border-radius: @radius-xl;
-      background: linear-gradient(135deg, @primary 0%, lighten(@primary, 8%) 100%);
-      color: #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 24px;
-      font-weight: 700;
-      margin: 0 auto @space-3;
-      box-shadow: 0 4px 16px @primary-shadow;
-    }
-
-    .brand-title {
-      font-size: @font-lg;
-      font-weight: 600;
-      color: @color-text;
-    }
-  }
-
   .login-heading {
     font-size: 26px;
     font-weight: 700;
@@ -411,17 +372,11 @@ const submitForm = async () => {
 
 /* 表单通用 */
 .login-form {
+
   :deep(.t-input__inner),
   :deep(.t-textarea__inner) {
     height: 44px;
     border-radius: @radius-md;
-  }
-}
-
-/* 响应式 */
-@media (max-width: 768px) {
-  .login-form-area {
-    padding: @space-8 @space-6;
   }
 }
 </style>

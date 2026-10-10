@@ -89,6 +89,18 @@ export class WorkflowEngine {
 
       const result = await this.executeNode(currentNode, context, runId);
 
+      // 存储结果 —— 必须与 runStream 保持一致：
+      // 否则 context.previousOutput 永远是初始 input，
+      // 下游节点（尤其是 Output）拿不到上游产物。
+      context.data[currentNode.id] = result.branch
+        ? {
+            result: result.output,
+            branch: result.branch,
+            metadata: result.metadata,
+          }
+        : result.output;
+      context.previousOutput = result.output;
+
       const outgoingEdges = normalized.edges.filter(
         (edge: any) => edge.source === currentNode.id,
       );

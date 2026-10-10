@@ -22,6 +22,7 @@ model User {
   knowledgeBases KnowledgeBase[] @relation("KnowledgeBaseOwner")
   skills       Skill[] @relation("SkillOwner")
   mcpServers   McpServer[] @relation("McpServerOwner")
+  llmConfigs   LlmProviderConfig[] @relation("LlmConfigOwner")
   agents       Agent[]
 
   // 好友关系（双向查询用 OR：userId = me 或 friendId = me）
@@ -167,6 +168,8 @@ model KnowledgeBase {
 
   embeddingModel     String
   embeddingDimension Int
+  /** 关联用户在「模型管理」中添加的 Embedding 模型（优先于 embeddingModel）；为空则回退到 Ollama 本地 embeddingModel */
+  embeddingLlmModelId String?
 
   documentCount      Int      @default(0)
   chunkCount         Int      @default(0)
@@ -272,6 +275,8 @@ model Agent {
 
   // LLM 配置
   model               String   @default("qwen2.5:7b")
+  /** 关联用户在「模型管理」中添加的自定义模型（优先于 model 字段）；为空则回退到 Ollama 本地 model */
+  llmModelId          String?
   systemPrompt        String?  // System Prompt，支持 {{变量}}
 
   // 绑定的工具资源（JSON 存储 ID 数组，避免多对多中间表爆炸）
@@ -443,4 +448,74 @@ model McpServer {
   owner        User     @relation("McpServerOwner", fields: [ownerId], references: [id])
 
   @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// LlmProviderConfig —— 用户自定义的模型提供商连接配置（云端 API / 本地 Ollama）
+// ---------------------------------------------------------------------------
+
+model LlmProviderConfig {
+  id              String   @id @default(uuid())
+  ownerId         String
+
+  // 用户自定义名称，如「我的 DeepSeek」
+  name            String
+
+  // 提供商类型：ollama | openai | deepseek | openai-compatible
+  provider        String
+
+  // API 地址（openai-compatible / ollama 可自定义；云端厂商有默认值）
+  baseUrl         String?
+
+  // 加密后的 API Key（AES-256-GCM），绝不明文存储
+  encryptedApiKey String?
+
+  // 连接状态：UNKNOWN / CONNECTED / ERROR / DISABLED
+  status          String   @default("UNKNOWN")
+
+  // 最近一次连接测试的错误信息（不记录密钥）
+  lastError       String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation("LlmConfigOwner", fields: [ownerId], references: [id])
+  models          LlmModel[]
+
+  @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// LlmModel —— 提供商下可选的模型（区分聊天 / Embedding 等能力）
+// ---------------------------------------------------------------------------
+
+model LlmModel {
+  id           String   @id @default(uuid())
+  configId     String
+
+  // 冗余存储 provider，查询时无需连表
+  provider     String
+
+  // 真实模型 ID，如 deepseek-chat / gpt-4o-mini / nomic-embed-text
+  modelId      String
+
+  // 前端展示名称
+  displayName  String?
+
+  // 能力：CHAT / STREAM / TOOLS / EMBEDDING
+  capabilities String[] @default(["CHAT", "STREAM"])
+
+  // 是否为用户默认模型（同一 owner 仅一个）
+  isDefault    Boolean  @default(false)
+
+  // 是否允许在模型选择器中出现
+  enabled      Boolean  @default(true)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  config       LlmProviderConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  @@unique([configId, modelId])
+  @@index([configId])
 }

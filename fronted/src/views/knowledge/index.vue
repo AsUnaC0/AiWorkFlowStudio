@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
   createKnowledgeBase,
   getKnowledgeBases,
   removeKnowledgeBase,
 } from "@/api/knowledge";
+import { getLlmModels } from "@/api/provider";
+import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin } from "tdesign-vue-next";
 import type { KnowledgeBase } from "@/types/knowledge";
 
@@ -33,14 +35,31 @@ const createDialogVisible = ref(false);
 const kbCreating = ref(false);
 const createName = ref("");
 const createDescription = ref("");
-const createEmbeddingModel = ref("nomic-embed-text");
+const createEmbeddingLlmModelId = ref("");
 const createEmbeddingDimension = ref(768);
 const createError = ref("");
+
+// 用户在「模型管理」中标记为 EMBEDDING 能力的向量模型（供知识库选择）
+const embeddingModels = ref<LlmModel[]>([]);
+const fetchEmbeddingModels = async () => {
+  try {
+    embeddingModels.value = await getLlmModels("EMBEDDING");
+  } catch {
+    embeddingModels.value = [];
+  }
+};
+const embeddingModelOptions = computed(() => [
+  { value: "", label: "Ollama 本地（nomic-embed-text · 768 维）" },
+  ...embeddingModels.value.map((m) => ({
+    value: m.id,
+    label: `${m.displayName || m.modelId}（${PROVIDER_LABELS[m.provider]}）`,
+  })),
+]);
 
 const openCreateDialog = () => {
   createName.value = "";
   createDescription.value = "";
-  createEmbeddingModel.value = "nomic-embed-text";
+  createEmbeddingLlmModelId.value = "";
   createEmbeddingDimension.value = 768;
   createError.value = "";
   createDialogVisible.value = true;
@@ -52,15 +71,17 @@ const submitCreate = async () => {
     createError.value = "请输入知识库名称";
     return;
   }
-  if (!createEmbeddingModel.value.trim()) {
-    createError.value = "请输入向量模型名称";
-    return;
-  }
   const dimension = Number(createEmbeddingDimension.value);
   if (!Number.isInteger(dimension) || dimension < 1 || dimension > 8192) {
     createError.value = "向量维度需为 1 - 8192 之间的整数";
     return;
   }
+
+  // 自定义模型优先；未选则回退本地 Ollama 模型名
+  const selectedModel = embeddingModels.value.find(
+    (m) => m.id === createEmbeddingLlmModelId.value,
+  );
+  const embeddingModel = selectedModel ? selectedModel.modelId : "nomic-embed-text";
 
   kbCreating.value = true;
   createError.value = "";
@@ -68,8 +89,9 @@ const submitCreate = async () => {
     await createKnowledgeBase({
       name,
       description: createDescription.value.trim() || undefined,
-      embeddingModel: createEmbeddingModel.value.trim(),
+      embeddingModel,
       embeddingDimension: dimension,
+      embeddingLlmModelId: createEmbeddingLlmModelId.value || undefined,
     });
     createDialogVisible.value = false;
     MessagePlugin.success("知识库创建成功");
@@ -131,6 +153,7 @@ const formatRelativeTime = (dateStr: string) => {
 
 onMounted(() => {
   fetchKnowledgeBases();
+  fetchEmbeddingModels();
 });
 </script>
 
@@ -248,8 +271,18 @@ onMounted(() => {
           <t-textarea v-model="createDescription" placeholder="A brief description of this knowledge base"
             :maxlength="1000" :autosize="{ minRows: 2, maxRows: 4 }" />
         </t-form-item>
-        <t-form-item label="Embedding Model">
-          <t-input v-model="createEmbeddingModel" placeholder="nomic-embed-text" maxlength="100" />
+        <t-form-item
+          label="Embedding Model"
+          tips="选择你在「模型管理」中标记为「向量嵌入」的模型；选「Ollama 本地」则用 nomic-embed-text。仅用于知识库文档向量化。"
+        >
+          <t-select v-model="createEmbeddingLlmModelId" placeholder="选择向量模型">
+            <t-option
+              v-for="opt in embeddingModelOptions"
+              :key="opt.value"
+              :value="opt.value"
+              :label="opt.label"
+            />
+          </t-select>
         </t-form-item>
         <t-form-item label="Embedding Dimension">
           <t-input-number v-model="createEmbeddingDimension" :min="1" :max="8192" :step="8" />

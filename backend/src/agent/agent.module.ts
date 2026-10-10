@@ -3,6 +3,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AiModule } from '../ai/ai.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { WorkflowsModule } from '../workflows/workflows.module';
+import { LlmConfigModule } from '../llm-config/llm-config.module';
 import { AgentController } from './agent.controller';
 import { AgentService } from './agent.service';
 import { ChatSessionService } from './chat-session.service';
@@ -28,6 +29,7 @@ import { KnowledgeTool } from './tools/knowledge.tool';
     forwardRef(() => AiModule),
     forwardRef(() => KnowledgeModule),
     forwardRef(() => WorkflowsModule),
+    LlmConfigModule,
   ],
   controllers: [AgentController],
   providers: [

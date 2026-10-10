@@ -181,27 +181,36 @@ export class KnowledgeRetrievalService {
     model: string | undefined,
     knowledgeBaseIds: string[],
   ): Promise<number[]> {
-    const embeddingModel =
-      model ?? (await this.resolveEmbeddingModel(knowledgeBaseIds));
+    const resolved = await this.resolveEmbedding(model, knowledgeBaseIds);
     const [vector] = await this.embeddingService.embedBatch(
       [query],
-      embeddingModel,
+      resolved.model,
+      resolved.llmModelId,
     );
     return vector;
   }
 
-  /** 解析知识库绑定的 embedding 模型（取第一个知识库） */
-  private async resolveEmbeddingModel(
+  /**
+   * 解析用于「查询向量化」的 embedding 模型（必须与文档入库时所用模型一致）：
+   *   - 显式传入 model（Ollama 模型名）时优先用它；
+   *   - 否则取第一个知识库绑定的模型：自定义 Embedding 模型 id 优先，回退本地 embeddingModel 名。
+   */
+  private async resolveEmbedding(
+    model: string | undefined,
     knowledgeBaseIds: string[],
-  ): Promise<string> {
+  ): Promise<{ model: string; llmModelId: string | null }> {
+    if (model) return { model, llmModelId: null };
     if (knowledgeBaseIds.length === 0) {
-      return 'nomic-embed-text';
+      return { model: 'nomic-embed-text', llmModelId: null };
     }
     const kb = await this.prisma.knowledgeBase.findUnique({
       where: { id: knowledgeBaseIds[0] },
-      select: { embeddingModel: true },
+      select: { embeddingModel: true, embeddingLlmModelId: true },
     });
-    return kb?.embeddingModel ?? 'nomic-embed-text';
+    return {
+      model: kb?.embeddingModel ?? 'nomic-embed-text',
+      llmModelId: kb?.embeddingLlmModelId ?? null,
+    };
   }
 
   /** 将 VectorHit / KeywordHit 统一转换为 SearchResult */

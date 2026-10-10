@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, Optional } from '@nestjs/common';
 import {
   AiProvider,
   ChatMessage,
@@ -10,12 +10,28 @@ import {
   ToolCall,
   ToolChatResult,
 } from '../ai-provider.interface';
+import { stringifyToolArguments, parseToolArguments } from '../tool-args.util';
 
-const OLLAMA_BASE_URL = 'http://localhost:11434';
+const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
 
 @Injectable()
 export class OllamaProvider implements AiProvider {
   readonly name = 'ollama';
+
+  private readonly baseUrl: string;
+
+  /**
+   * @param baseUrl 可选。不传则使用默认本地地址（与现有 AIService 行为一致）。
+   * 模型管理功能创建自定义 Ollama 配置时可传入内网/远程地址。
+   * 标记 @Optional/@Inject 是为了不影响现有通过 DI 注入的 AIService（不传参）。
+   */
+  constructor(
+    @Optional()
+    @Inject('LLM_OLLAMA_BASE_URL')
+    baseUrl?: string,
+  ) {
+    this.baseUrl = baseUrl || DEFAULT_OLLAMA_BASE_URL;
+  }
 
   // ---------------------------------------------------------------------------
   // Chat（多轮，完整实现）
@@ -25,12 +41,13 @@ export class OllamaProvider implements AiProvider {
     messages: ChatMessage[],
     options: ChatOptions,
   ): Promise<ChatResult> {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: options.model,
-        messages,
+        // 必须走 toOllamaMessages：含 tool_calls 的历史消息需要把 arguments 转回对象
+        messages: this.toOllamaMessages(messages),
         stream: false,
         options: this.buildOllamaOptions(options),
       }),
@@ -80,12 +97,13 @@ export class OllamaProvider implements AiProvider {
     messages: ChatMessage[],
     options: ChatOptions,
   ): AsyncGenerator<string> {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: options.model,
-        messages,
+        // 同 chat：含 tool_calls 的消息需把 arguments 转回对象，否则 Ollama 解析报错
+        messages: this.toOllamaMessages(messages),
         stream: true,
         options: this.buildOllamaOptions(options),
       }),
@@ -135,7 +153,7 @@ export class OllamaProvider implements AiProvider {
     const embeddings: number[][] = [];
 
     for (const text of texts) {
-      const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
+      const response = await fetch(`${this.baseUrl}/api/embeddings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -166,7 +184,7 @@ export class OllamaProvider implements AiProvider {
   ): Promise<ToolChatResult> {
     // Ollama 0.3.0+ 的 /api/chat 支持 tools 参数
     // 把 ToolDefinition（OpenAI schema）直接透传给 Ollama —— Ollama 兼容同构 schema
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -188,7 +206,8 @@ export class OllamaProvider implements AiProvider {
         tool_calls?: Array<{
           id?: string;
           type: 'function';
-          function: { name: string; arguments: string };
+          // 兼容部分实现把 arguments 返回成对象的情况
+          function: { name: string; arguments: unknown };
         }>;
       };
       eval_count?: number;
@@ -202,7 +221,7 @@ export class OllamaProvider implements AiProvider {
       type: 'function',
       function: {
         name: c.function.name,
-        arguments: c.function.arguments ?? '{}',
+        arguments: stringifyToolArguments(c.function.arguments),
       },
     }));
 
@@ -239,7 +258,13 @@ export class OllamaProvider implements AiProvider {
         base.tool_calls = m.tool_calls.map((tc) => ({
           id: tc.id,
           type: tc.type,
-          function: tc.function,
+          function: {
+            name: tc.function.name,
+            // 注意：Ollama 的 tool_calls.function.arguments 要求是「对象」，
+            // 而内部统一按 OpenAI 规范存成 JSON 字符串，这里需转回对象，
+            // 否则 Ollama 解析会报 `Value looks like object, but can't find closing '}' symbol`。
+            arguments: parseToolArguments(tc.function.arguments),
+          },
         }));
       }
       if (m.tool_call_id) {
@@ -260,5 +285,23 @@ export class OllamaProvider implements AiProvider {
   private async buildError(response: Response): Promise<string> {
     const body = await response.text();
     return `Ollama 请求失败: ${response.status}${body ? ` - ${body}` : ''}`;
+  }
+
+  /** 列出本地 Ollama 已拉取的模型（连接测试 / 模型发现用） */
+  async listModels(): Promise<string[]> {
+    const response = await fetch(`${this.baseUrl}/api/tags`, {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      throw new Error(await this.buildError(response));
+    }
+
+    const data = (await response.json()) as {
+      models?: Array<{ name?: string }>;
+    };
+    return (data.models ?? [])
+      .map((m) => m.name)
+      .filter((name): name is string => typeof name === 'string');
   }
 }

@@ -77,6 +77,13 @@ const router = createRouter({
           component: () => import("@/views/agents/detail.vue"),
           meta: { title: "Agent 配置" },
         },
+        // 模型管理（LLM Providers）
+        {
+          path: "providers",
+          name: "ProviderList",
+          component: () => import("@/views/providers/index.vue"),
+          meta: { title: "模型管理" },
+        },
       ],
     },
 

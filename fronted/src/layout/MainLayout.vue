@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from "vue";
+import { ref } from "vue";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppHeader from "./components/AppHeader.vue";
 

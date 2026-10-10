@@ -17,6 +17,8 @@ export interface Agent {
   isSystem: boolean;            // 系统预设 Agent（不可删除）
   status: AgentStatus;
   model: string;
+  /** 关联用户在「模型管理」中添加的自定义模型 id；为空则回退 Ollama 本地 model */
+  llmModelId: string | null;
   systemPrompt: string | null;
   workflowIds: string[];
   knowledgeBaseIds: string[];
@@ -34,6 +36,8 @@ export interface CreateAgentRequest {
   avatar?: string;
   type?: AgentType;
   model?: string;
+  /** 自定义模型 id（可选，优先于 model） */
+  llmModelId?: string;
   systemPrompt?: string;
   workflowIds?: string[];
   knowledgeBaseIds?: string[];
@@ -48,6 +52,8 @@ export interface UpdateAgentRequest {
   description?: string;
   avatar?: string;
   model?: string;
+  /** 自定义模型 id；传空字符串表示清除（回退 Ollama 本地 model） */
+  llmModelId?: string;
   systemPrompt?: string;
   workflowIds?: string[];
   knowledgeBaseIds?: string[];
@@ -99,6 +105,15 @@ export interface ChatSessionDetail extends ChatSession {
 // Agent SSE 流事件（后端 AgentService.runStream 推送）
 // ===========================================================================
 
+export interface AgentStreamMeta {
+  type: "meta";
+  agentId: string;
+  agentName: string;
+  /** 本次实际使用的模型标识（后端解析 llmModelId 得到，未绑定时为本地 model） */
+  model: string;
+  provider: string;
+}
+
 export interface AgentStreamThinking {
   type: "thinking";
   message: string;
@@ -128,6 +143,7 @@ export interface AgentStreamError {
 }
 
 export type AgentStreamEvent =
+  | AgentStreamMeta
   | AgentStreamThinking
   | AgentStreamToolCall
   | AgentStreamToolResult

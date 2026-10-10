@@ -1,15 +1,13 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { UpdateKnowledgeBaseDto } from './dto/update-knowledge-base.dto';
-
-const UPLOAD_DIR = join(process.cwd(), 'uploads');
 
 const kbSelection = {
   id: true,
@@ -18,6 +16,7 @@ const kbSelection = {
   description: true,
   embeddingModel: true,
   embeddingDimension: true,
+  embeddingLlmModelId: true,
   documentCount: true,
   chunkCount: true,
   createdAt: true,
@@ -32,7 +31,12 @@ const kbSelection = {
 
 @Injectable()
 export class KnowledgeService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(KnowledgeService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storageService: StorageService,
+  ) {}
 
   /** 创建知识库（当前用户作为 owner） */
   create(userId: string, dto: CreateKnowledgeBaseDto) {
@@ -43,6 +47,9 @@ export class KnowledgeService {
         description: dto.description,
         embeddingModel: dto.embeddingModel,
         embeddingDimension: dto.embeddingDimension,
+        embeddingLlmModelId: dto.embeddingLlmModelId
+          ? dto.embeddingLlmModelId
+          : null,
       },
       select: kbSelection,
     });
@@ -71,25 +78,47 @@ export class KnowledgeService {
   /** 更新知识库 */
   async update(userId: string, id: string, dto: UpdateKnowledgeBaseDto) {
     await this.assertOwnerExists(userId, id);
+    // embeddingLlmModelId 传空字符串表示清除（回退本地 embeddingModel）
+    const data: Record<string, unknown> = { ...dto };
+    if (dto.embeddingLlmModelId !== undefined) {
+      data.embeddingLlmModelId = dto.embeddingLlmModelId
+        ? dto.embeddingLlmModelId
+        : null;
+    }
     return this.prisma.knowledgeBase.update({
       where: { id },
-      data: dto,
+      data: data as never,
       select: kbSelection,
     });
   }
 
-  /** 删除知识库（级联删除 documents + chunks + 关联关系 + 磁盘文件） */
+  /** 删除知识库（级联删除 documents + chunks + 关联关系 + 磁盘/云存储文件） */
   async remove(userId: string, id: string) {
     await this.assertOwnerExists(userId, id);
 
-    // 先清理磁盘文件目录（DB 记录删除后就拿不到路径了）
-    const storageDir = join(UPLOAD_DIR, id);
-    try {
-      await rm(storageDir, { recursive: true, force: true });
-    } catch {
-      // 文件系统异常不阻塞 DB 删除，只打 warn
-    }
+    // 先取出该知识库下所有文档的存储路径（DB 记录级联删除后就拿不到了）
+    const docs = await this.prisma.document.findMany({
+      where: { knowledgeBaseId: id },
+      select: { storagePath: true },
+    });
 
+    // 通过 StorageService 逐个删除底层文件：
+    //   local  → unlink 真实路径（uploads/documents/<uuid>.ext）
+    //   qiniu  → 删除七牛云对象（documents/<date>/<uuid>.<ext>）
+    // 存储删除失败不阻塞 DB 删除，仅记录 warn
+    await Promise.all(
+      docs.map((doc) =>
+        this.storageService.delete(doc.storagePath).catch((err) =>
+          this.logger.warn(
+            `删除知识库 ${id} 的存储文件失败 [${doc.storagePath}]: ${
+              err instanceof Error ? err.message : err
+            }`,
+          ),
+        ),
+      ),
+    );
+
+    // 级联删除 KnowledgeBase → Documents → DocumentChunks（以及 WorkspaceKnowledgeBase 关联）
     return this.prisma.knowledgeBase.delete({
       where: { id },
       select: kbSelection,

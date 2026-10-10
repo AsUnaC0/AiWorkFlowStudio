@@ -120,4 +120,10 @@ export interface AiProvider {
     options: ChatOptions,
     tools: ToolDefinition[],
   ): Promise<ToolChatResult>;
+
+  /**
+   * 列出该端点支持的模型 ID（连接测试 / 模型发现用）。
+   * 非所有 Provider 都实现；未实现则返回空数组。
+   */
+  listModels?(): Promise<string[]>;
 }

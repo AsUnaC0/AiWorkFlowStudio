@@ -927,20 +927,4 @@ onBeforeUnmount(() => {
   text-align: right; padding: @space-4 0;
   font-size: @font-xs; color: @color-text-tertiary;
 }
-
-/* ==================== 响应式 ==================== */
-@media (max-width: 1400px) {
-  .metrics-row { grid-template-columns: repeat(3, 1fr); }
-}
-@media (max-width: 1200px) {
-  .metrics-row { grid-template-columns: repeat(2, 1fr); }
-  .charts-row, .charts-row-triple { grid-template-columns: 1fr; }
-}
-@media (max-width: 768px) {
-  .dashboard { padding: @space-4; }
-  .page-header { flex-direction: column; gap: @space-4; }
-  .metrics-row { grid-template-columns: 1fr; }
-  .charts-row, .charts-row-triple, .bottom-row { grid-template-columns: 1fr; }
-  .resource-summary { flex-direction: column; gap: @space-3; }
-}
 </style>

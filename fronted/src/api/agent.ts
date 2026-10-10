@@ -9,7 +9,21 @@ import type {
   ChatSessionDetail,
   ChatMessage,
   AgentStreamEvent,
+  AgentStreamMeta,
 } from "@/types/agent";
+
+// 便于消费方直接从 @/api/agent 引入这些类型
+export type {
+  Agent,
+  CreateAgentRequest,
+  UpdateAgentRequest,
+  ChatSession,
+  ChatSessionListItem,
+  ChatSessionDetail,
+  ChatMessage,
+  AgentStreamEvent,
+  AgentStreamMeta,
+};
 
 // ===========================================================================
 // Agent CRUD

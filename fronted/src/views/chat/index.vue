@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, nextTick, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   listAgents,
   createAgent,
@@ -15,11 +16,15 @@ import {
   type AgentStreamEvent,
 } from "@/api/agent";
 import { AGENT_TEMPLATES, type AgentType } from "@/types/agent";
+import { getLlmModels } from "@/api/provider";
+import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
 
 // ===========================================================================
 // 状态
 // ===========================================================================
+
+const route = useRoute();
 
 // Agent 列表
 const agents = ref<Agent[]>([]);
@@ -72,8 +77,52 @@ const currentAgent = computed(() =>
   agents.value.find((a) => a.id === currentAgentId.value),
 );
 
-const currentSession = computed(() =>
-  sessions.value.find((s) => s.id === currentSessionId.value),
+// 用户在「模型管理」中添加的对话模型（用于展示 Agent 实际使用的模型名）
+const userModels = ref<LlmModel[]>([]);
+const loadModels = async () => {
+  try {
+    userModels.value = await getLlmModels("CHAT");
+  } catch {
+    userModels.value = [];
+  }
+};
+
+/**
+ * Agent 实际使用的模型名：
+ * 优先展示所选自定义模型的显示名，未绑定自定义模型时回退到本地 model。
+ * 注意：切换模型只会更新 llmModelId，`agent.model` 始终是本地默认值，
+ * 因此这里不能再直接用 currentAgent.model。
+ */
+const activeModelLabel = computed(() => {
+  const a = currentAgent.value;
+  if (!a) return "";
+  if (a.llmModelId) {
+    const m = userModels.value.find((x) => x.id === a.llmModelId);
+    if (m) return m.displayName || m.modelId;
+  }
+  // 后端已把 agent.model 同步为真实模型名，直接回退即可
+  return a.model;
+});
+
+/** 悬浮提示：展示提供商信息，便于确认当前到底用的哪个模型 */
+const activeModelHint = computed(() => {
+  const a = currentAgent.value;
+  if (!a) return "";
+  if (a.llmModelId) {
+    const m = userModels.value.find((x) => x.id === a.llmModelId);
+    if (m) return `${m.modelId} · ${PROVIDER_LABELS[m.provider] ?? m.provider}`;
+  }
+  return `本地 Ollama · ${a.model}`;
+});
+
+/** 后端通过 SSE `meta` 事件回报的「本次实际使用模型」，最权威 */
+const runtimeModel = ref("");
+/** 头部展示：优先后端回报，其次按 llmModelId 解析，最后回退 agent.model */
+const displayModel = computed(() => runtimeModel.value || activeModelLabel.value);
+const modelTitle = computed(() =>
+  runtimeModel.value
+    ? `本次实际使用：${runtimeModel.value}`
+    : activeModelHint.value,
 );
 
 const isEmpty = computed(() => messages.value.length === 0);
@@ -91,8 +140,17 @@ const loadAgents = async () => {
   try {
     agents.value = await listAgents();
 
-    // 如果没有选中 Agent，选中默认的第一个
-    if (!currentAgentId.value && agents.value.length > 0) {
+    // 优先采用 URL 上的 ?agent=<id>（从 Agent 管理页点「对话」跳转时携带），
+    // 否则保持当前选中，最后回退到默认 Agent。
+    const queryAgentId = route.query.agent as string | undefined;
+    const fromQuery =
+      queryAgentId && agents.value.some((a) => a.id === queryAgentId)
+        ? queryAgentId
+        : "";
+
+    if (fromQuery) {
+      currentAgentId.value = fromQuery;
+    } else if (!currentAgentId.value && agents.value.length > 0) {
       // 优先选 isDefault 的
       const defaultAgent = agents.value.find((a) => a.isDefault);
       currentAgentId.value = defaultAgent?.id ?? agents.value[0].id;
@@ -161,8 +219,19 @@ watch(currentAgentId, async () => {
   currentSessionId.value = "";
   messages.value = [];
   sessions.value = [];
+  runtimeModel.value = "";
   await loadSessions();
 });
+
+// URL 上的 ?agent= 变化时（例如从 Agent 管理页再次点「对话」），同步切换
+watch(
+  () => route.query.agent,
+  (agentId) => {
+    if (typeof agentId === "string" && agentId && agentId !== currentAgentId.value) {
+      currentAgentId.value = agentId;
+    }
+  },
+);
 
 // ===========================================================================
 // 会话操作
@@ -184,6 +253,7 @@ const createNewSession = async () => {
 const switchSession = async (sessionId: string) => {
   if (sessionId === currentSessionId.value) return;
   currentSessionId.value = sessionId;
+  runtimeModel.value = "";
   await loadMessages();
 };
 
@@ -297,6 +367,12 @@ const scrollToBottom = async () => {
 };
 
 const handleAgentEvent = (event: AgentStreamEvent, assistantMsgId: string) => {
+  // meta 事件不属于某条消息，先单独处理（后端回报本次实际使用的模型）
+  if (event.type === "meta") {
+    runtimeModel.value = event.model;
+    return;
+  }
+
   const msg = messages.value.find((m) => m.id === assistantMsgId);
   if (!msg) return;
 
@@ -305,7 +381,7 @@ const handleAgentEvent = (event: AgentStreamEvent, assistantMsgId: string) => {
     case "tool_call":
     case "tool_result": {
       if (!msg.trail) msg.trail = [];
-      msg.trail.push(event);
+      msg.trail.push(event as unknown as Record<string, unknown>);
       break;
     }
     case "message": {
@@ -399,6 +475,7 @@ const formatTime = (iso: string) => {
 // ===========================================================================
 
 onMounted(async () => {
+  await loadModels();
   await loadAgents();
 });
 
@@ -532,7 +609,10 @@ const formatToolResult = (result?: string) => {
           </div>
         </div>
         <div class="header-right">
-          <span class="model-chip">{{ currentAgent.model }}</span>
+          <span class="model-chip" :title="modelTitle">
+            <t-icon name="server" />
+            {{ displayModel }}
+          </span>
           <button v-if="currentSessionId" class="new-chat-btn" @click="createNewSession">
             <t-icon name="add" />
             <span>新对话</span>
@@ -582,7 +662,7 @@ const formatToolResult = (result?: string) => {
 
                 <!-- 执行轨迹 trail（只有 assistant 有） -->
                 <div v-if="msg.trail && msg.trail.length > 0" class="trail">
-                  <div v-for="(step, sIdx) in msg.trail" :key="sIdx" class="trail-step" :class="step.type">
+                  <div v-for="(step, sIdx) in msg.trail" :key="sIdx" class="trail-step" :class="String(step.type)">
                     <template v-if="step.type === 'thinking'">
                       <span class="step-icon">💭</span>
                       <span class="step-text">{{ (step as any).message }}</span>
@@ -637,7 +717,8 @@ const formatToolResult = (result?: string) => {
     </main>
 
     <!-- 创建 Agent 对话框 -->
-    <t-dialog v-if="showCreateDialog" header="创建 Agent" :footer="false" :width="480" @close="showCreateDialog = false">
+    <t-dialog v-model:visible="showCreateDialog" header="创建 Agent" :footer="false" :width="480"
+      @close="showCreateDialog = false">
       <div class="create-agent-form">
         <div class="form-item">
           <label>选择类型</label>
@@ -1096,6 +1177,9 @@ const formatToolResult = (result?: string) => {
   }
 
   .model-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     padding: 4px 10px;
     font-size: 11px;
     color: @color-text-secondary;
