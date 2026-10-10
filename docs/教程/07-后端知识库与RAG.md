@@ -17,8 +17,8 @@
      │                                          │
      ▼                                          ▼
 ┌──────────────────┐                     ┌──────────────────┐
-│ 落地磁盘 uploads/ │                     │ 你 → 一个问题      │
-│ kb-uuid/xxx.pdf  │                     └────────┬─────────┘
+│ Storage 落盘     │                     │ 你 → 一个问题      │
+│ (local / qiniu)  │                     └────────┬─────────┘
 └────────┬─────────┘                              ▼
          ▼                                  EmbeddingService
 ┌──────────────────┐                    nomic-embed-text → 768 维向量
@@ -78,7 +78,7 @@ KnowledgeBase（你建的知识库）
         ▼
 Document（一篇文档）
 ├── fileName / fileType / fileSize
-├── storagePath        ← 磁盘路径 uploads/<kbId>/<docId>.pdf
+├── storagePath        ← 存储位置（local=磁盘路径 / qiniu=对象 key，见附录 09）
 ├── status             UPLOADED → PROCESSING → COMPLETED / FAILED
 └── errorMessage       FAILED 的原因
         │ 1:N
@@ -86,11 +86,12 @@ Document（一篇文档）
 DocumentChunk（一个文本块）
 ├── content            ← 切出来的~1000字符文本
 ├── chunkIndex         ← 第几块
-└── embedding vector(768)   ← ★ 手写 migration 加的列，Prisma 不认识
+└── embedding vector(768)   ← ★ Unsupported 类型列，手写 migration 维护，读写走裸 SQL
 ```
 
-**最关键的一句**（第 2 篇强调过，这里是实战）：`embedding` 列是手写的，
-Prisma 不能增删查它，**所有向量的读写都是裸 SQL**（`VectorStoreService`）。
+**最关键的一句**（第 2 篇强调过，这里是实战）：`embedding` 列是手写 migration 建的，
+schema 里用 `Unsupported("vector(768)")?` 占位，**Prisma 客户端不能增删查它**，
+所有向量的读写都是裸 SQL（`VectorStoreService`）。
 
 ---
 
@@ -131,8 +132,8 @@ const storageDir = join(UPLOAD_DIR, id);
 await rm(storageDir, { recursive: true, force: true });   // ← force 不存在的目录不报错
 return this.prisma.knowledgeBase.delete({ ... });
 
-// 删单个文档：先删文件，再删记录，然后重算两个计数
-await unlink(doc.storagePath);
+// 删单个文档：先删文件（StorageService 自动 local/qiniu），再删记录，然后重算两个计数
+await this.storageService.delete(doc.storagePath);        // local→unlink；qiniu→删对象
 await this.prisma.document.delete({ where: { id } });
 const [documentCount, chunkCount] = await Promise.all([  // ★ 删除时重算，保证准确
   this.prisma.document.count({ ... }),
@@ -140,6 +141,8 @@ const [documentCount, chunkCount] = await Promise.all([  // ★ 删除时重算�
 ]);
 await this.prisma.knowledgeBase.update({ data: { documentCount, chunkCount } });
 ```
+
+> ⚠️ **注意**：上面「删知识库」用的是 `rm(本地目录)`，只清本地磁盘。如果 `STORAGE_TYPE=qiniu`，**删知识库不会删除七牛云上的对象**（只有「删单个文档」走 `storageService.delete` 才会删七牛对象）。切七牛云后这点要留意，详见附录 09。
 
 注意两种计数维护策略不同：
 
@@ -203,6 +206,7 @@ async upload(
 export class DocumentsController {
   constructor(
     private readonly documentService: DocumentService,
+    private readonly storageService: StorageService,         // ★ 统一存储（local / 七牛云）
     @InjectQueue('document-processing')            // ★ 注入队列
     private readonly documentQueue: Queue,
   ) {}
@@ -220,20 +224,20 @@ async upload(user, kbId, file) {
     throw new HttpException(`不支持的文件类型：${ext}...`, 400);
   }
 
-  // ③ 落地磁盘：uploads/<kbId>/<documentId><ext>
-  const documentId = crypto.randomUUID();
-  const storageDir = join(UPLOAD_DIR, kbId);
-  const storagePath = join(storageDir, `${documentId}${ext}`);
-  await mkdir(storageDir, { recursive: true });
-  await writeFile(storagePath, file.buffer);
+  // ③ 交给 StorageService 落盘（本地磁盘 / 七牛云 自动切换，见附录 09）
+  const uploaded = await this.storageService.upload(
+    file.buffer,
+    file.originalname,
+    `documents/${kbId}`,
+  );
 
   // ④ 建文档记录（状态 UPLOADED —— ★ 不是 PROCESSING，等 Worker 来改）
   const doc = await this.documentService.create({
     knowledgeBaseId: kbId,
     fileName: file.originalname,
     fileType: EXT_TO_TYPE[ext] ?? ext.replace('.', '').toUpperCase(),
-    fileSize: file.size,
-    storagePath,
+    fileSize: uploaded.size,
+    storagePath: uploaded.key,        // ★ local=绝对路径；qiniu=对象 key
     mimeType: file.mimetype,
     status: 'UPLOADED',
   });
@@ -241,7 +245,7 @@ async upload(user, kbId, file) {
   // ⑤ 入队 → DocumentProcessor 后台处理
   const job = await this.documentQueue.add(
     'process-document',                          // Job name
-    { documentId: doc.id, knowledgeBaseId: kbId, storagePath },   // Job data
+    { documentId: doc.id, knowledgeBaseId: kbId, storagePath: uploaded.key },   // Job data
     {
       attempts: 3,                               // ★ 失败重试 3 次
       backoff: { type: 'exponential', delay: 3000 },   // 3s → 6s → 12s 递增
@@ -302,6 +306,7 @@ export class DocumentProcessor extends WorkerHost {
     private readonly chunkService: ChunkService,                      // ← 同上
     private readonly embeddingService: EmbeddingService,
     private readonly vectorStoreService: VectorStoreService,
+    private readonly storageService: StorageService,                 // ★ 统一存储（local / 七牛云）
   ) { super(); }
 
   async process(job: Job<ProcessDocumentJobData>): Promise<any> {
@@ -332,8 +337,12 @@ export class DocumentProcessor extends WorkerHost {
 
       await job.updateProgress(10);                    // 10%
 
-      // ② 解析 → 纯文本
-      const text = await this.documentParserService.parse(storagePath);
+      // ② 解析 → 纯文本（★ 七牛模式：对象先下载到系统临时目录再解析，见附录 09）
+      let localPath = storagePath;
+      if (this.storageService.type === 'qiniu') {
+        localPath = await this.storageService.getLocalPath(storagePath);
+      }
+      const text = await this.documentParserService.parse(localPath);
 
       await job.updateProgress(30);                    // 30%
 
@@ -412,6 +421,10 @@ export class DocumentProcessor extends WorkerHost {
 | **先入库再更新向量** | 因为 Prisma 只能插非 embedding 列，所以先 `createMany` 再裸 `UPDATE` |
 | **重复执行会重复插入 chunk**（已修） | ⚠️ 原来 `createMany` 前不删旧 chunk，`attempts: 3` 重投会插入重复 chunk 并重复 `increment chunkCount`。**现在 `process()` 开头加了幂等保护**：`count` 出残留量 → `$transaction` 里 `deleteMany` + `decrement chunkCount` |
 | **幂等保护为什么放最前面** | 必须赶在 `createMany` 之前，而且要和「回退 `chunkCount`」放同一个 `$transaction`，否则删成功但计数回退失败就永久对不上 |
+| **`storagePath` 有两种语义**（★ 新增） | `local` = 绝对路径；`qiniu` = 对象 key。`process()` 开头会先 `getLocalPath` 转成可解析的本地路径，并在 `finally` 里 `unlink` 掉临时文件 |
+
+> **七牛云 / 对象存储？** 传文件不一定要落本地磁盘——`STORAGE_TYPE=qiniu` 会把文件丢到七牛云对象存储，
+> 上传、解析、删除的代码都走同一个 `StorageService` 自动切换。私有空间 401、签名 URL 裸地址等**踩坑合集**见 **附录 09**。
 
 ### 4.4 前端怎么跟进状态（轮询）
 
@@ -512,6 +525,40 @@ await this.prisma.$executeRawUnsafe(sql, ids, vectors);
 | `$1` / `$2` | PostgreSQL 原生参数占位符（`Unsafe` 的原因是这种展开用不了 Prisma 标签模板语法） |
 | `::text[]` | ★ 数组元素是 text。因为 Prisma 的 `String` 映射成 PostgreSQL `TEXT`，不是 `uuid`。写 `::uuid[]` 会类型报错 |
 | 一步 SET | 跟循环 100 次 `UPDATE ... WHERE id = ?` 相比，**少 100 次网络往返** |
+
+### 4.9 ★ 为什么 `embedding` 列非要手写？它到底干嘛的？
+
+**① 它是干嘛的** —— 给「语义」一个可计算的形式：
+
+- 每个文本块编码成 **768 个浮点数**（`nomic-embed-text`），这串数就是它在「语义空间」里的坐标
+- 你问一个问题，问题也被编码成同样 768 个数
+- pgvector 用 **`<=>` 余弦距离**算「问题坐标」和「每个块坐标」离得多近，最近的就是答案候选
+- 没有它，检索只能靠关键词；有了它，**换个说法也能命中**（「业绩怎么算」和「KPI 定义」语义相近）
+
+**② 为什么这列在 Prisma 里长得很奇怪** —— 因为 Prisma 原生不认识 PostgreSQL 的 `vector` 类型：
+
+```prisma
+model DocumentChunk {
+  ...
+  embedding   Unsupported("vector(768)")?   // ← Unsupported = 「这列存在，但我不管它」
+}
+```
+
+| 什么操作 | Prisma 会怎样 |
+|--------|--------------|
+| `migrate dev` 之前（schema 没声明时） | 把这列当「多余列」，**生成 DROP COLUMN** → 检索直接报 `column "embedding" ... does not exist` |
+| `migrate dev` 现在（声明了 `Unsupported`） | 不再 DROP 这列；但仍可能生成 `DROP INDEX "dc_embedding_ivf"`（索引类型 Prisma 声明不了） |
+| `findMany()` / `create()` | 客户端类型里没有这个字段，**读写不了**，只能裸 SQL |
+
+**③ 所以工程上要守三条规矩**：
+
+1. `embedding` 列 + IVFFlat 索引必须由**手写 migration** 维护，且全用 `IF NOT EXISTS`（可重复执行）
+2. 每次 `prisma migrate dev` 后**检查生成的 SQL**，发现 `DROP INDEX "dc_embedding_ivf"` 就删掉那句；
+   真丢了索引，重跑恢复迁移里的 `CREATE ... IF NOT EXISTS` 就行
+3. 所有向量的读写收敛在 `VectorStoreService` 一个文件里（`updateEmbeddingBatch` / `search`），
+   别让裸 SQL 散落各处
+
+> 这一整套（误删事故 + 修复）的来龙去脉见 **第 1 篇 §5.2**，这里只讲「为什么」。
 
 ---
 
@@ -679,6 +726,7 @@ RAG 节点（第 4 篇讲过）把 hits 拼成：
 | 6 | `pageCount`、`tokenCount` 字段声明了但不赋值 | 永远 null | 真用的时候再补逻辑 |
 | 7 | 原始 SQL 里表名大小写 | `"DocumentChunk"` 双引号区分大小写 | 写 SQL 时保持一致，别用 `document_chunk` |
 | 8 | pgvector 索引是 IVFFlat | 数据量大时检索变慢 | 超过 ~100 万 chunk 再换 HNSW（migration 里有注释好的 SQL） |
+| 16 | ★ **`prisma migrate dev` 曾误删 `embedding` 列/索引** | 检索报 `column "embedding" ... does not exist` | **已修**：schema 现在声明 `Unsupported("vector(768)")?`（不再 DROP 列）+ 恢复迁移 `20261010110000_restore_pgvector_embedding`；**注意索引句仍可能出现在生成的迁移里**，跑完 migrate dev 检查 SQL（第 1 篇 §5.2） |
 | ~~9~~ | ~~★ **前端 `uploadDocument` 返回类型是错的**~~ **已修** | — | ✅ 新增 `UploadDocumentResult` 接口，`uploadDocument` 返回类型改对；顺带补了 `getDocument(id)` |
 | ~~10~~ | ~~★ **`attempts: 3` 重试会插入重复 chunk**~~ **已修** | — | ✅ `process()` 开头加幂等保护：`count` → `$transaction`(`deleteMany` + `decrement chunkCount`) |
 | 11 | ★ **切块参数被调到 `100/50`** | 同文档 chunk 数涨约 10 倍，CPU 上向量化极慢 | 本地调试够用；上生产改回 `800/100` |
@@ -736,7 +784,7 @@ SELECT "fileName", "status", "errorMessage" FROM "Document" ORDER BY "createdAt"
 | **混合检索** | 两路并跑 + RRF `Σ 1/(60+rank+1)` 融合取 topK |
 | **RAG 节点输出** | `【问题】...【知识库参考】[1]...` 文本，或 `json` 结构 |
 | **Count 策略** | 增用 increment，删用重算 |
-| **⚠️ 最大坑** | `embedding` 列 Prisma 不认识；embeddingModel/维度必须和模型一致；**异步化后失败不再 HTTP 报错** |
+| **⚠️ 最大坑** | `embedding` 列 Prisma 客户端读写不了（`Unsupported` 类型，只能裸 SQL）、embeddingModel/维度必须和模型一致；**异步化后失败不再 HTTP 报错**；**跑 `migrate dev` 看它是否带了 `DROP INDEX dc_embedding_ivf`** |
 
 ---
 

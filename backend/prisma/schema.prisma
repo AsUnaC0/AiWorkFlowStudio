@@ -238,8 +238,10 @@ model DocumentChunk {
   content     String
   chunkIndex  Int
   tokenCount  Int?
-  // ⚠️ embedding 由 pgvector 扩展单独手写 migration 添加（Prisma Unsupported 类型无法自动生成）
-  //   embedding vector(768)    ← 手写 migration 加
+  // pgvector 向量列 —— Prisma Unsupported 类型，由手写 migration 维护
+  // 注意：每次 prisma migrate dev 可能会认为这是"多余列"并生成 DROP，
+  //       请保留手写 migration 中的 IF NOT EXISTS 防护。
+  embedding   Unsupported("vector(768)")?
   metadata    Json?
 
   createdAt   DateTime @default(now())

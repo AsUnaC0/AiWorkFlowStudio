@@ -15,16 +15,15 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { extname } from 'node:path';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { JwtUser } from '../../auth/strategies/jwt.strategy';
 import { DocumentService } from './document.service';
+import { StorageService } from '../../storage/storage.service';
 
 const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.markdown'];
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const UPLOAD_DIR = join(process.cwd(), 'uploads');
 
 const EXT_TO_TYPE: Record<string, string> = {
   '.pdf': 'PDF',
@@ -39,6 +38,7 @@ const EXT_TO_TYPE: Record<string, string> = {
 export class DocumentsController {
   constructor(
     private readonly documentService: DocumentService,
+    private readonly storageService: StorageService,
     @InjectQueue('document-processing')
     private readonly documentQueue: Queue,
   ) {}
@@ -82,21 +82,20 @@ export class DocumentsController {
       );
     }
 
-    // 2) 落盘
-    const documentId = crypto.randomUUID();
-    const storageDir = join(UPLOAD_DIR, kbId);
-    const storagePath = join(storageDir, `${documentId}${ext}`);
-
-    await mkdir(storageDir, { recursive: true });
-    await writeFile(storagePath, file.buffer);
+    // 2) 通过 StorageService 上传（本地磁盘 / 七牛云 自动切换）
+    const uploaded = await this.storageService.upload(
+      file.buffer,
+      file.originalname,
+      `documents/${kbId}`,
+    );
 
     // 3) 创建文档记录（状态 UPLOADED → 等待队列处理）
     const doc = await this.documentService.create({
       knowledgeBaseId: kbId,
       fileName: file.originalname,
       fileType: EXT_TO_TYPE[ext] ?? ext.replace('.', '').toUpperCase(),
-      fileSize: file.size,
-      storagePath,
+      fileSize: uploaded.size,
+      storagePath: uploaded.key,
       mimeType: file.mimetype,
       status: 'UPLOADED',
     });
@@ -107,7 +106,7 @@ export class DocumentsController {
       {
         documentId: doc.id,
         knowledgeBaseId: kbId,
-        storagePath,
+        storagePath: uploaded.key,
       },
       {
         attempts: 3,

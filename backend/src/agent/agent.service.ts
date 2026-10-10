@@ -39,16 +39,12 @@ export interface AgentRunOptions {
 /** 系统预设 Agent（启动时或首次访问时自动创建） */
 const SYSTEM_AGENTS = [
   {
-    name: 'AWS',
-    description:
-      'AWS 云服务专家，帮助你查询和理解 AWS 服务、架构最佳实践、定价与安全合规。',
+    name: 'meibus',
+    description: '默认聊天助手',
     type: 'CUSTOM' as AgentType,
     isDefault: true,
     model: 'qwen2.5:7b',
-    systemPrompt:
-      '你是一个 AWS 云服务专家助手。你可以帮助用户理解 AWS 服务、架构设计、最佳实践、定价和安全合规等问题。\n\n' +
-      '当用户询问具体的 AWS 服务时，提供清晰、准确的说明。当用户需要架构建议时，结合 AWS Well-Architected Framework 给出建议。\n\n' +
-      '如果问题超出你的知识范围，坦诚告知用户。',
+    systemPrompt: '你是一个友好、专业的 AI 助手。直接回答用户问题即可。',
   },
 ];
 

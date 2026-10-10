@@ -5,12 +5,14 @@ import { DocumentParserService } from '../../knowledge/documents/document-parser
 import { ChunkService } from '../../knowledge/documents/chunk/chunk.service';
 import { EmbeddingService } from '../../knowledge/embedding/embedding.service';
 import { VectorStoreService } from '../../knowledge/vector/vector-store.service';
+import { StorageService } from '../../storage/storage.service';
+import { unlink } from 'node:fs/promises';
 
 /** document-processing Queue 的 Job 数据结构 */
 export interface ProcessDocumentJobData {
   documentId: string;
   knowledgeBaseId: string;
-  storagePath: string;
+  storagePath: string; // local: 绝对路径；qiniu: 对象 Key
 }
 
 @Processor('document-processing')
@@ -21,6 +23,7 @@ export class DocumentProcessor extends WorkerHost {
     private readonly chunkService: ChunkService,
     private readonly embeddingService: EmbeddingService,
     private readonly vectorStoreService: VectorStoreService,
+    private readonly storageService: StorageService,
   ) {
     super();
   }
@@ -37,6 +40,10 @@ export class DocumentProcessor extends WorkerHost {
       where: { id: documentId },
       data: { status: 'PROCESSING' },
     });
+
+    // 七牛云模式会先下载到临时文件，需要在 finally 中清理
+    let tempPath: string | null = null;
+    let localPath = storagePath;
 
     try {
       // --- 幂等保护：重试时先清理上一次残留的 chunks ---
@@ -60,7 +67,14 @@ export class DocumentProcessor extends WorkerHost {
       await job.updateProgress(10);
 
       // 2. 解析 → 纯文本
-      const text = await this.documentParserService.parse(storagePath);
+      // 通过 StorageService 解析出可读取的本地路径（七牛云会先下载到临时文件）
+      localPath = await this.storageService.getLocalPath(storagePath);
+      // 如果存储类型是七牛云，localPath 是下载的临时文件，需要后续清理
+      if (this.storageService.type === 'qiniu') {
+        tempPath = localPath;
+      }
+
+      const text = await this.documentParserService.parse(localPath);
 
       await job.updateProgress(30);
 
@@ -123,6 +137,15 @@ export class DocumentProcessor extends WorkerHost {
       });
 
       throw error;
+    } finally {
+      // 清理七牛云下载的临时文件
+      if (tempPath) {
+        try {
+          await unlink(tempPath);
+        } catch {
+          // 临时文件可能已被清理，静默忽略
+        }
+      }
     }
   }
 

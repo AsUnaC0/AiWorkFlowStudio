@@ -11,6 +11,12 @@ const router = createRouter({
       redirect: "/chat",
       children: [
         {
+          path: "dashboard",
+          name: "Dashboard",
+          component: () => import("@/views/dashboard/index.vue"),
+          meta: { title: "控制台" },
+        },
+        {
           path: "chat",
           name: "Chat",
           component: () => import("@/views/chat/index.vue"),

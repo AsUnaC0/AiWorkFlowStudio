@@ -19,7 +19,9 @@ export class ChatSessionService {
 
   /** 校验用户对 Agent 有访问权限 */
   private async assertAgentAccessible(agentId: string, userId: string) {
-    const agent = await this.prisma.agent.findUnique({ where: { id: agentId } });
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: agentId },
+    });
     if (!agent) throw new NotFoundException('Agent 不存在');
     if (!agent.isSystem && agent.createdBy !== userId) {
       throw new ForbiddenException('无权访问此 Agent');

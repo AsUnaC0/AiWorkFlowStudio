@@ -15,6 +15,7 @@ const router = useRouter();
 
 // 根据当前路由计算高亮菜单
 const activeMenu = computed(() => {
+  if (route.path === "/dashboard") return "/dashboard";
   if (route.path.startsWith("/workspace")) return "/workspace";
   if (route.path.startsWith("/knowledge")) return "/knowledge";
   if (route.path.startsWith("/friends")) return "/friends";
@@ -96,6 +97,19 @@ const menuGroups = computed(() => [
         labelZh: "好友",
         icon: "usergroup",
         badge: null,
+      },
+    ],
+  },
+  {
+    id: "overview",
+    title: "OVERVIEW",
+    items: [
+      {
+        value: "/dashboard",
+        label: "Dashboard",
+        labelZh: "控制台",
+        icon: "dashboard",
+        badge: null as string | null,
       },
     ],
   },

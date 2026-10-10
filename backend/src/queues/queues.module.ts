@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
+import { StorageModule } from '../storage/storage.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { WorkflowsModule } from '../workflows/workflows.module';
 import { DocumentProcessor } from './document-processing/document.processor';
@@ -17,7 +18,7 @@ import { WorkflowProcessor } from './workflow-execution/workflow.processor';
  *   queues.module.ts
  */
 @Module({
-  imports: [PrismaModule, KnowledgeModule, WorkflowsModule],
+  imports: [PrismaModule, StorageModule, KnowledgeModule, WorkflowsModule],
   providers: [DocumentProcessor, WorkflowProcessor],
 })
 export class QueuesModule {}

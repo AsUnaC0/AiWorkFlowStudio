@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from '../prisma/prisma.module';
+import { StorageModule } from '../storage/storage.module';
 import { KnowledgeService } from './knowledge.service';
 import { KnowledgeController } from './knowledge.controller';
 import { DocumentsController } from './documents/documents.controller';
@@ -18,6 +19,7 @@ import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.servi
 @Module({
   imports: [
     PrismaModule,
+    StorageModule,
     BullModule.registerQueue({
       name: 'document-processing',
     }),

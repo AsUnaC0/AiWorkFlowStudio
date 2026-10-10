@@ -3,8 +3,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { unlink } from 'node:fs/promises';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../../storage/storage.service';
 
 /**
  * Document 基础服务层——负责文档元数据 CRUD + 物理文件管理。
@@ -13,7 +13,10 @@ import { PrismaService } from '../../prisma/prisma.service';
  */
 @Injectable()
 export class DocumentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storageService: StorageService,
+  ) {}
 
   /** 获取某个知识库下的全部文档 */
   async findByKnowledgeBase(knowledgeBaseId: string) {
@@ -84,12 +87,8 @@ export class DocumentService {
     });
     if (!doc) throw new NotFoundException('Document not found');
 
-    // 先删磁盘文件（删不掉不阻塞 DB 记录，只打 warn）
-    try {
-      await unlink(doc.storagePath);
-    } catch {
-      // 文件可能被手动清理过，静默忽略
-    }
+    // 通过 StorageService 删除（local → unlink，qiniu → 七牛云删除）
+    await this.storageService.delete(doc.storagePath);
 
     await this.prisma.document.delete({ where: { id } });
 
