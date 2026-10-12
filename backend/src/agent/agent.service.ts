@@ -394,13 +394,6 @@ export class AgentService {
       agent.knowledgeBaseIds,
     );
 
-    this.logger.log(
-      `run agent "${agent.name}" → tools=${tools.length} (workflowIds=${agent.workflowIds?.length ?? 0} kbIds=${agent.knowledgeBaseIds?.length ?? 0})` +
-        (tools.length > 0
-          ? ` [${tools.map((t) => t.function.name).join(', ')}]`
-          : '（无工具可用——检查 workflowIds 是否已发布）'),
-    );
-
     // 4. 持久化用户消息
     if (options.sessionId) {
       await this.prisma.chatMessage.create({

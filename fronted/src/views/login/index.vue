@@ -26,7 +26,6 @@
       </div>
       <div class="deco-bg" />
     </div>
-    ```
 
     <!-- 右侧表单区 -->
     <div class="login-form-area">
@@ -64,7 +63,7 @@
 
           <button type="submit" class="submit-btn" :class="{ loading }" :disabled="loading">
             <span v-if="loading" class="btn-spinner" />
-            <span>{{ isRegister ? "Create Account" : "Sign In" }}</span>
+            <span>{{ isRegister ? "创建账号" : "登录" }}</span>
           </button>
         </t-form>
 

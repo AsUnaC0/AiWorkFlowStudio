@@ -144,11 +144,24 @@ export class CreateKnowledgeBaseDto {
   @IsOptional() @IsString() @MaxLength(1000) description?: string;
   @IsString() @IsNotEmpty() @MaxLength(100) embeddingModel: string;
   @IsInt() @Min(1) @Max(8192) embeddingDimension: number;
+  /** ★ 关联用户在「模型管理」中添加的 Embedding 模型 id（优先于 embeddingModel） */
+  @IsOptional() @IsString() @MaxLength(100) embeddingLlmModelId?: string;
 }
 ```
 
 前端默认提交 `embeddingModel: "nomic-embed-text"`、`embeddingDimension: 768`。
 **这是一对容易配错的参数**：必须和 Ollama 里真实存在的模型、模型真实输出维度一致（第 5 节讲症状）。
+
+> **★ 新增的 `embeddingLlmModelId` 是什么？**
+> 它是第 10 篇「模型管理」的产物：如果用户在 `/providers` 里配了一个云端 Embedding 模型（比如某家的 `bge-large`），
+> 就能在这里填上它的 id，**建库时用云端模型算向量，而不用本地 Ollama**。
+>
+> 两个字段是**二选一、前者优先**：
+> - 传了 `embeddingLlmModelId` → 走 `LlmConfigService.resolveModelRuntime()`，用用户的 Provider + 真实模型名；
+> - 没传（`null`）→ 回退到全局 Ollama + `embeddingModel` 字段。
+>
+> ⚠️ **建库用哪个模型，检索时就必须用哪个模型**——向量是模型特有的，混用会检索出乱七八糟的结果。
+> 所以检索时（§4.7 / §5）后端会**优先取知识库绑定的 `embeddingLlmModelId`**，保证和写入时一致。
 
 **删除会清掉底层存储文件（两种删，现已一致）：**
 
@@ -518,18 +531,57 @@ await this.chunkService.createMany(documentId, knowledgeBaseId, chunks);
 ### 4.7 批量向量化 `EmbeddingService`
 
 ```typescript
-async embedBatch(texts: string[], model: string): Promise<number[][]> {
-  for (let i = 0; i < texts.length; i += BATCH_SIZE) {   // 每批 100 条
-    ...
-    const result = await this.aiService.embedding(batch, { model });
+async embedBatch(
+  texts: string[],
+  model: string,                        // 本地 Ollama embedding 模型名（回退用）
+  llmModelId?: string | null,           // ★ 用户在「模型管理」里加的 Embedding 模型 id
+): Promise<number[][]> {
+  let backend: AiProvider = this.aiService.getProvider();   // 默认全局 Ollama
+  let modelName = model;
+  if (llmModelId) {                                          // ★ 传了就换成用户的 Provider
+    const runtime = await this.llmConfigService.resolveModelRuntime(llmModelId);
+    backend = runtime.provider;
+    modelName = runtime.modelId;
+  }
+
+  for (let i = 0; i < texts.length; i += BATCH_SIZE) {      // 每批 100 条
+    const batch = texts.slice(i, i + BATCH_SIZE);
+    const result = await backend.embedding(batch, { model: modelName });
     allVectors.push(...result.embeddings);
   }
 }
 ```
 
+**调用方**（`document.processor.ts`）会把知识库的两个字段都读出来传进去——这就是「建库用哪个模型、向量化就用哪个模型」的保证：
+
+```typescript
+const kb = await this.prisma.knowledgeBase.findUnique({
+  where: { id: knowledgeBaseId },
+  select: { embeddingModel: true, embeddingLlmModelId: true },   // ★ 两个都取
+});
+const vectors = await this.embeddingService.embedBatch(
+  storedChunks.map((c) => c.content),
+  kb.embeddingModel,
+  kb.embeddingLlmModelId,      // ← 有自定义模型就用它，没有就 null → 回退 Ollama
+);
+```
+
 - 交给 `AIService` → Ollama **`/api/embeddings`**（⚠️ 旧文档写的 `/api/embed` 是错的，少了结尾的 `s`）
 - **一批 100 条**，防止单次请求体太大
 - `model` 必须和 `nomic-embed-text` 一致（取决于你建库时填的）
+- ★ **维度校验**：向量化后立即检查维度，不匹配就抛可读错误（见下）
+
+> **★ 维度校验（`document.processor.ts:115-121`）**
+> ```typescript
+> const dim = vectors[0]?.length;
+> if (dim !== undefined && dim !== EMBEDDING_DIMENSION) {   // EMBEDDING_DIMENSION = 768
+>   throw new Error(
+>     `Embedding 维度不匹配：所选模型输出 ${dim} 维，但知识库向量列固定为 ${EMBEDDING_DIMENSION} 维。` +
+>     `请改用 ${EMBEDDING_DIMENSION} 维的 Embedding 模型（如 Ollama nomic-embed-text）。`,
+>   );
+> }
+> ```
+> 因为 pgvector 的列被**硬编码成 `vector(768)`**（见 §4.9），任何输出非 768 维的模型（比如很多云端模型是 1024 / 1536 维）都会在这里被**提前拦下**，给出人话错误，而不是等 `UPDATE` 时数据库报一句天书。
 
 > **⚠️ 「一批 100 条」≠ 一次请求**：`ollama.provider.ts:135-155` 的实际实现是
 > ```typescript
@@ -543,7 +595,7 @@ async embedBatch(texts: string[], model: string): Promise<number[][]> {
 > **Ollama 没有批量 embeddings 接口**，只能一条一条请求。
 > 所以 `BATCH_SIZE = 100` 只是把大任务**分成若干组**避免内存峰值，**并没有减少 HTTP 请求次数**——
 > 1000 个 chunk 就是 1000 次 HTTP 往返。这是「上传大文档慢」的主要原因之一。
-> 想加速的话，可以改成 `Promise.all` 并发（注意限流）或换支持批量的 embedding 服务。
+> 想加速的话，可以改成 `Promise.all` 并发（注意限流）或换支持批量的 embedding 服务（如用户自配的云端模型）。
 
 ### 4.8 ★ 批量写向量：一次 UPDATE 100 个 chunk
 
@@ -617,6 +669,42 @@ model DocumentChunk {
 | **vector** | `embedding <=> query` 余弦距离 | 语义相近但字面不同的提问 |
 | **keyword** | PostgreSQL `to_tsvector` 全文检索 | 精确名词（型号、人名、专有名词） |
 | **hybrid** | 两路并跑 + RRF 融合 | ★ 日常推荐（默认） |
+
+### 5.1.1 ★ 查询向量用哪个 Embedding 模型？（`resolveEmbedding`）
+
+检索的第一步是把用户的**问题**也变成向量，再拿去和库里的向量比距离。**问题用哪个模型编码，必须和当初写库时一致**，否则等于拿中文词典去查英文句子。
+
+`knowledge-retrieval.service.ts` 的 `resolveEmbedding()` 负责这个决策，规则是**三档优先级**：
+
+```typescript
+private async resolveEmbedding(model: string | undefined, knowledgeBaseIds: string[]) {
+  // ① 调用方显式传了 model（Ollama 模型名）→ 直接用，不带 llmModelId
+  if (model) return { model, llmModelId: null };
+
+  // ② 一个知识库都没选 → 兜底本地 nomic-embed-text
+  if (knowledgeBaseIds.length === 0) return { model: 'nomic-embed-text', llmModelId: null };
+
+  // ③ 否则取「第一个知识库」绑定的模型：自定义 Embedding 模型 id 优先，回退本地模型名
+  const kb = await this.prisma.knowledgeBase.findUnique({
+    where: { id: knowledgeBaseIds[0] },
+    select: { embeddingModel: true, embeddingLlmModelId: true },
+  });
+  return {
+    model: kb?.embeddingModel ?? 'nomic-embed-text',
+    llmModelId: kb?.embeddingLlmModelId ?? null,   // ★ 有就传给 embedBatch 走用户 Provider
+  };
+}
+```
+
+| 档位 | 条件 | 用什么编码问题 |
+|------|------|--------------|
+| ① | 调用方显式传 `embeddingModel` | 就用它（不带自定义模型） |
+| ② | 没选知识库 | 本地 `nomic-embed-text` |
+| ③ | 选了知识库 | **第一个库**绑定的模型：`embeddingLlmModelId` 优先 → 否则 `embeddingModel` |
+
+> **⚠️ 只取第一个知识库的模型**：RAG 节点可以同时选多个库，但这里只读 `knowledgeBaseIds[0]` 的配置。
+> 所以**多库混用不同 embedding 模型时，只有第一个库的模型生效**——这是个已知限制（见 §7）。
+> 实践建议：一个 RAG 节点尽量选**同一套 embedding 模型**建的知识库。
 
 ### 5.2 向量检索（`vectorSearch`）
 
@@ -796,6 +884,9 @@ RAG 节点（第 4 篇讲过）把 hits 拼成：
 | 13 | ★ **`document.service.ts` 的 `updateStatus` 成了死代码** | 异步化后 Processor 直接用 `prisma.document.update`，没人调它 | 可以删，或让 Processor 改用它 |
 | 14 | ★ **幂等保护只清了 chunk，没清向量** | 删的是 `DocumentChunk` 行（向量跟着行一起没），但如果以后把向量存到外部服务（Qdrant / Milvus）就漏了 | 目前向量在 pgvector 里所以安全；换外部向量库时这里要一起清 |
 | 15 | ★ **进度条是假的** | 页面写死 `percentage="60"`；`job.updateProgress(10/30/50/80/100)` 的真值没出口给前端 | 要接 `QueueEvents` + SSE，或让 `getDocument` 返回进度字段 |
+| 16 | ★ **自定义 Embedding 模型维度可能不是 768** | 云端模型常是 1024 / 1536 维，写库时被维度校验拦下、文档 `FAILED` | 要么改用 768 维模型，要么把 `embedding` 列和 `EMBEDDING_DIMENSION` 一起改成对应维度（需手写 migration） |
+| 17 | ★ **多库混用不同 Embedding 模型** | 检索时只取**第一个知识库**的模型（`knowledgeBaseIds[0]`），其余库的向量用错模型编码，召回质量下降 | 一个 RAG 节点只选同一套 embedding 模型建的知识库；或按模型分组、分多个 RAG 节点 |
+| 18 | ★ **`embeddingLlmModelId` 是软引用（无外键）** | 用户在「模型管理」删掉该模型后，知识库仍指向一个不存在的 id，向量化时 `resolveModelRuntime` 抛错 | 删除模型前校验引用，或运行时做存在性检查 + 优雅回退本地模型 |
 
 ---
 
@@ -839,7 +930,10 @@ SELECT "fileName", "status", "errorMessage" FROM "Document" ORDER BY "createdAt"
 | **前端跟进** | `detail.vue` 每 2s 轮询文档列表，有 `UPLOADED`/`PROCESSING` 就刷 |
 | **支持格式** | PDF（pdf-parse）、TXT/MD（readFile）；DOCX **未实现** |
 | **切块** | ★ chunkSize **100** / overlap **50**（旧版 1000/200，本次调小） |
-| **向量化** | `EmbeddingService.embedBatch` 每批 100 条，用**知识库**配置的模型 |
+| **向量化** | `EmbeddingService.embedBatch` 每批 100 条，用**知识库**配置的模型（`embeddingLlmModelId` 优先，回退 `embeddingModel`） |
+| **★ 建库的 Embedding 模型** | `CreateKnowledgeBaseDto.embeddingLlmModelId`（可选）：传了用云端模型，没传回退本地 Ollama；**写入和检索必须用同一个模型** |
+| **★ 检索用哪个模型** | `resolveEmbedding()` 三档：显式传 > 无库兜底 `nomic-embed-text` > **第一个知识库**绑定的模型 |
+| **★ 维度校验** | 向量化后比对 `EMBEDDING_DIMENSION = 768`，不符提前抛可读错误，避免写库时才炸 |
 | **写库** | `unnest($1, $2)` 一条 SQL 批量更新 embedding 列 |
 | **向量检索** | `embedding <=> query` 余弦距离，`≤ threshold` 保留，升序取 topK |
 | **关键词检索** | PostgreSQL `to_tsvector('simple') @@ plainto_tsquery` + `ts_rank` |
