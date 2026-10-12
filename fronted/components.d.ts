@@ -13,7 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     CustomNode: typeof import('./src/components/workflow/CustomNode.vue')['default']
     ExcelPreview: typeof import('./src/components/files/ExcelPreview.vue')['default']
-    FilePreviewDialog: typeof import('./src/components/files/FilePreviewDialog.vue')['default']
+    FilePreviewDrawer: typeof import('./src/components/files/FilePreviewDrawer.vue')['default']
     GeneratedFileCard: typeof import('./src/components/files/GeneratedFileCard.vue')['default']
     ImagePreview: typeof import('./src/components/files/ImagePreview.vue')['default']
     MarkdownPreview: typeof import('./src/components/files/MarkdownPreview.vue')['default']

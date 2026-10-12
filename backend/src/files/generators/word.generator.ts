@@ -3,6 +3,7 @@ import {
   BorderStyle,
   Document,
   HeadingLevel,
+  LevelFormat,
   Packer,
   Paragraph,
   Table,
@@ -11,6 +12,7 @@ import {
   TextRun,
   WidthType,
 } from 'docx';
+import { canonicalizeOpcPackage } from './opc.util';
 import type { DocBlock, DocumentContent } from '../types/generated-file.types';
 
 /**
@@ -73,10 +75,30 @@ export async function generateWord(
     creator: meta.author ?? 'AI WorkFlow Studio',
     title: title ?? '未命名文档',
     description: content.summary ?? '',
+    // numbers 段落通过 numbering: { reference: 'default-numbering' } 引用此定义；
+    // 若不显式注册，Word 会因引用不存在的 numId 判定「内容有问题」而拒绝打开。
+    numbering: {
+      config: [
+        {
+          reference: 'default-numbering',
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.DECIMAL,
+              text: '%1.',
+              alignment: AlignmentType.START,
+            },
+          ],
+        },
+      ],
+    },
     sections: [{ properties: {}, children }],
   });
 
-  return await Packer.toBuffer(doc);
+  const raw = await Packer.toBuffer(doc);
+  // Word 的 OPC 读取器要求 `[Content_Types].xml` 是包内第一个部件；
+  // docx 库默认追加在末尾，需重打包置顶，否则 Word 报「无法读取内容」。
+  return canonicalizeOpcPackage(raw);
 }
 
 function renderBlock(block: DocBlock): (Paragraph | Table)[] {

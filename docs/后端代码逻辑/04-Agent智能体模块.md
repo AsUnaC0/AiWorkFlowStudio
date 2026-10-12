@@ -34,6 +34,10 @@ model Agent {
   mcpServerIds     String[]     // 绑定的 MCP Server
   
   maxToolIterations Int        // ReAct 循环最大轮数（默认 10）
+  temperature      Float       // 0.7
+
+  /** 是否允许调用 generate_file 生成 Word / Excel / PDF 文件（默认 true） */
+  enableFileGeneration Boolean @default(true)
 }
 ```
 
@@ -222,12 +226,23 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 ### buildDefinitions() — 生成 LLM 可见的 ToolDefinition
 
 ```typescript
-async buildDefinitions(workflowIds: string[], knowledgeBaseIds: string[]): Promise<ToolDefinition[]> {
+async buildDefinitions(
+  workflowIds: string[],
+  knowledgeBaseIds: string[],
+  options: { enableFileGeneration?: boolean } = {},
+): Promise<ToolDefinition[]> {
   const workflowDefs = await this.workflowTool.buildDefinitions(workflowIds);
   const knowledgeDefs = await this.knowledgeTool.buildDefinitions(knowledgeBaseIds);
-  return [...workflowDefs, ...knowledgeDefs];
+
+  const defs: ToolDefinition[] = [...workflowDefs, ...knowledgeDefs];
+  if (options.enableFileGeneration !== false) {
+    defs.push(this.generateFileTool.buildDefinition());   // 内置能力
+  }
+  return defs;
 }
 ```
+
+> `generate_file` 是**内置工具**，不依赖任何绑定资源，只由 `Agent.enableFileGeneration`（默认 `true`）开关。调用方传的是 `{ enableFileGeneration: agent.enableFileGeneration !== false }`。
 
 ### executeTool() — 路由执行
 
@@ -243,6 +258,10 @@ async executeTool(toolName: string, args, context) {
     return this.knowledgeTool.execute(args, context);
   }
 
+  if (toolName === GENERATE_FILE_TOOL_NAME) {   // 'generate_file'
+    return this.generateFileTool.execute(args, context);
+  }
+
   throw new Error(`未知工具: ${toolName}`);
 }
 ```
@@ -252,6 +271,27 @@ async executeTool(toolName: string, args, context) {
 |---|---|---|
 | `workflow_{uuid}` | WorkflowTool | 执行绑定的工作流 |
 | `knowledge_search` | KnowledgeTool | 在绑定的知识库中搜索 |
+| `generate_file` | GenerateFileTool | 生成 Word / Excel / PDF / Markdown / CSV 文件 |
+
+---
+
+## 三·五、GenerateFileTool — 文件生成工具
+
+**文件路径**：`backend/src/agent/tools/generate-file.tool.ts`
+
+**唯一必填参数**是 `format`（枚举 `docx / xlsx / pdf / md / csv`），其余按类型选填：
+- 文档类：`markdown`（推荐）或 `blocks`
+- 表格类：`sheets`（可多工作表）或 `columns` + `rows`
+
+执行成功后：
+
+```typescript
+context.files?.push(file);   // 回传给 AgentService → 推 SSE file 事件 + 关联消息
+```
+
+**失败不抛异常**，而是返回一段提示文本让模型自己修正参数后重试（"请检查参数（format 是否支持、内容是否为空）"），这样 ReAct 循环不会因为一次参数错误就整体崩掉。
+
+> 完整的生成 / 存储 / 预览 / Word 兼容性逻辑见 **[09 - 文件生成模块](./09-文件生成模块.md)**。
 
 ---
 

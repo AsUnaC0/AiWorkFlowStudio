@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FileGeneratorService } from './file-generator.service';
 import { FileStorageService } from './file-storage.service';
 import { FilePreviewService } from './file-preview.service';
+import { repairDocx } from './generators/word.repair';
 import type {
   FilePreviewPayload,
   GenerateFileInput,
@@ -89,10 +90,37 @@ export class FilesService {
     return this.toDto(file);
   }
 
-  /** 读取文件二进制（代理下载 / 预览用） */
+  /**
+   * 读取文件二进制（代理下载 / 预览用）。
+   *
+   * 对历史遗留的 .docx 做一次兼容性修复后再返回：
+   * 早期版本产出的文件带两类缺陷（`[Content_Types].xml` 不在 zip 首位、
+   * `w:numId` 为未解析的占位符），前端预览库能渲染但 Microsoft Word 会报
+   * 「无法读取内容」。这里在**读取时**修复，用户无需重新生成即可正常下载打开。
+   */
   async readRaw(userId: string, id: string) {
     const file = await this.assertOwned(userId, id);
-    const buffer = await this.storage.read(file.storageKey);
+    let buffer = await this.storage.read(file.storageKey);
+
+    if (file.format === 'docx') {
+      try {
+        const { buffer: fixed, changed, notes } = await repairDocx(buffer);
+        if (changed) {
+          buffer = fixed;
+          this.logger.log(
+            `[Files] 已修复历史 docx ${file.id} (${file.fileName})：${notes.join('；')}`,
+          );
+        }
+      } catch (err) {
+        // 修复失败不阻断下载，返回原始文件
+        this.logger.warn(
+          `[Files] docx 兼容性修复失败，返回原始文件 ${file.id}：${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
     return { file, buffer };
   }
 

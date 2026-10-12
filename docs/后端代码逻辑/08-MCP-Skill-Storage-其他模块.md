@@ -295,20 +295,28 @@ if (!workspace) throw new ForbiddenException('无权访问');
 
 **文件路径**：`backend/src/dashboard/dashboard.service.ts`
 
-按用户 Workspace 权限过滤的 7 个统计接口。所有查询都先 `getUserWorkspaceIds(userId)`（owner OR member 的 workspace 列表），再以此为过滤条件。
+按用户 Workspace 权限过滤的 **10 个**统计接口。所有查询都先 `getUserWorkspaceIds(userId)`（owner OR member 的 workspace 列表），再以此为过滤条件。
 
 | # | 接口 | 实际返回 |
 |---|---|---|
-| 1 | `GET /dashboard/overview` | `periodDays`(7) + `workflows{ total, published, runCount, runCompleted, runFailed, runQueued, runRunning, successRate, avgDurationMs }` + `knowledgeBases{ total, documents }` + `agents.total` + `skills.total` + `mcpServers.total` + `tokenUsage`（**恒为 0**，未实现） |
+| 1 | `GET /dashboard/overview?days=7` | `periodDays` + `workflows{ total, published, runCount, runCompleted, runFailed, runQueued, runRunning, running, successRate, avgDurationMs, p95DurationMs, failedLast24h }` + `knowledgeBases{ total, documents }` + `agents.total` + `skills.total` + `mcpServers.total` + **`tokenUsage`（真实值）** + **`modelCalls`** |
 | 2 | `GET /dashboard/workflows/trend?days=7` | 按天补齐的日期序列 `[{ date, total, success, failed }]`（**空缺日期补 0**，不是只返回有数据的天） |
 | 3 | `GET /dashboard/workflows/status?days=7` | `{ COMPLETED, FAILED, RUNNING, QUEUED }` 计数 |
 | 4 | `GET /dashboard/nodes/performance?limit=10` | **按 nodeType 聚合的平均耗时**（近 30 天）`[{ nodeType, avgDurationMs, count, failedCount }]`，按均耗时倒序取 Top limit —— 不是"最慢的单条 NodeRun" |
 | 5 | `GET /dashboard/knowledge-bases/status` | `{ total, completed, processing, failed, uploaded, completionRate }` |
 | 6 | `GET /dashboard/recent-activities?limit=10` | 同时返回 `{ workflowRuns: [...], documents: [...] }`，各取 **limit 条（默认 10，不是 20）** |
 | 7 | `GET /dashboard/queues/overview` | `{ waiting, active, completed, failed, delayed, oldestWaiting }` |
+| 8 | `GET /dashboard/workflow-runs` | 运行记录列表 + 分页。筛选 `status` / `errorCode` / `triggerType` / `days` / `page` / `pageSize`（pageSize 上限 100）。每条附带**首个失败节点** `failedNode` / `failedNodeType` / `failedNodeError` |
+| 9 | `GET /dashboard/workflow-runs/:runId` | 运行详情：概览 + `nodes[]`（节点追踪）+ `modelCalls[]`。**IO 经过 `desensitize()` 脱敏**后再返回 |
+| 10 | `GET /dashboard/model-usage?days=7` | Token / 延迟 / 失败率 / 费用，含 `byModel[]` 按模型聚合 |
 
 > ⚠️ **第 7 个接口并没有调 BullMQ 的 Queue API**。它是按 `WorkflowRun.status` 在数据库里 count 出来的（QUEUED→waiting、RUNNING→active、COMPLETED→completed、FAILED→failed），`delayed` 恒为 0。所以如果 Job 还在 Redis 里没落库，这里看不到。
-> `tokenUsage` 同样是硬编码的 0——目前没有任何地方记录 token 消耗。
+>
+> ✅ **更新（原文档写"tokenUsage 恒为 0"已过期）**：新增 `ModelCallLog` 表后，overview 的 `tokenUsage` 取的是 `ModelCallLog.totalTokens` 的真实聚合值，`modelCalls` 是同期的调用次数。数据由 `AiService.recordModelCall()` 在 LLM 节点执行时写入，**仅在 `workspaceId` 存在时落库**（fire-and-forget，吞异常）。
+>
+> ⚠️ **没有 workspaceId 的调用不记账**——Agent 聊天链路目前不写 `ModelCallLog`，所以控制台的 Token 统计只覆盖**工作流**产生的调用。
+>
+> `p95DurationMs` 是内存里排序取的**第 95 百分位**（`durations[Math.floor(len * 0.95)]`），不是精确 P95 算法；`durationMs` 缺失时会用 `completedAt - startedAt` 兜底。
 
 ---
 

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { MessagePlugin } from "tdesign-vue-next";
 import { getFilePreview, downloadFile } from "@/api/files";
-import type { FilePreviewPayload, GeneratedFile } from "@/types/files";
+import { formatFileSize, type FilePreviewPayload, type GeneratedFile } from "@/types/files";
 import PdfPreview from "./PdfPreview.vue";
 import ImagePreview from "./ImagePreview.vue";
 import MarkdownPreview from "./MarkdownPreview.vue";
@@ -63,17 +63,22 @@ const close = () => emit("update:visible", false);
 </script>
 
 <template>
-  <t-dialog
+  <t-drawer
     :visible="visible"
-    :header="file?.fileName ?? '文件预览'"
-    :width="'min(960px, 92vw)'"
+    drawer-class-name="file-preview-drawer"
+    placement="right"
+    size="min(920px, 94vw)"
     :footer="false"
-    top="6vh"
+    :close-on-overlay-click="true"
     @close="close"
   >
     <template #header>
-      <div class="dialog-header">
-        <span class="title">{{ file?.fileName }}</span>
+      <div class="drawer-header">
+        <div class="file-title">
+          <span class="title" :title="file?.fileName">{{ file?.fileName ?? "文件预览" }}</span>
+          <span v-if="file" class="meta">{{ formatFileSize(file.size) }}</span>
+        </div>
+
         <t-button
           size="small"
           variant="outline"
@@ -111,16 +116,23 @@ const close = () => emit("update:visible", false);
 
       <pre v-else class="text-preview">{{ payload.text || "（空文件）" }}</pre>
     </div>
-  </t-dialog>
+  </t-drawer>
 </template>
 
 <style scoped lang="less">
-.dialog-header {
+.drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   width: 100%;
+
+  .file-title {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
 
   .title {
     font-size: 15px;
@@ -129,12 +141,30 @@ const close = () => emit("update:visible", false);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  .meta {
+    flex-shrink: 0;
+    font-size: 12px;
+    color: #a1a1aa;
+  }
 }
 
 .preview-body {
-  min-height: 300px;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: auto;
+
+  /* 抽屉内可用纵向空间更大，交给外层统一滚动，取消子组件的高度上限 */
+  :deep(.word-preview),
+  :deep(.markdown-preview) {
+    max-height: none;
+  }
+
+  :deep(.table-wrap) {
+    max-height: none;
+  }
 }
 
 .state {
@@ -153,12 +183,23 @@ const close = () => emit("update:visible", false);
 
 .text-preview {
   margin: 0;
-  max-height: 60vh;
+  padding: 16px;
   overflow: auto;
   font-size: 13px;
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
+}
+</style>
+
+<!-- 抽屉挂到 body 上，teleport 后拿不到 scoped 的 data-v，用 drawer-class-name 限定作用域 -->
+<style lang="less">
+.file-preview-drawer {
+  .t-drawer__body {
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
 }
 </style>

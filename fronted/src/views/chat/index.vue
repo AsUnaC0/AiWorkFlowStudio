@@ -19,7 +19,7 @@ import { AGENT_TEMPLATES, type AgentType } from "@/types/agent";
 import type { GeneratedFile } from "@/types/files";
 import { downloadFile } from "@/api/files";
 import GeneratedFileCard from "@/components/files/GeneratedFileCard.vue";
-import FilePreviewDialog from "@/components/files/FilePreviewDialog.vue";
+import FilePreviewDrawer from "@/components/files/FilePreviewDrawer.vue";
 import { getLlmModels } from "@/api/provider";
 import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
@@ -767,8 +767,8 @@ const formatToolResult = (result?: string) => {
       </template>
     </main>
 
-    <!-- 文件预览弹窗 -->
-    <FilePreviewDialog v-model:visible="previewVisible" :file="activeFile" />
+    <!-- 文件预览抽屉（右侧滑出） -->
+    <FilePreviewDrawer v-model:visible="previewVisible" :file="activeFile" />
 
     <!-- 创建 Agent 对话框 -->
     <t-dialog v-model:visible="showCreateDialog" header="创建 Agent" :footer="false" :width="480"
