@@ -10,6 +10,9 @@ import {
   getKnowledgeStatus,
   getRecentActivities,
   getQueueOverview,
+  getWorkflowRuns,
+  getWorkflowRunDetail,
+  getModelUsage,
   type DashboardOverview,
   type WorkflowTrendItem,
   type WorkflowStatusMap,
@@ -17,6 +20,9 @@ import {
   type KnowledgeStatus,
   type RecentActivities,
   type QueueOverview,
+  type ModelUsage,
+  type WorkflowRunItem,
+  type WorkflowRunDetail,
 } from "@/api/dashboard";
 
 // ===========================================================================
@@ -36,6 +42,23 @@ const knowledgeStatus = ref<KnowledgeStatus | null>(null);
 const recentActivities = ref<RecentActivities | null>(null);
 const queueOverview = ref<QueueOverview | null>(null);
 
+// 模型调用统计
+const modelUsage = ref<ModelUsage | null>(null);
+
+// 运行记录列表（筛选 + 分页）
+const runs = ref<WorkflowRunItem[]>([]);
+const runsTotal = ref(0);
+const runsPage = ref(1);
+const runsPageSize = ref(10);
+const runStatusFilter = ref("");
+const runErrorCodeFilter = ref("");
+
+// 运行详情抽屉
+const drawerVisible = ref(false);
+const runDetailLoading = ref(false);
+const runDetail = ref<WorkflowRunDetail | null>(null);
+const detailTab = ref<"overview" | "nodes" | "logs" | "models">("overview");
+
 // ===========================================================================
 // ECharts 实例管理
 // ===========================================================================
@@ -45,6 +68,7 @@ const chartRefs = {
   node: ref<HTMLDivElement>(),
   knowledge: ref<HTMLDivElement>(),
   queue: ref<HTMLDivElement>(),
+  modelToken: ref<HTMLDivElement>(),
 };
 const charts: Record<string, echarts.ECharts | null> = {
   trend: null,
@@ -52,6 +76,7 @@ const charts: Record<string, echarts.ECharts | null> = {
   node: null,
   knowledge: null,
   queue: null,
+  modelToken: null,
 };
 let resizeTimer: number | null = null;
 
@@ -97,6 +122,8 @@ const loadAll = async () => {
       MessagePlugin.warning(`部分数据加载失败（${failedNames.length} 项），请稍后刷新重试`);
     }
 
+    await Promise.allSettled([loadModelUsage(), loadRuns()]);
+
     lastUpdated.value = new Date();
     await nextTick();
     renderAllCharts();
@@ -104,6 +131,30 @@ const loadAll = async () => {
     errorMessage.value = "数据加载失败，请稍后重试";
   } finally {
     loading.value = false;
+  }
+};
+
+const loadModelUsage = async () => {
+  try {
+    modelUsage.value = await getModelUsage(parseInt(timeRange.value));
+  } catch {
+    MessagePlugin.warning("模型调用统计加载失败");
+  }
+};
+
+const loadRuns = async () => {
+  try {
+    const res = await getWorkflowRuns({
+      status: runStatusFilter.value || undefined,
+      errorCode: runErrorCodeFilter.value || undefined,
+      days: parseInt(timeRange.value),
+      page: runsPage.value,
+      pageSize: runsPageSize.value,
+    });
+    runs.value = res.items;
+    runsTotal.value = res.total;
+  } catch {
+    MessagePlugin.warning("运行记录加载失败");
   }
 };
 
@@ -115,7 +166,45 @@ const handleRefresh = async () => {
 };
 
 const handleTimeRangeChange = async () => {
+  runsPage.value = 1;
   await loadAll();
+};
+
+const handleRunsFilterChange = async () => {
+  runsPage.value = 1;
+  await loadRuns();
+};
+
+const handleRunsPageChange = async (page: number) => {
+  runsPage.value = page;
+  await loadRuns();
+};
+
+const openRunDetail = async (runId: string) => {
+  drawerVisible.value = true;
+  runDetailLoading.value = true;
+  detailTab.value = "overview";
+  runDetail.value = null;
+  try {
+    runDetail.value = await getWorkflowRunDetail(runId);
+  } catch {
+    MessagePlugin.error("运行详情加载失败");
+  } finally {
+    runDetailLoading.value = false;
+  }
+};
+
+const closeDrawer = () => {
+  drawerVisible.value = false;
+};
+
+const copyText = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    MessagePlugin.success("已复制到剪贴板");
+  } catch {
+    MessagePlugin.warning("复制失败，请手动选择");
+  }
 };
 
 // ===========================================================================
@@ -127,6 +216,7 @@ const renderAllCharts = () => {
   renderNodeChart();
   renderKnowledgeChart();
   renderQueueChart();
+  renderModelTokenChart();
 };
 
 const disposeAllCharts = () => {
@@ -266,12 +356,12 @@ const renderNodeChart = () => {
   charts.node = echarts.init(chartRefs.node.value);
 
   const sorted = [...nodePerformance.value].sort((a, b) => b.avgDurationMs - a.avgDurationMs);
-  const types = sorted.map((n) => n.nodeType).reverse();
+  const types = sorted.map((n) => `${n.nodeType} (失败${n.failRate}%)`).reverse();
   const durations = sorted.map((n) => n.avgDurationMs).reverse();
 
   charts.node.setOption({
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    grid: { top: 8, right: 30, bottom: 8, left: 80 },
+    grid: { top: 8, right: 30, bottom: 8, left: 110 },
     xAxis: {
       type: "value",
       splitLine: { lineStyle: { color: "#F4F4F5" } },
@@ -385,6 +475,51 @@ const renderQueueChart = () => {
   });
 };
 
+// ---- 6. 模型 Token 消耗（按模型横向柱状图）----
+const renderModelTokenChart = () => {
+  if (!chartRefs.modelToken.value || !modelUsage.value || modelUsage.value.models.length === 0) return;
+  charts.modelToken?.dispose();
+  charts.modelToken = echarts.init(chartRefs.modelToken.value);
+
+  const sorted = [...modelUsage.value.models]
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+    .slice(0, 8);
+  const models = sorted.map((m) => m.model).reverse();
+  const tokens = sorted.map((m) => m.totalTokens).reverse();
+
+  charts.modelToken.setOption({
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    grid: { top: 12, right: 44, bottom: 8, left: 110 },
+    xAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: "#F4F4F5" } },
+      axisLabel: { color: "#A1A1AA", fontSize: 11, formatter: (v: number) => formatNumber(v) },
+    },
+    yAxis: {
+      type: "category",
+      data: models,
+      axisLine: { show: false },
+      axisLabel: { color: "#18181B", fontSize: 12 },
+      axisTick: { show: false },
+    },
+    series: [
+      {
+        type: "bar",
+        data: tokens,
+        barWidth: 16,
+        itemStyle: {
+          borderRadius: [0, 4, 4, 0],
+          color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+            { offset: 0, color: "#C4B5FD" },
+            { offset: 1, color: "#7C5CFC" },
+          ]),
+        },
+        label: { show: true, position: "right", color: "#71717A", fontSize: 11, formatter: (p: { value: number }) => formatNumber(p.value) },
+      },
+    ],
+  });
+};
+
 // ===========================================================================
 // 工具函数
 // ===========================================================================
@@ -394,13 +529,14 @@ const formatNumber = (n: number): string => {
   return String(n);
 };
 
-const formatDuration = (ms: number): string => {
+const formatDuration = (ms: number | null | undefined): string => {
   if (!ms) return "-";
   if (ms < 1000) return ms + " ms";
   return (ms / 1000).toFixed(1) + " s";
 };
 
-const formatRelativeTime = (dateStr: string): string => {
+const formatRelativeTime = (dateStr: string | null): string => {
+  if (!dateStr) return "-";
   const diffMs = Date.now() - new Date(dateStr).getTime();
   const diffMin = Math.floor(diffMs / 60000);
   const diffHr = Math.floor(diffMs / 3600000);
@@ -412,9 +548,33 @@ const formatRelativeTime = (dateStr: string): string => {
   return new Date(dateStr).toLocaleDateString("zh-CN");
 };
 
+const formatDateTime = (dateStr: string | null): string => {
+  if (!dateStr) return "-";
+  return new Date(dateStr).toLocaleString("zh-CN");
+};
+
+const formatJson = (value: unknown): string => {
+  if (value == null) return "-";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const formatCurrency = (n: number | null | undefined): string => {
+  if (n == null) return "-";
+  return "¥" + n.toFixed(4);
+};
+
 const statusLabelMap: Record<string, string> = {
   COMPLETED: "已完成", FAILED: "失败", RUNNING: "运行中", QUEUED: "排队中",
   PROCESSING: "处理中", UPLOADED: "待处理",
+};
+
+const triggerLabelMap: Record<string, string> = {
+  MANUAL: "手动", SCHEDULE: "定时", API: "API", WEBHOOK: "Webhook",
 };
 
 const statusBadgeClass = (s: string): string => {
@@ -425,11 +585,31 @@ const statusBadgeClass = (s: string): string => {
   return m[s] || "badge-default";
 };
 
+const runLogLines = computed<string[]>(() => {
+  const d = runDetail.value;
+  if (!d) return [];
+  const lines: string[] = [];
+  lines.push(`[${formatDateTime(d.startedAt)}] 运行开始 · 工作流：${d.workflowName}`);
+  for (const n of d.nodes) {
+    const ts = formatDateTime(n.startedAt);
+    const dur = n.durationMs != null ? ` · ${n.durationMs}ms` : "";
+    if (n.status === "FAILED") {
+      lines.push(`[${ts}] ✗ 节点「${n.label || n.nodeType}」执行失败${dur} · 错误码 ${n.errorCode || "-"} · ${n.errorMessage || ""}`);
+    } else {
+      lines.push(`[${ts}] ✓ 节点「${n.label || n.nodeType}」执行成功${dur}`);
+    }
+  }
+  lines.push(`[${formatDateTime(d.completedAt)}] 运行结束 · 状态：${statusLabelMap[d.status] || d.status} · 耗时 ${formatDuration(d.durationMs)}`);
+  return lines;
+});
+
 // ===========================================================================
 // 计算属性
 // ===========================================================================
 const failedRuns = computed(() => recentActivities.value?.workflowRuns.filter((r) => r.status === "FAILED") ?? []);
 const failedDocs = computed(() => recentActivities.value?.documents.filter((d) => d.status === "FAILED") ?? []);
+
+const runTotalPages = computed(() => Math.max(1, Math.ceil(runsTotal.value / runsPageSize.value)));
 
 // ===========================================================================
 // 生命周期
@@ -447,12 +627,14 @@ onBeforeUnmount(() => {
 </script>
 
 <!-- ======================================================================
-     Dashboard 页面布局
+     Dashboard 页面布局（AI 工作流运行监控与平台运营控制台）
      顶部：标题 + 时间范围 + 刷新
-     第一行：5 张核心指标卡片
+     第一行：8 张核心指标卡片（含运行中 / P95 / 24h失败 / 真实Token）
      第二行：执行趋势（宽） + 运行状态（窄）
      第三行：节点耗时 + 知识库状态 + 队列监控
-     第四行：最近运行记录（左） + 异常与失败（右，带红色左边框）
+     第四行：模型调用监控（Token / 延迟 / 费用 + 按模型分布）
+     第五行：运行记录（筛选 + 分页） —— 点击打开运行详情抽屉（4 Tab）
+     第六行：最近运行记录（左） + 异常与失败（右，带红色左边框）
      底部：资源汇总 + 更新时间
 ====================================================================== -->
 <template>
@@ -460,7 +642,7 @@ onBeforeUnmount(() => {
     <!-- ========== 页面标题栏 ========== -->
     <header class="page-header">
       <div class="header-left">
-        <h1 class="page-title">控制台</h1>
+        <h1 class="page-title">AI 工作流运行监控</h1>
         <p class="page-subtitle">工作空间与 AI 运行情况总览</p>
       </div>
       <div class="header-right">
@@ -488,7 +670,7 @@ onBeforeUnmount(() => {
     <!-- ========== 加载骨架 ========== -->
     <div v-if="loading" class="loading-state">
       <div class="skeleton-cards">
-        <div v-for="i in 5" :key="i" class="skeleton-card" />
+        <div v-for="i in 8" :key="i" class="skeleton-card" />
       </div>
     </div>
 
@@ -513,6 +695,14 @@ onBeforeUnmount(() => {
         <div class="metric-card metric-blue">
           <div class="metric-icon"><t-icon name="play-circle" /></div>
           <div class="metric-body">
+            <div class="metric-value">{{ overview?.workflows.running ?? 0 }}</div>
+            <div class="metric-label">运行中</div>
+            <div class="metric-sub">排队 {{ overview?.workflows.runQueued ?? 0 }}</div>
+          </div>
+        </div>
+        <div class="metric-card metric-blue">
+          <div class="metric-icon"><t-icon name="time" /></div>
+          <div class="metric-body">
             <div class="metric-value">{{ overview?.workflows.runCount ?? 0 }}</div>
             <div class="metric-label">运行次数</div>
             <div class="metric-sub">近 {{ overview?.periodDays ?? 7 }} 天</div>
@@ -527,19 +717,35 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="metric-card metric-orange">
-          <div class="metric-icon"><t-icon name="data" /></div>
+          <div class="metric-icon"><t-icon name="chart" /></div>
           <div class="metric-body">
-            <div class="metric-value">{{ overview?.knowledgeBases.documents ?? 0 }}</div>
-            <div class="metric-label">知识库文档</div>
-            <div class="metric-sub">共 {{ overview?.knowledgeBases.total ?? 0 }} 个知识库</div>
+            <div class="metric-value">{{ formatDuration(overview?.workflows.p95DurationMs ?? 0) }}</div>
+            <div class="metric-label">P95 耗时</div>
+            <div class="metric-sub">近 {{ overview?.periodDays ?? 7 }} 天</div>
           </div>
         </div>
         <div class="metric-card metric-pink">
-          <div class="metric-icon"><t-icon name="server" /></div>
+          <div class="metric-icon"><t-icon name="error-circle" /></div>
+          <div class="metric-body">
+            <div class="metric-value">{{ overview?.workflows.failedLast24h ?? 0 }}</div>
+            <div class="metric-label">24h 失败</div>
+            <div class="metric-sub">需重点关注</div>
+          </div>
+        </div>
+        <div class="metric-card metric-pink">
+          <div class="metric-icon"><t-icon name="data" /></div>
           <div class="metric-body">
             <div class="metric-value">{{ formatNumber(overview?.tokenUsage ?? 0) }}</div>
-            <div class="metric-label">Token 消耗</div>
-            <div class="metric-sub">待接入模型调用日志</div>
+            <div class="metric-label">真实 Token 消耗</div>
+            <div class="metric-sub">来自模型调用日志</div>
+          </div>
+        </div>
+        <div class="metric-card metric-purple">
+          <div class="metric-icon"><t-icon name="server" /></div>
+          <div class="metric-body">
+            <div class="metric-value">{{ formatNumber(overview?.modelCalls ?? 0) }}</div>
+            <div class="metric-label">模型调用数</div>
+            <div class="metric-sub">近 {{ overview?.periodDays ?? 7 }} 天</div>
           </div>
         </div>
       </section>
@@ -562,12 +768,12 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <!-- ========== 3. Phase 2: 节点 + 知识库 + 队列 ========== -->
+      <!-- ========== 3. 节点 + 知识库 + 队列 ========== -->
       <section class="charts-row charts-row-triple">
         <div class="chart-card">
           <div class="chart-header">
             <h3 class="chart-title">节点平均耗时</h3>
-            <span class="chart-desc">TOP {{ nodePerformance.length }}</span>
+            <span class="chart-desc">TOP {{ nodePerformance.length }}（含失败率）</span>
           </div>
           <div ref="chartRefs.node" class="chart-body chart-body-sm" />
         </div>
@@ -587,7 +793,159 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <!-- ========== 4. 最近运行记录 + 异常 ========== -->
+      <!-- ========== 4. AI 模型调用监控 ========== -->
+      <section class="model-usage">
+        <div class="section-title">
+          <h2>AI 模型调用监控</h2>
+          <span class="section-desc">Token / 延迟 / 费用 · 近 {{ modelUsage?.periodDays ?? overview?.periodDays ?? 7 }} 天</span>
+        </div>
+        <div class="model-stat-row" v-if="modelUsage">
+          <div class="model-stat">
+            <div class="model-stat-value">{{ formatNumber(modelUsage.total.calls) }}</div>
+            <div class="model-stat-label">总调用</div>
+          </div>
+          <div class="model-stat">
+            <div class="model-stat-value">{{ modelUsage.total.successRate }}%</div>
+            <div class="model-stat-label">成功率</div>
+          </div>
+          <div class="model-stat">
+            <div class="model-stat-value">{{ formatDuration(modelUsage.total.avgLatencyMs) }}</div>
+            <div class="model-stat-label">平均延迟</div>
+          </div>
+          <div class="model-stat">
+            <div class="model-stat-value">{{ formatNumber(modelUsage.total.totalTokens) }}</div>
+            <div class="model-stat-label">Token 总量</div>
+          </div>
+          <div class="model-stat">
+            <div class="model-stat-value">{{ formatCurrency(modelUsage.total.estimatedCost) }}</div>
+            <div class="model-stat-label">估算费用</div>
+          </div>
+        </div>
+        <div class="model-detail">
+          <div class="chart-card model-chart">
+            <div class="chart-header">
+              <h3 class="chart-title">各模型 Token 消耗</h3>
+              <span class="chart-desc">TOP 8</span>
+            </div>
+            <div ref="chartRefs.modelToken" class="chart-body chart-body-sm" />
+          </div>
+          <div class="chart-card model-table">
+            <div class="chart-header">
+              <h3 class="chart-title">模型明细</h3>
+            </div>
+            <div class="model-table-body">
+              <table v-if="modelUsage && modelUsage.models.length > 0">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>厂商</th>
+                    <th>调用</th>
+                    <th>成功率</th>
+                    <th>Token</th>
+                    <th>延迟</th>
+                    <th>费用</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="m in modelUsage.models" :key="m.model">
+                    <td>{{ m.model }}</td>
+                    <td>{{ m.provider }}</td>
+                    <td>{{ m.calls }}</td>
+                    <td>
+                      <span class="status-badge" :class="m.successRate >= 99 ? 'badge-success' : m.successRate >= 90 ? 'badge-warning' : 'badge-error'">
+                        {{ m.successRate }}%
+                      </span>
+                    </td>
+                    <td>{{ formatNumber(m.totalTokens) }}</td>
+                    <td>{{ formatDuration(m.avgLatencyMs) }}</td>
+                    <td>{{ formatCurrency(m.estimatedCost) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="empty-state">
+                <t-icon name="data" />
+                <p>暂无模型调用记录</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 5. 运行记录（筛选 + 分页 + 详情） ========== -->
+      <section class="runs-section">
+        <div class="section-title">
+          <h2>工作流运行记录</h2>
+          <span class="section-desc">失败节点 / 错误码 / 重试 · 共 {{ runsTotal }} 条</span>
+        </div>
+        <div class="runs-filter">
+          <div class="filter-item">
+            <span class="filter-label">状态</span>
+            <select v-model="runStatusFilter" class="filter-select" @change="handleRunsFilterChange">
+              <option value="">全部</option>
+              <option value="COMPLETED">已完成</option>
+              <option value="FAILED">失败</option>
+              <option value="RUNNING">运行中</option>
+              <option value="QUEUED">排队中</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <span class="filter-label">错误码</span>
+            <input v-model="runErrorCodeFilter" class="filter-input" placeholder="如 AI_PROVIDER_TIMEOUT" @keyup.enter="handleRunsFilterChange" />
+          </div>
+          <button class="filter-btn" @click="handleRunsFilterChange">筛选</button>
+          <button class="filter-btn ghost" @click="runStatusFilter=''; runErrorCodeFilter=''; handleRunsFilterChange()">重置</button>
+        </div>
+
+        <div class="runs-table">
+          <table>
+            <thead>
+              <tr>
+                <th>工作流</th>
+                <th>状态</th>
+                <th>触发</th>
+                <th>失败节点</th>
+                <th>耗时</th>
+                <th>开始时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="run in runs" :key="run.id">
+                <td class="run-name">{{ run.workflowName }}</td>
+                <td>
+                  <span class="status-badge" :class="statusBadgeClass(run.status)">
+                    {{ statusLabelMap[run.status] || run.status }}
+                  </span>
+                </td>
+                <td>{{ triggerLabelMap[run.triggerType] || run.triggerType }}</td>
+                <td>
+                  <span v-if="run.failedNode" class="failed-node" :title="run.failedNodeError || ''">
+                    {{ run.failedNode }}<small v-if="run.errorCode"> · {{ run.errorCode }}</small>
+                  </span>
+                  <span v-else class="muted">-</span>
+                </td>
+                <td>{{ formatDuration(run.durationMs) }}</td>
+                <td class="muted">{{ formatRelativeTime(run.startedAt) }}</td>
+                <td>
+                  <button class="link-btn" @click="openRunDetail(run.id)">查看详情</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="runs.length === 0" class="empty-state">
+            <t-icon name="history" />
+            <p>暂无运行记录</p>
+          </div>
+        </div>
+
+        <div class="runs-pagination" v-if="runsTotal > 0">
+          <button class="page-btn" :disabled="runsPage <= 1" @click="handleRunsPageChange(runsPage - 1)">上一页</button>
+          <span class="page-info">第 {{ runsPage }} / {{ runTotalPages }} 页</span>
+          <button class="page-btn" :disabled="runsPage >= runTotalPages" @click="handleRunsPageChange(runsPage + 1)">下一页</button>
+        </div>
+      </section>
+
+      <!-- ========== 6. 最近运行记录 + 异常 ========== -->
       <section class="bottom-row">
         <div class="activity-card">
           <div class="activity-header">
@@ -595,10 +953,10 @@ onBeforeUnmount(() => {
           </div>
           <div class="activity-list">
             <template v-if="recentActivities?.workflowRuns && recentActivities.workflowRuns.length > 0">
-              <div v-for="run in recentActivities.workflowRuns" :key="run.id" class="activity-item">
+              <div v-for="run in recentActivities.workflowRuns" :key="run.id" class="activity-item clickable" @click="openRunDetail(run.id)">
                 <div class="activity-info">
                   <span class="activity-name">{{ run.workflowName }}</span>
-                  <span class="activity-time">{{ formatRelativeTime(run.createdAt) }}</span>
+                  <span class="activity-time">{{ formatRelativeTime(run.createdAt) }} · {{ formatDuration(run.durationMs) }}</span>
                 </div>
                 <span class="status-badge" :class="statusBadgeClass(run.status)">
                   {{ statusLabelMap[run.status] || run.status }}
@@ -621,11 +979,11 @@ onBeforeUnmount(() => {
           </div>
           <div class="activity-list">
             <template v-if="failedRuns.length > 0">
-              <div v-for="run in failedRuns" :key="run.id" class="activity-item error-item">
+              <div v-for="run in failedRuns" :key="run.id" class="activity-item error-item clickable" @click="openRunDetail(run.id)">
                 <t-icon name="error-circle" class="error-icon" />
                 <div class="activity-info">
                   <span class="activity-name">{{ run.workflowName }}</span>
-                  <span class="activity-desc">{{ run.errorMessage || "工作流执行失败" }}</span>
+                  <span class="activity-desc">{{ run.errorCode ? `[${run.errorCode}] ` : '' }}{{ run.errorMessage || "工作流执行失败" }}</span>
                 </div>
                 <span class="activity-time">{{ formatRelativeTime(run.createdAt) }}</span>
               </div>
@@ -648,7 +1006,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <!-- ========== 5. 资源汇总 ========== -->
+      <!-- ========== 7. 资源汇总 ========== -->
       <section class="resource-summary">
         <div class="resource-item"><t-icon name="chat" /><span class="res-label">Agent</span><span class="res-value">{{ overview?.agents.total ?? 0 }}</span></div>
         <div class="resource-item"><t-icon name="code" /><span class="res-label">Skill</span><span class="res-value">{{ overview?.skills.total ?? 0 }}</span></div>
@@ -661,6 +1019,118 @@ onBeforeUnmount(() => {
         数据更新于 {{ lastUpdated.toLocaleTimeString("zh-CN") }}
       </footer>
     </template>
+
+    <!-- ========== 运行详情抽屉 ========== -->
+    <div v-if="drawerVisible" class="run-drawer-mask" @click="closeDrawer">
+      <div class="run-drawer" @click.stop>
+        <div class="drawer-header">
+          <div class="drawer-title">
+            <span>运行详情</span>
+            <span class="drawer-sub">{{ runDetail?.workflowName }} · {{ runDetail?.id.slice(0, 8) }}</span>
+          </div>
+          <button class="drawer-close" @click="closeDrawer"><t-icon name="close" /></button>
+        </div>
+
+        <div v-if="runDetailLoading" class="drawer-loading">
+          <t-icon name="loading" spin />
+          <p>加载中...</p>
+        </div>
+
+        <template v-else-if="runDetail">
+          <div class="drawer-tabs">
+            <button class="detail-tab" :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">执行概览</button>
+            <button class="detail-tab" :class="{ active: detailTab === 'nodes' }" @click="detailTab = 'nodes'">节点追踪</button>
+            <button class="detail-tab" :class="{ active: detailTab === 'logs' }" @click="detailTab = 'logs'">执行日志</button>
+            <button class="detail-tab" :class="{ active: detailTab === 'models' }" @click="detailTab = 'models'">模型调用</button>
+          </div>
+
+          <div class="drawer-body">
+            <!-- Tab 1: 执行概览 -->
+            <div v-show="detailTab === 'overview'" class="detail-pane">
+              <div class="kv-grid">
+                <div class="kv"><span class="kv-k">状态</span><span class="kv-v"><span class="status-badge" :class="statusBadgeClass(runDetail.status)">{{ statusLabelMap[runDetail.status] || runDetail.status }}</span></span></div>
+                <div class="kv"><span class="kv-k">触发方式</span><span class="kv-v">{{ triggerLabelMap[runDetail.triggerType] || runDetail.triggerType }}</span></div>
+                <div class="kv"><span class="kv-k">错误码</span><span class="kv-v">{{ runDetail.errorCode || "-" }}</span></div>
+                <div class="kv"><span class="kv-k">总耗时</span><span class="kv-v">{{ formatDuration(runDetail.durationMs) }}</span></div>
+                <div class="kv"><span class="kv-k">开始时间</span><span class="kv-v">{{ formatDateTime(runDetail.startedAt) }}</span></div>
+                <div class="kv"><span class="kv-k">结束时间</span><span class="kv-v">{{ formatDateTime(runDetail.completedAt) }}</span></div>
+              </div>
+              <div v-if="runDetail.errorMessage" class="error-box">
+                <div class="error-box-head">
+                  <span>错误信息</span>
+                  <button class="link-btn" @click="copyText(runDetail.errorMessage || '')">复制</button>
+                </div>
+                <pre class="error-pre">{{ runDetail.errorMessage }}</pre>
+              </div>
+              <div class="io-block">
+                <div class="io-head"><span>输入（已脱敏）</span><button class="link-btn" @click="copyText(formatJson(runDetail.input))">复制</button></div>
+                <pre class="io-pre">{{ formatJson(runDetail.input) }}</pre>
+              </div>
+              <div class="io-block">
+                <div class="io-head"><span>输出（已脱敏）</span><button class="link-btn" @click="copyText(formatJson(runDetail.output))">复制</button></div>
+                <pre class="io-pre">{{ formatJson(runDetail.output) }}</pre>
+              </div>
+            </div>
+
+            <!-- Tab 2: 节点追踪 -->
+            <div v-show="detailTab === 'nodes'" class="detail-pane">
+              <div v-for="node in runDetail.nodes" :key="node.id" class="node-trace" :class="{ 'node-failed': node.status === 'FAILED' }">
+                <div class="node-trace-head">
+                  <span class="node-idx">{{ node.nodeType }}</span>
+                  <span class="node-label">{{ node.label || "未命名节点" }}</span>
+                  <span class="status-badge" :class="statusBadgeClass(node.status)">{{ statusLabelMap[node.status] || node.status }}</span>
+                  <span class="node-dur">{{ formatDuration(node.durationMs) }}</span>
+                </div>
+                <div class="node-meta" v-if="node.attemptsMade || node.errorCode">
+                  重试 {{ node.attemptsMade }} 次<span v-if="node.errorCode"> · 错误码 {{ node.errorCode }}</span>
+                </div>
+                <div v-if="node.errorMessage" class="node-error">{{ node.errorMessage }}</div>
+                <details class="node-io">
+                  <summary>输入 / 输出</summary>
+                  <pre class="io-pre">{{ formatJson(node.input) }}</pre>
+                  <pre class="io-pre">{{ formatJson(node.output) }}</pre>
+                </details>
+              </div>
+            </div>
+
+            <!-- Tab 3: 执行日志 -->
+            <div v-show="detailTab === 'logs'" class="detail-pane">
+              <pre class="log-pre">{{ runLogLines.join("\n") }}</pre>
+            </div>
+
+            <!-- Tab 4: 模型调用 -->
+            <div v-show="detailTab === 'models'" class="detail-pane">
+              <table v-if="runDetail.modelCalls.length > 0" class="model-calls-table">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>类型</th>
+                    <th>Token</th>
+                    <th>延迟</th>
+                    <th>状态</th>
+                    <th>费用</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="mc in runDetail.modelCalls" :key="mc.id">
+                    <td>{{ mc.model }}<small class="muted"> · {{ mc.provider }}</small></td>
+                    <td>{{ mc.callType }}</td>
+                    <td>{{ formatNumber(mc.totalTokens) }}</td>
+                    <td>{{ formatDuration(mc.latencyMs) }}</td>
+                    <td><span class="status-badge" :class="mc.status === 'SUCCESS' ? 'badge-success' : 'badge-error'">{{ mc.status }}</span></td>
+                    <td>{{ formatCurrency(mc.estimatedCost) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-else class="empty-state">
+                <t-icon name="data" />
+                <p>本次运行无模型调用记录</p>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -736,7 +1206,7 @@ onBeforeUnmount(() => {
 /* ==================== 骨架 / 错误 ==================== */
 .loading-state .skeleton-cards {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: @space-4;
   .skeleton-card {
     height: 100px;
@@ -762,7 +1232,7 @@ onBeforeUnmount(() => {
 /* ==================== 指标卡片 ==================== */
 .metrics-row {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: @space-4;
   margin-bottom: @space-6;
 }
@@ -833,6 +1303,134 @@ onBeforeUnmount(() => {
   .chart-body-sm { height: 220px; }
 }
 
+/* ==================== 区块标题 ==================== */
+.section-title {
+  display: flex;
+  align-items: baseline;
+  gap: @space-3;
+  margin: @space-6 0 @space-4;
+  h2 { font-size: @font-xl; font-weight: 600; color: @color-text; margin: 0; }
+  .section-desc { font-size: @font-xs; color: @color-text-tertiary; }
+}
+
+/* ==================== 模型调用监控 ==================== */
+.model-stat-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: @space-4;
+  margin-bottom: @space-4;
+  .model-stat {
+    background: @color-bg-surface;
+    border: 1px solid @color-border;
+    border-radius: @radius-card;
+    padding: @space-4;
+    text-align: center;
+    box-shadow: @shadow-card;
+    .model-stat-value { font-size: @font-xl; font-weight: 700; color: @primary; }
+    .model-stat-label { font-size: @font-xs; color: @color-text-secondary; margin-top: 4px; }
+  }
+}
+.model-detail {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: @space-4;
+  .model-table {
+    display: flex;
+    flex-direction: column;
+    .model-table-body { flex: 1; overflow: auto; max-height: 260px; }
+  }
+}
+
+/* ==================== 表格通用 ==================== */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: @font-sm;
+  th {
+    text-align: left;
+    padding: @space-2 @space-3;
+    color: @color-text-tertiary;
+    font-weight: 500;
+    border-bottom: 1px solid @color-border;
+    background: @color-bg;
+    position: sticky;
+    top: 0;
+  }
+  td {
+    padding: @space-2 @space-3;
+    color: @color-text;
+    border-bottom: 1px solid @color-border;
+    vertical-align: middle;
+  }
+  tbody tr:hover { background: @color-bg-hover; }
+}
+
+/* ==================== 运行记录 ==================== */
+.runs-section { margin-bottom: @space-6; }
+.runs-filter {
+  display: flex;
+  align-items: center;
+  gap: @space-3;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-card;
+  padding: @space-3 @space-4;
+  margin-bottom: @space-3;
+  flex-wrap: wrap;
+  .filter-item { display: flex; align-items: center; gap: @space-2; }
+  .filter-label { font-size: @font-sm; color: @color-text-secondary; }
+  .filter-select, .filter-input {
+    padding: 6px 10px;
+    font-size: @font-sm;
+    border: 1px solid @color-border;
+    border-radius: @radius-sm;
+    background: @color-bg;
+    color: @color-text;
+    min-width: 160px;
+    &:focus { outline: none; border-color: @primary; }
+  }
+  .filter-btn {
+    padding: 6px 16px;
+    font-size: @font-sm;
+    color: #fff;
+    background: @primary;
+    border: none;
+    border-radius: @radius-sm;
+    cursor: pointer;
+    transition: opacity @duration-fast;
+    &:hover { opacity: 0.9; }
+    &.ghost { background: transparent; color: @color-text-secondary; border: 1px solid @color-border; }
+  }
+}
+.runs-table {
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-card;
+  padding: @space-2;
+  box-shadow: @shadow-card;
+  .run-name { font-weight: 500; }
+  .muted { color: @color-text-tertiary; }
+  .failed-node { color: @color-error; font-weight: 500; small { color: @color-text-tertiary; font-weight: 400; } }
+  .link-btn {
+    padding: 2px 8px; font-size: @font-xs; color: @primary; background: transparent;
+    border: none; cursor: pointer; border-radius: @radius-sm;
+    &:hover { background: @primary-light; }
+  }
+}
+.runs-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: @space-3;
+  margin-top: @space-3;
+  .page-btn {
+    padding: 4px 12px; font-size: @font-sm; color: @color-text-secondary;
+    background: @color-bg-surface; border: 1px solid @color-border; border-radius: @radius-sm; cursor: pointer;
+    &:disabled { opacity: 0.5; cursor: not-allowed; }
+  }
+  .page-info { font-size: @font-sm; color: @color-text-tertiary; }
+}
+
 /* ==================== 底部活动区 ==================== */
 .bottom-row {
   display: grid;
@@ -870,7 +1468,7 @@ onBeforeUnmount(() => {
     display: flex; align-items: center; justify-content: space-between;
     padding: @space-3; background: @color-bg; border-radius: @radius-md;
     transition: background-color @duration-fast;
-    &:hover { background: @color-bg-hover; }
+    &.clickable { cursor: pointer; &:hover { background: @color-bg-hover; } }
 
     .activity-info {
       flex: 1; min-width: 0; display: flex; flex-direction: column;
@@ -926,5 +1524,105 @@ onBeforeUnmount(() => {
 .dashboard-footer {
   text-align: right; padding: @space-4 0;
   font-size: @font-xs; color: @color-text-tertiary;
+}
+
+/* ==================== 运行详情抽屉 ==================== */
+.run-drawer-mask {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);
+  z-index: 1000; display: flex; justify-content: flex-end;
+}
+.run-drawer {
+  position: relative; width: 760px; max-width: 94vw; height: 100%;
+  background: @color-bg-surface; box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
+  display: flex; flex-direction: column;
+  animation: drawer-slide 0.25s ease;
+
+  .drawer-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: @space-4 @space-5; border-bottom: 1px solid @color-border;
+    .drawer-title { display: flex; flex-direction: column;
+      span:first-child { font-size: @font-lg; font-weight: 600; color: @color-text; }
+      .drawer-sub { font-size: @font-xs; color: @color-text-tertiary; margin-top: 2px; }
+    }
+    .drawer-close {
+      border: none; background: transparent; cursor: pointer; font-size: 20px; color: @color-text-tertiary;
+      &:hover { color: @color-text; }
+    }
+  }
+
+  .drawer-loading {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: @color-text-tertiary; gap: @space-3;
+    .t-icon { font-size: 32px; }
+  }
+
+  .drawer-tabs {
+    display: flex; border-bottom: 1px solid @color-border; padding: 0 @space-5;
+    .detail-tab {
+      padding: @space-3 @space-4; font-size: @font-sm; color: @color-text-secondary;
+      background: transparent; border: none; border-bottom: 2px solid transparent; cursor: pointer;
+      transition: all @duration-fast;
+      &:hover { color: @color-text; }
+      &.active { color: @primary; border-bottom-color: @primary; font-weight: 500; }
+    }
+  }
+
+  .drawer-body { flex: 1; overflow-y: auto; padding: @space-5; }
+  .detail-pane { display: flex; flex-direction: column; gap: @space-4; }
+
+  .kv-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: @space-3;
+    .kv { display: flex; justify-content: space-between; padding: @space-2 @space-3;
+      background: @color-bg; border-radius: @radius-md; border: 1px solid @color-border;
+      .kv-k { font-size: @font-sm; color: @color-text-secondary; }
+      .kv-v { font-size: @font-sm; color: @color-text; font-weight: 500; }
+    }
+  }
+
+  .error-box, .io-block {
+    border: 1px solid @color-border; border-radius: @radius-md; overflow: hidden;
+    .error-box-head, .io-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: @space-2 @space-3; background: @color-bg; font-size: @font-sm; color: @color-text-secondary;
+      border-bottom: 1px solid @color-border;
+    }
+    .error-pre, .io-pre {
+      margin: 0; padding: @space-3; font-size: @font-xs; line-height: 1.6; color: @color-text;
+      white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto;
+      font-family: @font-mono;
+    }
+    &.error-box .error-pre { color: @color-error; }
+  }
+
+  .node-trace {
+    border: 1px solid @color-border; border-radius: @radius-md; padding: @space-3;
+    background: @color-bg;
+    &.node-failed { border-left: 3px solid @color-error; }
+    .node-trace-head { display: flex; align-items: center; gap: @space-2; flex-wrap: wrap; }
+    .node-idx {
+      font-size: @font-xs; font-weight: 600; color: @primary; background: @primary-light;
+      padding: 2px 8px; border-radius: @radius-sm;
+    }
+    .node-label { font-size: @font-sm; font-weight: 500; color: @color-text; }
+    .node-dur { font-size: @font-xs; color: @color-text-tertiary; margin-left: auto; }
+    .node-meta { font-size: @font-xs; color: @color-text-tertiary; margin-top: 4px; }
+    .node-error { font-size: @font-xs; color: @color-error; margin-top: 4px; }
+    .node-io { margin-top: @space-2; summary { cursor: pointer; font-size: @font-xs; color: @primary; } }
+  }
+
+  .log-pre {
+    margin: 0; padding: @space-3; background: #1e1e2e; color: #e4e4e7;
+    border-radius: @radius-md; font-size: @font-xs; line-height: 1.7; white-space: pre-wrap;
+    font-family: @font-mono; max-height: 60vh; overflow: auto;
+  }
+
+  .model-calls-table {
+    .muted { color: @color-text-tertiary; }
+  }
+}
+
+@keyframes drawer-slide {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 </style>

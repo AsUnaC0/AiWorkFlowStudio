@@ -16,10 +16,33 @@ export interface AgentTool {
   execute(args: Record<string, unknown>, context: ToolContext): Promise<string>;
 }
 
+/** 生成文件的简要信息（AgentService 用它推送 SSE 事件、关联聊天消息） */
+export interface GeneratedFileRef {
+  id: string;
+  fileName: string;
+  format: string;
+  extension: string;
+  mimeType: string;
+  size: number;
+  status: string;
+  previewType: string;
+  title: string | null;
+  summary: string | null;
+  sourceType: string;
+  createdAt: Date;
+}
+
 /** 工具执行上下文：提供运行时依赖 */
 export interface ToolContext {
   /** 执行工具的 Agent ID */
   agentId: string;
   /** 执行用户 ID */
   userId: string;
+  /** 当前会话 ID（用于把生成文件归属到会话 / 消息） */
+  sessionId?: string;
+  /**
+   * 本次运行已生成的文件收集器。
+   * generate_file 工具会把结果 push 进来，AgentService 据此推送 SSE 事件并回填 messageId。
+   */
+  files?: GeneratedFileRef[];
 }

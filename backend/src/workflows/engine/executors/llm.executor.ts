@@ -4,6 +4,7 @@ import type {
   AiProvider,
   ChatMessage,
   ChatOptions,
+  ModelCallTelemetry,
   ToolDefinition,
 } from '../../../ai/ai-provider.interface';
 import { LlmConfigService } from '../../../llm-config/llm-config.service';
@@ -14,6 +15,7 @@ import { KnowledgeRetrievalService } from '../../../knowledge/retrieval/knowledg
 import type { SearchMode } from '../../../knowledge/retrieval/types';
 import { SkillService } from '../../../skill/skill.service';
 import { McpService } from '../../../mcp/mcp.service';
+import { toErrorCode } from '../../../common/error-code.util';
 
 /** LLM 节点配置（v1.5：含 Skill/MCP 工具调用） */
 interface LlmNodeConfig {
@@ -61,6 +63,7 @@ export class LLMNodeExecutor {
   ) {}
 
   async execute(context: NodeExecutionContext, node: any) {
+    const telemetry = context.telemetry;
     const { messages, options, tools, mcpServerMap, provider } =
       await this.createParams(context, node);
 
@@ -72,23 +75,71 @@ export class LLMNodeExecutor {
         options,
         tools,
         mcpServerMap,
+        telemetry,
       );
     }
 
-    const result = await provider.chat(messages, options);
-    return { output: result.content };
+    const start = Date.now();
+    try {
+      const result = await provider.chat(messages, options);
+      await this.logCall(telemetry, {
+        model: result.model || options.model,
+        callType: 'CHAT',
+        promptTokens: result.usage?.promptTokens ?? 0,
+        completionTokens: result.usage?.completionTokens ?? 0,
+        totalTokens: result.usage?.totalTokens ?? 0,
+        latencyMs: Date.now() - start,
+        status: 'SUCCESS',
+      });
+      return { output: result.content };
+    } catch (e) {
+      await this.logCall(telemetry, {
+        model: options.model,
+        callType: 'CHAT',
+        latencyMs: Date.now() - start,
+        status: 'FAILED',
+        errorCode: toErrorCode(e),
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
   }
 
   async *executeStream(
     context: NodeExecutionContext,
     node: any,
   ): AsyncGenerator<string> {
+    const telemetry = context.telemetry;
     const { messages, options, provider } = await this.createParams(
       context,
       node,
     );
-    for await (const chunk of provider.streamChat(messages, options)) {
-      yield chunk;
+    const start = Date.now();
+    let failed = false;
+    try {
+      for await (const chunk of provider.streamChat(messages, options)) {
+        yield chunk;
+      }
+    } catch (e) {
+      failed = true;
+      await this.logCall(telemetry, {
+        model: options.model,
+        callType: 'CHAT',
+        latencyMs: Date.now() - start,
+        status: 'FAILED',
+        errorCode: toErrorCode(e),
+        errorMessage: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    } finally {
+      if (!failed) {
+        await this.logCall(telemetry, {
+          model: options.model,
+          callType: 'CHAT',
+          latencyMs: Date.now() - start,
+          status: 'SUCCESS',
+        });
+      }
     }
   }
 
@@ -112,16 +163,36 @@ export class LLMNodeExecutor {
         credentials: unknown;
       }
     >,
+    telemetry?: ModelCallTelemetry,
   ) {
     const MAX_ROUNDS = 5;
     let currentMessages = [...messages];
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
-      const result = await provider.chatWithTools(
-        currentMessages,
-        options,
-        tools,
-      );
+      const start = Date.now();
+      let result;
+      try {
+        result = await provider.chatWithTools(currentMessages, options, tools);
+      } catch (e) {
+        await this.logCall(telemetry, {
+          model: options.model,
+          callType: 'CHAT',
+          latencyMs: Date.now() - start,
+          status: 'FAILED',
+          errorCode: toErrorCode(e),
+          errorMessage: e instanceof Error ? e.message : String(e),
+        });
+        throw e;
+      }
+      await this.logCall(telemetry, {
+        model: result.model || options.model,
+        callType: 'CHAT',
+        promptTokens: result.usage?.promptTokens ?? 0,
+        completionTokens: result.usage?.completionTokens ?? 0,
+        totalTokens: result.usage?.totalTokens ?? 0,
+        latencyMs: Date.now() - start,
+        status: 'SUCCESS',
+      });
 
       // LLM 直接回答 → 返回
       if (result.content && result.toolCalls.length === 0) {
@@ -181,6 +252,24 @@ export class LLMNodeExecutor {
     }
 
     return { output: '（工具调用轮次已达上限）' };
+  }
+
+  /** 记录模型调用（fire-and-forget，依赖 aiService 内部已做容错） */
+  private async logCall(
+    telemetry: ModelCallTelemetry | undefined,
+    meta: {
+      model: string;
+      callType: string;
+      promptTokens?: number;
+      completionTokens?: number;
+      totalTokens?: number;
+      latencyMs?: number;
+      status: string;
+      errorCode?: string;
+      errorMessage?: string;
+    },
+  ): Promise<void> {
+    await this.aiService.recordModelCall(telemetry, meta);
   }
 
   /**

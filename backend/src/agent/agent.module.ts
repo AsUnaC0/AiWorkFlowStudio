@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AiModule } from '../ai/ai.module';
+import { FilesModule } from '../files/files.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { WorkflowsModule } from '../workflows/workflows.module';
 import { LlmConfigModule } from '../llm-config/llm-config.module';
@@ -10,17 +11,20 @@ import { ChatSessionService } from './chat-session.service';
 import { ToolRegistry } from './tool-registry.service';
 import { WorkflowTool } from './tools/workflow.tool';
 import { KnowledgeTool } from './tools/knowledge.tool';
+import { GenerateFileTool } from './tools/generate-file.tool';
 
 /**
  * Agent 模块：
  *   - Agent CRUD（创建/查询/更新/删除 Agent）
  *   - ChatSession + ChatMessage（会话隔离 + 消息持久化）
  *   - ReAct 循环 + Function Calling + 工具注册中心
+ *   - generate_file 工具（产出 Word / Excel / PDF / Markdown 文件）
  *
  * 依赖：
  *   - AIService（chatWithTools）
  *   - WorkflowEngine（运行已发布工作流）
  *   - KnowledgeRetrievalService（知识库检索）
+ *   - FilesService（文件生成 / 存储 / 预览）
  *   - PrismaService（Agent CRUD + ChatSession + ChatMessage）
  */
 @Module({
@@ -30,6 +34,7 @@ import { KnowledgeTool } from './tools/knowledge.tool';
     forwardRef(() => KnowledgeModule),
     forwardRef(() => WorkflowsModule),
     LlmConfigModule,
+    FilesModule,
   ],
   controllers: [AgentController],
   providers: [
@@ -38,6 +43,7 @@ import { KnowledgeTool } from './tools/knowledge.tool';
     ToolRegistry,
     WorkflowTool,
     KnowledgeTool,
+    GenerateFileTool,
   ],
   exports: [AgentService, ChatSessionService],
 })

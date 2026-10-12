@@ -51,7 +51,28 @@ export class ChatSessionService {
       where: { id: sessionId, userId },
       include: {
         agent: { select: { id: true, name: true, type: true } },
-        messages: { orderBy: { createdAt: 'asc' } },
+        messages: {
+          orderBy: { createdAt: 'asc' },
+          include: {
+            files: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                fileName: true,
+                format: true,
+                extension: true,
+                mimeType: true,
+                size: true,
+                status: true,
+                previewType: true,
+                title: true,
+                summary: true,
+                sourceType: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
       },
     });
     if (!session) throw new NotFoundException('会话不存在');

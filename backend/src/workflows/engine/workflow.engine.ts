@@ -5,6 +5,7 @@ import { NodeExecutorRegistry } from './node-executor.registry';
 import { LLMNodeExecutor } from './executors/llm.executor';
 import { RunMonitorService } from './run-monitor.service';
 import type { NodeExecutionResult } from './node-executor.interface';
+import { toErrorCode } from '../../common/error-code.util';
 
 export type WorkflowStreamEvent =
   | { type: 'node:start'; nodeId: string; nodeType: string; label?: string }
@@ -24,6 +25,8 @@ export type WorkflowStreamEvent =
 export interface RunOptions {
   runId?: string;
   workflowId?: string;
+  /** 工作空间 ID：用于把 LLM 节点调用归属到空间，写入 ModelCallLog */
+  workspaceId?: string;
 }
 
 @Injectable()
@@ -70,6 +73,15 @@ export class WorkflowEngine {
       input,
       data: {},
       previousOutput: input,
+      // 把监控遥测上下文注入引擎，供 LLM 节点记录 ModelCallLog
+      telemetry: options.workspaceId
+        ? {
+            workspaceId: options.workspaceId,
+            workflowId,
+            runId: runId ?? undefined,
+            nodeRunId: undefined as string | undefined,
+          }
+        : undefined,
     };
 
     let currentNode = normalized.nodes.find(
@@ -143,7 +155,19 @@ export class WorkflowEngine {
     const runId = options.runId ?? null;
     const workflowId = options.workflowId;
     const normalized = this.normalizeWorkflow(workflow);
-    const context = { input, data: {}, previousOutput: input };
+    const context = {
+      input,
+      data: {},
+      previousOutput: input,
+      telemetry: options.workspaceId
+        ? {
+            workspaceId: options.workspaceId,
+            workflowId,
+            runId: runId ?? undefined,
+            nodeRunId: undefined as string | undefined,
+          }
+        : undefined,
+    };
     const runStart = Date.now();
 
     this.monitor.logRunStart(runId, workflowId ?? 'unknown');
@@ -188,6 +212,11 @@ export class WorkflowEngine {
           },
         });
         nodeRunId = nodeRun.id;
+      }
+
+      // 把当前节点的 NodeRunId 写回遥测上下文（ModelCallLog 需要定位到具体节点执行）
+      if (nodeRunId && context.telemetry) {
+        context.telemetry.nodeRunId = nodeRunId;
       }
 
       this.monitor.logNodeStart(runId, nodeType, currentNode.id, label);
@@ -244,6 +273,7 @@ export class WorkflowEngine {
             data: {
               status: 'FAILED',
               errorMessage: message,
+              errorCode: toErrorCode(error),
               endedAt: new Date(),
               durationMs,
             },
@@ -321,6 +351,7 @@ export class WorkflowEngine {
       input: unknown;
       data: Record<string, unknown>;
       previousOutput?: unknown;
+      telemetry?: import('../../ai/ai-provider.interface').ModelCallTelemetry;
     },
     runId: string | null,
   ): Promise<NodeExecutionResult> {
@@ -346,6 +377,11 @@ export class WorkflowEngine {
         },
       });
       nodeRunId = nodeRun.id;
+    }
+
+    // 把当前节点的 NodeRunId 写回遥测上下文（ModelCallLog 需要定位到具体节点执行）
+    if (nodeRunId && context.telemetry) {
+      context.telemetry.nodeRunId = nodeRunId;
     }
 
     try {
@@ -390,6 +426,7 @@ export class WorkflowEngine {
           data: {
             status: 'FAILED',
             errorMessage: message,
+            errorCode: toErrorCode(error),
             endedAt: new Date(),
             durationMs,
           },

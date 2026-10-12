@@ -18,6 +18,17 @@ export interface ChatOptions {
   model: string;
   temperature?: number;
   maxTokens?: number;
+  /** 监控遥测上下文：由调用方（Agent / 工作流引擎）传入，用于归属模型调用记录 */
+  telemetry?: ModelCallTelemetry;
+}
+
+/** 模型调用遥测上下文 —— 用于 ModelCallLog 归属与权限隔离 */
+export interface ModelCallTelemetry {
+  workspaceId?: string;
+  workflowId?: string;
+  runId?: string;
+  nodeRunId?: string;
+  agentId?: string;
 }
 
 export interface ChatResult {
@@ -32,6 +43,8 @@ export interface ChatResult {
 
 export interface EmbeddingOptions {
   model: string;
+  /** 监控遥测上下文（知识库管线传入，用于归属 Embedding 调用） */
+  telemetry?: ModelCallTelemetry;
 }
 
 export interface EmbeddingResult {

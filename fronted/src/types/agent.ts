@@ -2,6 +2,8 @@
 // Agent 基础类型
 // ===========================================================================
 
+import type { GeneratedFile } from "./files";
+
 export type AgentType = "GENERAL" | "KNOWLEDGE" | "WORKFLOW" | "TOOL" | "CUSTOM";
 export type AgentStatus = "DRAFT" | "PUBLISHED" | "DISABLED";
 
@@ -94,6 +96,8 @@ export interface ChatMessage {
   trail?: Record<string, unknown>[] | null;
   toolCallId?: string | null;
   createdAt: string;
+  /** 本条消息关联的文件（Agent 通过 generate_file 工具产出） */
+  files?: GeneratedFile[];
 }
 
 export interface ChatSessionDetail extends ChatSession {
@@ -137,6 +141,12 @@ export interface AgentStreamMessage {
   content: string;
 }
 
+/** Agent 通过 generate_file 工具生成的文件（前端直接渲染为文件卡片） */
+export interface AgentStreamFile {
+  type: "file";
+  file: GeneratedFile;
+}
+
 export interface AgentStreamError {
   type: "error";
   message: string;
@@ -148,6 +158,7 @@ export type AgentStreamEvent =
   | AgentStreamToolCall
   | AgentStreamToolResult
   | AgentStreamMessage
+  | AgentStreamFile
   | AgentStreamError;
 
 // ===========================================================================

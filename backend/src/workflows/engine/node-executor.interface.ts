@@ -2,6 +2,8 @@ export interface NodeExecutionContext {
   input: unknown;
   data: Record<string, unknown>;
   previousOutput?: unknown;
+  /** 监控遥测上下文：由工作流引擎注入，供 LLM 节点记录 ModelCallLog */
+  telemetry?: import('../../ai/ai-provider.interface').ModelCallTelemetry;
 }
 
 export interface NodeExecutionResult {

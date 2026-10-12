@@ -30,6 +30,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   server: {
+    port: 5175,
     proxy: {
       "/api": {
         target: loadEnv(mode, process.cwd()).VITE_API_BASE_URL,

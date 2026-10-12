@@ -16,6 +16,10 @@ import {
   type AgentStreamEvent,
 } from "@/api/agent";
 import { AGENT_TEMPLATES, type AgentType } from "@/types/agent";
+import type { GeneratedFile } from "@/types/files";
+import { downloadFile } from "@/api/files";
+import GeneratedFileCard from "@/components/files/GeneratedFileCard.vue";
+import FilePreviewDialog from "@/components/files/FilePreviewDialog.vue";
 import { getLlmModels } from "@/api/provider";
 import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
@@ -59,6 +63,26 @@ const toggleTrail = (msgId: string) => {
 
 // 侧边栏折叠
 const sidebarCollapsed = ref(false);
+
+// ===========================================================================
+// 生成文件（Agent generate_file 工具产出）
+// ===========================================================================
+
+const previewVisible = ref(false);
+const activeFile = ref<GeneratedFile | null>(null);
+
+const openPreview = (file: GeneratedFile) => {
+  activeFile.value = file;
+  previewVisible.value = true;
+};
+
+const handleDownloadFile = async (file: GeneratedFile) => {
+  try {
+    await downloadFile(file);
+  } catch (err) {
+    MessagePlugin.error(err instanceof Error ? err.message : "文件下载失败");
+  }
+};
 
 // 创建 Agent 对话框
 const showCreateDialog = ref(false);
@@ -384,6 +408,14 @@ const handleAgentEvent = (event: AgentStreamEvent, assistantMsgId: string) => {
       msg.trail.push(event as unknown as Record<string, unknown>);
       break;
     }
+    case "file": {
+      // Agent 调用了 generate_file —— 文件已真实生成并落库，渲染为文件卡片
+      if (!msg.files) msg.files = [];
+      if (!msg.files.some((f) => f.id === event.file.id)) {
+        msg.files.push(event.file);
+      }
+      break;
+    }
     case "message": {
       msg.content = event.content;
       break;
@@ -686,6 +718,13 @@ const formatToolResult = (result?: string) => {
                       <pre v-if="expandedTrails.has(msg.id)"
                         class="tool-result">{{ formatToolResult((step as any).result) }}</pre>
                     </template>
+
+                    <template v-else-if="step.type === 'file'">
+                      <span class="step-icon">📄</span>
+                      <span class="step-text">
+                        已生成文件 {{ (step as any).file?.fileName }}
+                      </span>
+                    </template>
                   </div>
                 </div>
 
@@ -696,6 +735,18 @@ const formatToolResult = (result?: string) => {
                     class="typing">
                     <span></span><span></span><span></span>
                   </div>
+                </div>
+
+                <!-- 生成的文件卡片（Agent generate_file 产出，可预览 / 下载） -->
+                <div v-if="msg.files && msg.files.length > 0" class="file-list">
+                  <GeneratedFileCard
+                    v-for="file in msg.files"
+                    :key="file.id"
+                    compact
+                    :file="file"
+                    @preview="openPreview"
+                    @download="handleDownloadFile"
+                  />
                 </div>
               </div>
             </div>
@@ -715,6 +766,9 @@ const formatToolResult = (result?: string) => {
         </div>
       </template>
     </main>
+
+    <!-- 文件预览弹窗 -->
+    <FilePreviewDialog v-model:visible="previewVisible" :file="activeFile" />
 
     <!-- 创建 Agent 对话框 -->
     <t-dialog v-model:visible="showCreateDialog" header="创建 Agent" :footer="false" :width="480"

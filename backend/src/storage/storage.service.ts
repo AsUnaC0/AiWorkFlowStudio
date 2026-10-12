@@ -7,7 +7,7 @@ import * as qiniu from 'qiniu';
 import { randomUUID } from 'node:crypto';
 import { extname, join, resolve } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import { writeFile, unlink, mkdtemp } from 'node:fs/promises';
+import { writeFile, unlink, mkdtemp, readFile, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as https from 'node:https';
 import * as http from 'node:http';
@@ -289,6 +289,33 @@ export class StorageService {
     throw new InternalServerErrorException(
       `七牛云下载失败：${lastError instanceof Error ? lastError.message : String(lastError)}`,
     );
+  }
+
+  /**
+   * 读取对象内容为 Buffer。
+   *
+   * - local：直接读文件
+   * - qiniu：下载到临时文件 → 读取 → 清理临时文件
+   *
+   * 注意：大文件建议改用流式接口，此处仅用于生成文件的预览 / 代理下载。
+   */
+  async readBuffer(key: string): Promise<Buffer> {
+    if (this.type === 'local') {
+      return readFile(key);
+    }
+
+    const tempPath = await this.downloadQiniuToTemp(key);
+    try {
+      return await readFile(tempPath);
+    } finally {
+      // 清理临时目录中的下载文件
+      try {
+        await unlink(tempPath);
+        await rmdir(join(tempPath, '..'));
+      } catch {
+        // 清理失败不影响主流程
+      }
+    }
   }
 
   // ===========================================================================

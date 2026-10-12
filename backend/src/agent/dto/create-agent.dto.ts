@@ -3,6 +3,7 @@ import {
   IsString,
   IsIn,
   IsArray,
+  IsBoolean,
   IsNumber,
   Max,
   Min,
@@ -68,4 +69,9 @@ export class CreateAgentDto {
   @Max(2)
   @IsOptional()
   temperature?: number;
+
+  /** 是否允许 Agent 生成文件（Word / Excel / PDF / Markdown / CSV）；默认 true */
+  @IsBoolean()
+  @IsOptional()
+  enableFileGeneration?: boolean;
 }

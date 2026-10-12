@@ -12,7 +12,13 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     CustomNode: typeof import('./src/components/workflow/CustomNode.vue')['default']
+    ExcelPreview: typeof import('./src/components/files/ExcelPreview.vue')['default']
+    FilePreviewDialog: typeof import('./src/components/files/FilePreviewDialog.vue')['default']
+    GeneratedFileCard: typeof import('./src/components/files/GeneratedFileCard.vue')['default']
+    ImagePreview: typeof import('./src/components/files/ImagePreview.vue')['default']
+    MarkdownPreview: typeof import('./src/components/files/MarkdownPreview.vue')['default']
     PageHeader: typeof import('./src/components/common/PageHeader.vue')['default']
+    PdfPreview: typeof import('./src/components/files/PdfPreview.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     TAlert: typeof import('tdesign-vue-next')['Alert']
@@ -45,5 +51,6 @@ declare module 'vue' {
     TTag: typeof import('tdesign-vue-next')['Tag']
     TTextarea: typeof import('tdesign-vue-next')['Textarea']
     TTooltip: typeof import('tdesign-vue-next')['Tooltip']
+    WordPreview: typeof import('./src/components/files/WordPreview.vue')['default']
   }
 }

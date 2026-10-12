@@ -111,6 +111,9 @@ model WorkflowRun {
 
   status        String   @default("QUEUED")   // QUEUED / RUNNING / COMPLETED / FAILED
   errorMessage  String?
+  errorCode     String?                       // 机器可读的错误码，如 AI_PROVIDER_TIMEOUT
+  triggerType   String   @default("MANUAL")    // MANUAL / SCHEDULE / API / WEBHOOK
+  durationMs    Int?                           // 总耗时（毫秒）
 
   startedAt     DateTime?
   completedAt   DateTime?
@@ -119,9 +122,11 @@ model WorkflowRun {
 
   workflow      Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   nodeRuns      WorkflowNodeRun[]
+  modelCalls    ModelCallLog[]
 
   @@index([workflowId])
   @@index([status])
+  @@index([createdAt])
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +146,8 @@ model WorkflowNodeRun {
   branch        String?
   metadata      Json?
   errorMessage  String?
+  errorCode     String?                        // 节点级错误码
+  attemptsMade  Int      @default(0)           // 重试次数
 
   startedAt     DateTime?
   endedAt       DateTime?
@@ -149,9 +156,48 @@ model WorkflowNodeRun {
   createdAt     DateTime @default(now())
 
   run           WorkflowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  modelCalls    ModelCallLog[]
 
   @@index([runId])
   @@index([runId, nodeId])
+}
+
+// ---------------------------------------------------------------------------
+// ModelCallLog（模型调用记录 —— 统计 Token、延迟、错误与费用）
+// ---------------------------------------------------------------------------
+
+model ModelCallLog {
+  id               String   @id @default(uuid())
+  workspaceId      String                        // 用于权限隔离与统计归属
+  workflowId       String?
+  runId            String?
+  nodeRunId        String?
+  agentId          String?
+
+  run              WorkflowRun?    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  nodeRun          WorkflowNodeRun? @relation(fields: [nodeRunId], references: [id], onDelete: Cascade)
+
+  provider         String                        // ollama / openai-compatible / ...
+  model            String                        // 实际模型名
+  callType         String   @default("CHAT")     // CHAT / EMBEDDING / TOOL
+
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  latencyMs        Int?
+  status           String   @default("SUCCESS")   // SUCCESS / FAILED / TIMEOUT
+  errorCode        String?
+  errorMessage     String?
+  estimatedCost    Float?                         // 配置价格后估算（单位：元/美元，按配置）
+
+  createdAt        DateTime @default(now())
+
+  @@index([workspaceId])
+  @@index([runId])
+  @@index([nodeRunId])
+  @@index([model])
+  @@index([status])
+  @@index([createdAt])
 }
 
 
@@ -289,6 +335,9 @@ model Agent {
   maxToolIterations   Int      @default(10)   // ReAct 循环上限，防无限调用
   temperature         Float    @default(0.7)
 
+  /** 是否允许 Agent 调用 generate_file 工具生成 Word / Excel / PDF / Markdown 文件 */
+  enableFileGeneration Boolean @default(true)
+
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -317,6 +366,7 @@ model ChatSession {
 
   agent       Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
   messages    ChatMessage[]
+  files       GeneratedFile[]
 
   @@index([userId, agentId, updatedAt])
 }
@@ -343,9 +393,63 @@ model ChatMessage {
   createdAt   DateTime    @default(now())
 
   session     ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /** 本条消息关联的生成文件（Agent 通过 generate_file 工具产出） */
+  files       GeneratedFile[]
 
   @@index([sessionId])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// GeneratedFile —— 生成文件元数据（Word / Excel / PDF / Markdown / CSV）
+//
+// 文件二进制不入库：统一落到 StorageService（本地磁盘 / 七牛云），
+// 数据库只保存元数据 + storageKey，预览与下载均经后端鉴权代理。
+// ---------------------------------------------------------------------------
+
+model GeneratedFile {
+  id          String   @id @default(uuid())
+
+  /** 归属用户（权限校验依据） */
+  userId      String
+  workspaceId String?
+  /** 来源会话（可选） */
+  sessionId   String?
+  /** 来源消息（可选，文件卡片渲染到该条消息下方） */
+  messageId   String?
+
+  fileName    String
+  mimeType    String
+  extension   String
+  /** 文件大小（字节） */
+  size        Int      @default(0)
+  /** 对象存储 Key（本地模式为绝对路径） */
+  storageKey  String   @unique
+
+  /** 生成格式：docx / xlsx / pdf / md / csv */
+  format      String
+  /** 来源：chat / agent / workflow / skill */
+  sourceType  String   @default("chat")
+  /** 状态：PROCESSING / READY / FAILED */
+  status      String   @default("READY")
+  /** 前端预览组件类型：pdf / image / document / spreadsheet / markdown / text / csv */
+  previewType String?
+  /** 错误原因（status = FAILED 时） */
+  errorMessage String?
+
+  title       String?
+  summary     String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  session     ChatSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  message     ChatMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([messageId])
+  @@index([status])
 }
 
 // ---------------------------------------------------------------------------

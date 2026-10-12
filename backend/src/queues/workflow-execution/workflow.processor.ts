@@ -2,6 +2,7 @@ import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WorkflowEngine } from '../../workflows/engine/workflow.engine';
+import { toErrorCode } from '../../common/error-code.util';
 
 /** workflow-execution Queue 的 Job 数据结构 */
 export interface ExecuteWorkflowJobData {
@@ -26,11 +27,12 @@ export class WorkflowProcessor extends WorkerHost {
 
     const { runId, workflowId, input } = job.data;
 
-    // 1. 加载 Workflow definition（通过 currentVersion）
+    // 1. 加载 Workflow definition（通过 currentVersion）及其所属 workspace
     const workflow = await this.prisma.workflow.findUnique({
       where: { id: workflowId },
       select: {
         id: true,
+        workspaceId: true,
         currentVersion: {
           select: {
             definition: true,
@@ -43,6 +45,8 @@ export class WorkflowProcessor extends WorkerHost {
       throw new Error(`Workflow ${workflowId} 或其当前版本不存在`);
     }
 
+    const workspaceId = workflow.workspaceId;
+
     // 2. 更新状态为 RUNNING + 记录开始时间
     await this.prisma.workflowRun.update({
       where: { id: runId },
@@ -52,24 +56,29 @@ export class WorkflowProcessor extends WorkerHost {
       },
     });
 
+    const runStart = Date.now();
+
     try {
-      // 3. 执行工作流（传 runId 让 engine 记录 NodeRun + 监控日志）
+      // 3. 执行工作流（传 runId 让 engine 记录 NodeRun + 监控日志；
+      //    workspaceId 让 LLM 节点调用归属到空间，写入 ModelCallLog）
       const result = await this.workflowEngine.run(
         workflow.currentVersion.definition as {
           nodes: unknown[];
           edges: unknown[];
         },
         input,
-        { runId, workflowId },
+        { runId, workflowId, workspaceId },
       );
 
-      // 4. 成功 → COMPLETED + output
+      // 4. 成功 → COMPLETED + output + 运行时长
       await this.prisma.workflowRun.update({
         where: { id: runId },
         data: {
           status: 'COMPLETED',
           output: result as any,
           completedAt: new Date(),
+          durationMs: Date.now() - runStart,
+          triggerType: 'MANUAL',
         },
       });
 
@@ -82,7 +91,10 @@ export class WorkflowProcessor extends WorkerHost {
         data: {
           status: 'FAILED',
           errorMessage: message,
+          errorCode: toErrorCode(error),
           completedAt: new Date(),
+          durationMs: Date.now() - runStart,
+          triggerType: 'MANUAL',
         },
       });
 

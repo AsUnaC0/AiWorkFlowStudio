@@ -4,6 +4,7 @@ import { AgentModule } from './agent/agent.module';
 import { AiModule } from './ai/ai.module';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { FilesModule } from './files/files.module';
 import { FriendshipModule } from './friendship/friendship.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { LlmConfigModule } from './llm-config/llm-config.module';
@@ -27,6 +28,7 @@ import { WorkflowsModule } from './workflows/workflows.module';
     AiModule,
     AuthModule,
     DashboardModule,
+    FilesModule,
     FriendshipModule,
     KnowledgeModule,
     LlmConfigModule,

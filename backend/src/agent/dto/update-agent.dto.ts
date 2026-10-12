@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsIn,
   IsNumber,
   IsOptional,
@@ -76,4 +77,9 @@ export class UpdateAgentDto {
   @Max(2)
   @IsOptional()
   temperature?: number;
+
+  /** 是否允许 Agent 生成文件；默认 true */
+  @IsBoolean()
+  @IsOptional()
+  enableFileGeneration?: boolean;
 }

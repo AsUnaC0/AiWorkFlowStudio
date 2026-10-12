@@ -10,7 +10,9 @@ import { AIService } from '../ai/ai.service';
 import type { AiProvider, ChatMessage } from '../ai/ai-provider.interface';
 import { parseToolArguments } from '../ai/tool-args.util';
 import { LlmConfigService } from '../llm-config/llm-config.service';
+import { FilesService } from '../files/files.service';
 import { ToolRegistry } from './tool-registry.service';
+import type { GeneratedFileRef } from './tools/agent-tool.interface';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 
@@ -37,8 +39,26 @@ export type AgentStreamEvent =
   | { type: 'thinking'; message: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   | { type: 'tool_result'; tool: string; result: string; durationMs: number }
+  /** Agent 通过 generate_file 工具产出的文件（前端渲染为文件卡片） */
+  | { type: 'file'; file: AgentFilePayload }
   | { type: 'message'; content: string }
   | { type: 'error'; message: string };
+
+/** 推送给前端的文件卡片数据（序列化安全） */
+export interface AgentFilePayload {
+  id: string;
+  fileName: string;
+  format: string;
+  extension: string;
+  mimeType: string;
+  size: number;
+  status: string;
+  previewType: string;
+  title: string | null;
+  summary: string | null;
+  sourceType: string;
+  createdAt: string;
+}
 
 export interface AgentRunOptions {
   input: string;
@@ -101,7 +121,29 @@ export class AgentService {
     private readonly aiService: AIService,
     private readonly toolRegistry: ToolRegistry,
     private readonly llmConfigService: LlmConfigService,
+    private readonly filesService: FilesService,
   ) {}
+
+  /** 把 GeneratedFileRef 转成可 JSON 序列化的 SSE 载荷 */
+  private toFilePayload(file: GeneratedFileRef): AgentFilePayload {
+    return {
+      id: file.id,
+      fileName: file.fileName,
+      format: file.format,
+      extension: file.extension,
+      mimeType: file.mimeType,
+      size: file.size,
+      status: file.status,
+      previewType: file.previewType,
+      title: file.title,
+      summary: file.summary,
+      sourceType: file.sourceType,
+      createdAt:
+        file.createdAt instanceof Date
+          ? file.createdAt.toISOString()
+          : String(file.createdAt),
+    };
+  }
 
   // ===========================================================================
   // 系统初始化
@@ -388,11 +430,27 @@ export class AgentService {
     }
     messages.push({ role: 'user', content: options.input });
 
-    // 3. 工具
+    // 3. 工具（generate_file 为内置能力，由 Agent.enableFileGeneration 控制）
     const tools = await this.toolRegistry.buildDefinitions(
       agent.workflowIds,
       agent.knowledgeBaseIds,
+      { enableFileGeneration: agent.enableFileGeneration !== false },
     );
+
+    // 3.5 本次运行生成的文件收集器（generate_file 工具会往里 push）
+    const runFiles: GeneratedFileRef[] = [];
+    let emittedFileCount = 0;
+    const flushFileEvents = (): AgentStreamEvent[] => {
+      const events: AgentStreamEvent[] = [];
+      while (emittedFileCount < runFiles.length) {
+        const file = runFiles[emittedFileCount];
+        const payload = this.toFilePayload(file);
+        events.push({ type: 'file', file: payload });
+        allTrailSteps.push({ type: 'file', file: payload });
+        emittedFileCount++;
+      }
+      return events;
+    };
 
     // 4. 持久化用户消息
     if (options.sessionId) {
@@ -453,19 +511,12 @@ export class AgentService {
       }
 
       if (options.sessionId && fullContent) {
-        await this.prisma.chatMessage.create({
-          data: {
-            sessionId: options.sessionId,
-            role: 'assistant',
-            content: fullContent,
-            trail:
-              allTrailSteps.length > 0 ? (allTrailSteps as any) : undefined,
-          },
-        });
-        await this.prisma.chatSession.update({
-          where: { id: options.sessionId },
-          data: { updatedAt: new Date() },
-        });
+        await this.persistAssistantMessage(
+          options.sessionId,
+          fullContent,
+          allTrailSteps,
+          runFiles,
+        );
       }
       return;
     }
@@ -506,19 +557,12 @@ export class AgentService {
 
         const finalContent = streamedContent || result.content;
         if (options.sessionId && finalContent) {
-          await this.prisma.chatMessage.create({
-            data: {
-              sessionId: options.sessionId,
-              role: 'assistant',
-              content: finalContent,
-              trail:
-                allTrailSteps.length > 0 ? (allTrailSteps as any) : undefined,
-            },
-          });
-          await this.prisma.chatSession.update({
-            where: { id: options.sessionId },
-            data: { updatedAt: new Date() },
-          });
+          await this.persistAssistantMessage(
+            options.sessionId,
+            finalContent,
+            allTrailSteps,
+            runFiles,
+          );
         }
         return;
       }
@@ -557,6 +601,8 @@ export class AgentService {
             {
               agentId: agent.id,
               userId,
+              sessionId: options.sessionId,
+              files: runFiles,
               knowledgeBaseIds: agent.knowledgeBaseIds,
             },
           );
@@ -564,6 +610,11 @@ export class AgentService {
           toolResult = `工具执行错误：${err instanceof Error ? err.message : String(err)}`;
         }
         const durationMs = Date.now() - toolStart;
+
+        // 工具可能产出了文件（generate_file）——立刻推给前端渲染卡片
+        for (const event of flushFileEvents()) {
+          yield event;
+        }
 
         yield {
           type: 'tool_result',
@@ -599,14 +650,48 @@ export class AgentService {
 
     yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
     if (options.sessionId) {
-      await this.prisma.chatMessage.create({
-        data: {
-          sessionId: options.sessionId,
-          role: 'assistant',
-          content: '⚠️ Agent 达到最大工具调用次数限制',
-          trail: allTrailSteps.length > 0 ? (allTrailSteps as any) : undefined,
-        },
-      });
+      await this.persistAssistantMessage(
+        options.sessionId,
+        '⚠️ Agent 达到最大工具调用次数限制',
+        allTrailSteps,
+        runFiles,
+      );
     }
+  }
+
+  /**
+   * 持久化 assistant 消息，并把本次运行生成的文件关联到该消息。
+   *
+   * 只有文件真正生成 + 落库成功才会出现在 runFiles 里，
+   * 因此前端看到的 READY 状态一定对应一个可预览、可下载的真实文件。
+   */
+  private async persistAssistantMessage(
+    sessionId: string,
+    content: string,
+    trail: Array<Record<string, unknown>>,
+    files: GeneratedFileRef[],
+  ) {
+    const message = await this.prisma.chatMessage.create({
+      data: {
+        sessionId,
+        role: 'assistant',
+        content,
+        trail: trail.length > 0 ? (trail as any) : undefined,
+      },
+    });
+
+    if (files.length > 0) {
+      await this.filesService.attachToMessage(
+        files.map((f) => f.id),
+        message.id,
+      );
+    }
+
+    await this.prisma.chatSession.update({
+      where: { id: sessionId },
+      data: { updatedAt: new Date() },
+    });
+
+    return message;
   }
 }
