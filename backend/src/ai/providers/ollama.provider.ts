@@ -254,6 +254,10 @@ export class OllamaProvider implements AiProvider {
         role: m.role,
         content: m.content,
       };
+      // 视觉输入：Ollama 在 user 消息上挂 images（base64 字符串数组）
+      if (m.role === 'user' && m.images && m.images.length > 0) {
+        base.images = m.images.map((img) => img.base64);
+      }
       if (m.tool_calls && m.tool_calls.length > 0) {
         base.tool_calls = m.tool_calls.map((tc) => ({
           id: tc.id,

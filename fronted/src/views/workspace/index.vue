@@ -405,16 +405,14 @@ onBeforeUnmount(() => {
       </t-loading>
 
       <!-- 创建 Workspace 对话框 -->
-      <t-dialog v-model:visible="createDialogVisible" header="Create Workspace" :footer="false" width="420px">
-        <t-form layout="vertical" @submit="submitCreateWorkspace">
+      <t-dialog v-model:visible="createDialogVisible" header="Create Workspace"
+        :confirm-btn="{ content: 'Create', theme: 'primary', loading: creating }" cancel-btn="Cancel" width="420px"
+        @confirm="submitCreateWorkspace">
+        <t-form layout="vertical" label-align="top" @submit="submitCreateWorkspace">
           <t-form-item label="Workspace Name">
             <t-input v-model="workspaceName" placeholder="e.g. My AI Workspace" />
           </t-form-item>
           <t-alert v-if="createError" theme="error" :message="createError" class="form-alert" />
-          <div class="dialog-actions">
-            <t-button variant="outline" type="button" @click="createDialogVisible = false">Cancel</t-button>
-            <t-button theme="primary" type="submit" :loading="creating">Create</t-button>
-          </div>
         </t-form>
       </t-dialog>
 
@@ -541,21 +539,20 @@ onBeforeUnmount(() => {
       </t-loading>
 
       <!-- 创建工作流对话框 -->
-      <t-dialog v-model:visible="wfCreateDialogVisible" header="Create Workflow" :footer="false" width="420px">
-        <t-form layout="vertical" @submit="submitCreateWorkflow">
+      <t-dialog v-model:visible="wfCreateDialogVisible" header="Create Workflow"
+        :confirm-btn="{ content: 'Create & Edit', theme: 'primary', loading: wfCreating }" cancel-btn="Cancel"
+        width="420px" @confirm="submitCreateWorkflow">
+        <t-form layout="vertical" label-align="top" @submit="submitCreateWorkflow">
           <t-form-item label="Workflow Name">
             <t-input v-model="workflowName" placeholder="Customer Support AI" />
           </t-form-item>
           <t-alert v-if="wfCreateError" theme="error" :message="wfCreateError" class="form-alert" />
-          <div class="dialog-actions">
-            <t-button variant="outline" type="button" @click="wfCreateDialogVisible = false">Cancel</t-button>
-            <t-button theme="primary" type="submit" :loading="wfCreating">Create & Edit</t-button>
-          </div>
         </t-form>
       </t-dialog>
 
-      <!-- 邀请好友对话框 -->
-      <t-dialog v-model:visible="inviteDialogVisible" header="邀请好友加入 Workspace" :footer="false" width="480px">
+      <!-- 邀请好友对话框：只需要一个「关闭」，用自带的取消按钮 -->
+      <t-dialog v-model:visible="inviteDialogVisible" header="邀请好友加入 Workspace" :confirm-btn="null"
+        cancel-btn="关闭" width="480px">
         <div class="invite-dialog-body">
           <t-loading :loading="friendsLoading" text="加载中..." :delay="200">
             <t-alert v-if="acceptedFriends.length === 0" theme="warning" :message="'还没有已接受的好友，先去好友页面添加吧'" />
@@ -577,9 +574,6 @@ onBeforeUnmount(() => {
             </div>
           </t-loading>
 
-          <div class="dialog-actions">
-            <t-button variant="outline" type="button" @click="inviteDialogVisible = false">关闭</t-button>
-          </div>
         </div>
       </t-dialog>
 
@@ -1089,12 +1083,5 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: @space-2;
-  margin-top: @space-4;
 }
 </style>

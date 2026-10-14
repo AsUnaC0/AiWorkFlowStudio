@@ -2812,8 +2812,87 @@ AI 应用 / Skill + MCP 扩展 / 动态输出能力
 - MCP 外部工具接入
 - Agent 结构化输出（报告 / 表格 / 图表）
 - Workflow Engine
+- **平台助理（AI 直接操作平台资源）**
 
 最终目标：
 
 >   这是一个可以真实运行的 AI SaaS，而不是一个单纯展示 AI Chat 的 Demo。  
+
+---
+
+# 30. 平台助理（Platform Assistant）
+
+> 本章为 v1.5 之后新增的产品能力：把聊天页的默认 Agent 从「问答机器人」升级成
+> 「能直接操作本平台资源的统一入口」。技术实现见 `docs/后端代码逻辑/11-平台助理.md`。
+
+## 30.1 产品定位
+
+平台助理 = **系统默认 Agent** + **专属 System Prompt** + **一整套平台内置工具**。
+
+它不是一个新页面，而是**聊天页里那个默认助手的升级**：
+用户用自然语言说「帮我建一个 PDF 摘要工作流」，助理自己决定调哪些工具、按什么顺序调，
+最后把结果（含编辑器链接）汇报给用户。
+
+| 维度 | 普通 Agent | 平台助理 |
+|---|---|---|
+| 身份来源 | 用户自己创建 | 系统内置（`isSystem && isDefault`），全平台唯一 |
+| 工具来源 | 用户绑定（工作流 / 知识库 / MCP） | 后端注册的 17 个平台工具 |
+| 模型绑定 | 绑定在 Agent 记录上 | **不绑定**，按每个用户各自的默认对话模型解析 |
+| 能否改库 | 只能通过绑定资源间接操作 | **能**，但必须走业务 Service 且留审计 |
+
+## 30.2 能力清单（17 个工具）
+
+| 分组 | 工具 | 语义动作 | 风险 |
+|---|---|---|---|
+| 用户 | `get_current_user` | QUERY | LOW |
+| 工作空间 | `list_workspaces` | QUERY | LOW |
+| 工作流 | `list_workflows` / `get_workflow_run_history` / `validate_workflow` | QUERY | LOW |
+| 工作流 | `create_workflow_draft` | CREATE | MEDIUM |
+| 工作流 | `run_workflow` | EXECUTE | MEDIUM |
+| 工作流 | `publish_workflow` | EXECUTE | **HIGH** |
+| 知识库 | `list_knowledge_bases` / `get_document_processing_status` | QUERY | LOW |
+| 知识库 | `create_knowledge_base` / `attach_document_to_knowledge_base` | CREATE | MEDIUM |
+| Agent | `list_agents` | QUERY | LOW |
+| Agent | `create_agent` | CREATE | MEDIUM |
+| 概览 | `list_skills` / `list_mcp_servers` / `get_platform_overview` | QUERY | LOW |
+
+## 30.3 四条不可动摇的安全约束
+
+1. **`userId` 只能来自后端已验证的 JWT** —— 工具的入参 Schema 里不存在 userId 字段，
+   模型在结构上就无法声明「我是谁」。
+2. **不绕过业务 Service 直接改库** —— 每个工具都复用既有的 Service（自带权限校验），
+   不另写一套平行的资源管理。
+3. **模型生成的 JSON 不许直接落库** —— `create_workflow_draft` 内部强制再跑一次
+   `validateWorkflowDefinition()`（节点类型白名单、必填配置、连线有效性、恰好一个 start、
+   无环、引用的知识库/模型必须属于当前用户），不通过就返回错误原文让模型自己修正。
+4. **高风险操作必须用户确认** —— `publish_workflow` 是 HIGH，助理**不得自动发布**，
+   只能建草稿并等用户明确同意。
+
+## 30.4 交互与审计
+
+- 每步操作推一个 `operation` SSE 事件，前端渲染成**操作卡片**
+  （状态 / 工具中文名 / 风险徽标 / 目标资源 / 耗时 / 「打开资源」跳转）。
+- 每次工具调用落一条 `PlatformOperationLog`（谁、在哪个会话、用哪个工具、动了哪个资源、结果如何）。
+  审计表与 `ChatMessage.trail` **分开**：trail 是会被模型看到的会话上下文，审计是独立账本。
+- 用户可在聊天页头部打开「操作记录」抽屉，按状态 / 工具 / 目标类型查自己的操作历史；
+  **不提供查别人操作记录的能力**。
+
+## 30.5 上下文注入原则
+
+**只注入元信息，不注入业务数据明细**：
+
+- 注入：我是谁、当前工作空间、可访问空间列表、我能用哪些能力（工具中文名 + 风险等级）、权限说明
+- 不注入：工作流列表、知识库文档内容、运行记录 —— 一律按需通过工具查询
+
+原因：把全量数据拼进每次 Prompt 既浪费 token，也会让模型「看到什么就想聊什么」，
+还容易泄露不该给模型的数据。
+
+## 30.6 已知边界
+
+| 边界 | 说明 |
+|---|---|
+| 不自动发布 | `publish_workflow` 为 HIGH，必须用户确认 |
+| 文档转知识库有格式限制 | 只支持 `pdf / docx / txt / md / markdown`，xlsx 与图片不在知识库支持范围内（聊天附件支持，知识库不支持） |
+| 入队成功 ≠ 处理完成 | 文档入队后还要解析 / 分块 / Embedding，工具返回值会明确区分「已排队」与「已完成」 |
+| 视觉能力取决于模型 | 图片能否被「看到」取决于当前模型是否支持视觉输入 |
 

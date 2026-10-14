@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import * as echarts from "echarts";
-import { MessagePlugin } from "tdesign-vue-next";
+import { MessagePlugin, type TableCol } from "tdesign-vue-next";
 import {
   getOverview,
   getWorkflowTrend,
@@ -604,6 +604,41 @@ const runLogLines = computed<string[]>(() => {
 });
 
 // ===========================================================================
+// t-table 列定义
+// ===========================================================================
+// 1. 模型明细表格（AI 模型调用监控区域）
+const modelDetailColumns: TableCol[] = [
+  { colKey: "model", title: "模型", minWidth: 140 },
+  { colKey: "provider", title: "厂商", width: 100 },
+  { colKey: "calls", title: "调用", width: 80 },
+  { colKey: "successRate", title: "成功率", width: 90 },
+  { colKey: "totalTokens", title: "Token", width: 100 },
+  { colKey: "avgLatencyMs", title: "延迟", width: 90 },
+  { colKey: "estimatedCost", title: "费用", width: 100 },
+];
+
+// 2. 运行记录表格（工作流运行记录区域，带分页）
+const runsColumns: TableCol[] = [
+  { colKey: "workflowName", title: "工作流", minWidth: 140 },
+  { colKey: "status", title: "状态", width: 90 },
+  { colKey: "triggerType", title: "触发", width: 70 },
+  { colKey: "failedNode", title: "失败节点", minWidth: 150 },
+  { colKey: "durationMs", title: "耗时", width: 90 },
+  { colKey: "startedAt", title: "开始时间", width: 130 },
+  { colKey: "action", title: "操作", width: 100, align: "right" },
+];
+
+// 3. 运行详情 - 模型调用表格（抽屉内 Tab 4）
+const runModelCallsColumns: TableCol[] = [
+  { colKey: "model", title: "模型", minWidth: 160 },
+  { colKey: "callType", title: "类型", width: 80 },
+  { colKey: "totalTokens", title: "Token", width: 100 },
+  { colKey: "latencyMs", title: "延迟", width: 90 },
+  { colKey: "status", title: "状态", width: 90 },
+  { colKey: "estimatedCost", title: "费用", width: 100 },
+];
+
+// ===========================================================================
 // 计算属性
 // ===========================================================================
 const failedRuns = computed(() => recentActivities.value?.workflowRuns.filter((r) => r.status === "FAILED") ?? []);
@@ -649,13 +684,9 @@ onBeforeUnmount(() => {
         <div class="time-range-select">
           <span class="range-label">时间范围</span>
           <div class="range-buttons">
-            <button
-              v-for="range in ['7', '14', '30']"
-              :key="range"
-              class="range-btn"
+            <button v-for="range in ['7', '14', '30']" :key="range" class="range-btn"
               :class="{ active: timeRange === range }"
-              @click="timeRange = range as '7' | '14' | '30'; handleTimeRangeChange()"
-            >
+              @click="timeRange = range as '7' | '14' | '30'; handleTimeRangeChange()">
               近 {{ range }} 天
             </button>
           </div>
@@ -713,7 +744,8 @@ onBeforeUnmount(() => {
           <div class="metric-body">
             <div class="metric-value">{{ overview?.workflows.successRate ?? 0 }}%</div>
             <div class="metric-label">成功率</div>
-            <div class="metric-sub">失败 {{ overview?.workflows.runFailed ?? 0 }} · 平均 {{ formatDuration(overview?.workflows.avgDurationMs ?? 0) }}</div>
+            <div class="metric-sub">失败 {{ overview?.workflows.runFailed ?? 0 }} · 平均 {{
+              formatDuration(overview?.workflows.avgDurationMs ?? 0) }}</div>
           </div>
         </div>
         <div class="metric-card metric-orange">
@@ -797,7 +829,8 @@ onBeforeUnmount(() => {
       <section class="model-usage">
         <div class="section-title">
           <h2>AI 模型调用监控</h2>
-          <span class="section-desc">Token / 延迟 / 费用 · 近 {{ modelUsage?.periodDays ?? overview?.periodDays ?? 7 }} 天</span>
+          <span class="section-desc">Token / 延迟 / 费用 · 近 {{ modelUsage?.periodDays ?? overview?.periodDays ?? 7 }}
+            天</span>
         </div>
         <div class="model-stat-row" v-if="modelUsage">
           <div class="model-stat">
@@ -834,34 +867,18 @@ onBeforeUnmount(() => {
               <h3 class="chart-title">模型明细</h3>
             </div>
             <div class="model-table-body">
-              <table v-if="modelUsage && modelUsage.models.length > 0">
-                <thead>
-                  <tr>
-                    <th>模型</th>
-                    <th>厂商</th>
-                    <th>调用</th>
-                    <th>成功率</th>
-                    <th>Token</th>
-                    <th>延迟</th>
-                    <th>费用</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="m in modelUsage.models" :key="m.model">
-                    <td>{{ m.model }}</td>
-                    <td>{{ m.provider }}</td>
-                    <td>{{ m.calls }}</td>
-                    <td>
-                      <span class="status-badge" :class="m.successRate >= 99 ? 'badge-success' : m.successRate >= 90 ? 'badge-warning' : 'badge-error'">
-                        {{ m.successRate }}%
-                      </span>
-                    </td>
-                    <td>{{ formatNumber(m.totalTokens) }}</td>
-                    <td>{{ formatDuration(m.avgLatencyMs) }}</td>
-                    <td>{{ formatCurrency(m.estimatedCost) }}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <t-table v-if="modelUsage && modelUsage.models.length > 0" :data="modelUsage.models"
+                :columns="modelDetailColumns" row-key="model" size="small" hover :pagination="null">
+                <template #successRate="{ row }">
+                  <span class="status-badge"
+                    :class="row.successRate >= 99 ? 'badge-success' : row.successRate >= 90 ? 'badge-warning' : 'badge-error'">
+                    {{ row.successRate }}%
+                  </span>
+                </template>
+                <template #totalTokens="{ row }">{{ formatNumber(row.totalTokens) }}</template>
+                <template #avgLatencyMs="{ row }">{{ formatDuration(row.avgLatencyMs) }}</template>
+                <template #estimatedCost="{ row }">{{ formatCurrency(row.estimatedCost) }}</template>
+              </t-table>
               <div v-else class="empty-state">
                 <t-icon name="data" />
                 <p>暂无模型调用记录</p>
@@ -890,58 +907,50 @@ onBeforeUnmount(() => {
           </div>
           <div class="filter-item">
             <span class="filter-label">错误码</span>
-            <input v-model="runErrorCodeFilter" class="filter-input" placeholder="如 AI_PROVIDER_TIMEOUT" @keyup.enter="handleRunsFilterChange" />
+            <input v-model="runErrorCodeFilter" class="filter-input" placeholder="如 AI_PROVIDER_TIMEOUT"
+              @keyup.enter="handleRunsFilterChange" />
           </div>
           <button class="filter-btn" @click="handleRunsFilterChange">筛选</button>
-          <button class="filter-btn ghost" @click="runStatusFilter=''; runErrorCodeFilter=''; handleRunsFilterChange()">重置</button>
+          <button class="filter-btn ghost"
+            @click="runStatusFilter = ''; runErrorCodeFilter = ''; handleRunsFilterChange()">重置</button>
         </div>
 
-        <div class="runs-table">
-          <table>
-            <thead>
-              <tr>
-                <th>工作流</th>
-                <th>状态</th>
-                <th>触发</th>
-                <th>失败节点</th>
-                <th>耗时</th>
-                <th>开始时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="run in runs" :key="run.id">
-                <td class="run-name">{{ run.workflowName }}</td>
-                <td>
-                  <span class="status-badge" :class="statusBadgeClass(run.status)">
-                    {{ statusLabelMap[run.status] || run.status }}
-                  </span>
-                </td>
-                <td>{{ triggerLabelMap[run.triggerType] || run.triggerType }}</td>
-                <td>
-                  <span v-if="run.failedNode" class="failed-node" :title="run.failedNodeError || ''">
-                    {{ run.failedNode }}<small v-if="run.errorCode"> · {{ run.errorCode }}</small>
-                  </span>
-                  <span v-else class="muted">-</span>
-                </td>
-                <td>{{ formatDuration(run.durationMs) }}</td>
-                <td class="muted">{{ formatRelativeTime(run.startedAt) }}</td>
-                <td>
-                  <button class="link-btn" @click="openRunDetail(run.id)">查看详情</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <div v-if="runs.length === 0" class="empty-state">
-            <t-icon name="history" />
-            <p>暂无运行记录</p>
-          </div>
-        </div>
-
-        <div class="runs-pagination" v-if="runsTotal > 0">
-          <button class="page-btn" :disabled="runsPage <= 1" @click="handleRunsPageChange(runsPage - 1)">上一页</button>
-          <span class="page-info">第 {{ runsPage }} / {{ runTotalPages }} 页</span>
-          <button class="page-btn" :disabled="runsPage >= runTotalPages" @click="handleRunsPageChange(runsPage + 1)">下一页</button>
+        <t-table :data="runs" :columns="runsColumns" row-key="id" size="small" hover :loading="loading" :pagination="{
+          current: runsPage,
+          pageSize: runsPageSize,
+          total: runsTotal,
+          showJumper: true,
+          showPageSize: true,
+          pageSizeOptions: [10, 20, 50],
+          onCurrentChange: handleRunsPageChange,
+          onPageSizeChange: (size: number) => {
+            runsPageSize.value = size;
+            runsPage.value = 1;
+            loadRuns();
+          },
+        }">
+          <template #workflowName="{ row }"><span class="run-name">{{ row.workflowName }}</span></template>
+          <template #status="{ row }">
+            <span class="status-badge" :class="statusBadgeClass(row.status)">
+              {{ statusLabelMap[row.status] || row.status }}
+            </span>
+          </template>
+          <template #triggerType="{ row }">{{ triggerLabelMap[row.triggerType] || row.triggerType }}</template>
+          <template #failedNode="{ row }">
+            <span v-if="row.failedNode" class="failed-node" :title="row.failedNodeError || ''">
+              {{ row.failedNode }}<small v-if="row.errorCode"> · {{ row.errorCode }}</small>
+            </span>
+            <span v-else class="muted">-</span>
+          </template>
+          <template #durationMs="{ row }">{{ formatDuration(row.durationMs) }}</template>
+          <template #startedAt="{ row }"><span class="muted">{{ formatRelativeTime(row.startedAt) }}</span></template>
+          <template #action="{ row }">
+            <t-button theme="primary" variant="text" size="small" @click="openRunDetail(row.id)">查看详情</t-button>
+          </template>
+        </t-table>
+        <div v-if="runs.length === 0 && !loading" class="empty-state">
+          <t-icon name="history" />
+          <p>暂无运行记录</p>
         </div>
       </section>
 
@@ -953,10 +962,12 @@ onBeforeUnmount(() => {
           </div>
           <div class="activity-list">
             <template v-if="recentActivities?.workflowRuns && recentActivities.workflowRuns.length > 0">
-              <div v-for="run in recentActivities.workflowRuns" :key="run.id" class="activity-item clickable" @click="openRunDetail(run.id)">
+              <div v-for="run in recentActivities.workflowRuns" :key="run.id" class="activity-item clickable"
+                @click="openRunDetail(run.id)">
                 <div class="activity-info">
                   <span class="activity-name">{{ run.workflowName }}</span>
-                  <span class="activity-time">{{ formatRelativeTime(run.createdAt) }} · {{ formatDuration(run.durationMs) }}</span>
+                  <span class="activity-time">{{ formatRelativeTime(run.createdAt) }} · {{
+                    formatDuration(run.durationMs) }}</span>
                 </div>
                 <span class="status-badge" :class="statusBadgeClass(run.status)">
                   {{ statusLabelMap[run.status] || run.status }}
@@ -979,11 +990,13 @@ onBeforeUnmount(() => {
           </div>
           <div class="activity-list">
             <template v-if="failedRuns.length > 0">
-              <div v-for="run in failedRuns" :key="run.id" class="activity-item error-item clickable" @click="openRunDetail(run.id)">
+              <div v-for="run in failedRuns" :key="run.id" class="activity-item error-item clickable"
+                @click="openRunDetail(run.id)">
                 <t-icon name="error-circle" class="error-icon" />
                 <div class="activity-info">
                   <span class="activity-name">{{ run.workflowName }}</span>
-                  <span class="activity-desc">{{ run.errorCode ? `[${run.errorCode}] ` : '' }}{{ run.errorMessage || "工作流执行失败" }}</span>
+                  <span class="activity-desc">{{ run.errorCode ? `[${run.errorCode}] ` : '' }}{{ run.errorMessage ||
+                    "工作流执行失败" }}</span>
                 </div>
                 <span class="activity-time">{{ formatRelativeTime(run.createdAt) }}</span>
               </div>
@@ -1008,11 +1021,17 @@ onBeforeUnmount(() => {
 
       <!-- ========== 7. 资源汇总 ========== -->
       <section class="resource-summary">
-        <div class="resource-item"><t-icon name="chat" /><span class="res-label">Agent</span><span class="res-value">{{ overview?.agents.total ?? 0 }}</span></div>
-        <div class="resource-item"><t-icon name="code" /><span class="res-label">Skill</span><span class="res-value">{{ overview?.skills.total ?? 0 }}</span></div>
-        <div class="resource-item"><t-icon name="link" /><span class="res-label">MCP</span><span class="res-value">{{ overview?.mcpServers.total ?? 0 }}</span></div>
-        <div class="resource-item"><t-icon name="user" /><span class="res-label">已发布工作流</span><span class="res-value">{{ overview?.workflows.published ?? 0 }}</span></div>
-        <div class="resource-item"><t-icon name="usergroup" /><span class="res-label">文档总数</span><span class="res-value">{{ knowledgeStatus?.total ?? 0 }}</span></div>
+        <div class="resource-item"><t-icon name="chat" /><span class="res-label">Agent</span><span class="res-value">{{
+          overview?.agents.total ?? 0 }}</span></div>
+        <div class="resource-item"><t-icon name="code" /><span class="res-label">Skill</span><span class="res-value">{{
+          overview?.skills.total ?? 0 }}</span></div>
+        <div class="resource-item"><t-icon name="link" /><span class="res-label">MCP</span><span class="res-value">{{
+          overview?.mcpServers.total ?? 0 }}</span></div>
+        <div class="resource-item"><t-icon name="user" /><span class="res-label">已发布工作流</span><span class="res-value">{{
+          overview?.workflows.published ?? 0 }}</span></div>
+        <div class="resource-item"><t-icon name="usergroup" /><span class="res-label">文档总数</span><span
+            class="res-value">{{
+              knowledgeStatus?.total ?? 0 }}</span></div>
       </section>
 
       <footer class="dashboard-footer" v-if="lastUpdated">
@@ -1038,22 +1057,33 @@ onBeforeUnmount(() => {
 
         <template v-else-if="runDetail">
           <div class="drawer-tabs">
-            <button class="detail-tab" :class="{ active: detailTab === 'overview' }" @click="detailTab = 'overview'">执行概览</button>
-            <button class="detail-tab" :class="{ active: detailTab === 'nodes' }" @click="detailTab = 'nodes'">节点追踪</button>
-            <button class="detail-tab" :class="{ active: detailTab === 'logs' }" @click="detailTab = 'logs'">执行日志</button>
-            <button class="detail-tab" :class="{ active: detailTab === 'models' }" @click="detailTab = 'models'">模型调用</button>
+            <button class="detail-tab" :class="{ active: detailTab === 'overview' }"
+              @click="detailTab = 'overview'">执行概览</button>
+            <button class="detail-tab" :class="{ active: detailTab === 'nodes' }"
+              @click="detailTab = 'nodes'">节点追踪</button>
+            <button class="detail-tab" :class="{ active: detailTab === 'logs' }"
+              @click="detailTab = 'logs'">执行日志</button>
+            <button class="detail-tab" :class="{ active: detailTab === 'models' }"
+              @click="detailTab = 'models'">模型调用</button>
           </div>
 
           <div class="drawer-body">
             <!-- Tab 1: 执行概览 -->
             <div v-show="detailTab === 'overview'" class="detail-pane">
               <div class="kv-grid">
-                <div class="kv"><span class="kv-k">状态</span><span class="kv-v"><span class="status-badge" :class="statusBadgeClass(runDetail.status)">{{ statusLabelMap[runDetail.status] || runDetail.status }}</span></span></div>
-                <div class="kv"><span class="kv-k">触发方式</span><span class="kv-v">{{ triggerLabelMap[runDetail.triggerType] || runDetail.triggerType }}</span></div>
-                <div class="kv"><span class="kv-k">错误码</span><span class="kv-v">{{ runDetail.errorCode || "-" }}</span></div>
-                <div class="kv"><span class="kv-k">总耗时</span><span class="kv-v">{{ formatDuration(runDetail.durationMs) }}</span></div>
-                <div class="kv"><span class="kv-k">开始时间</span><span class="kv-v">{{ formatDateTime(runDetail.startedAt) }}</span></div>
-                <div class="kv"><span class="kv-k">结束时间</span><span class="kv-v">{{ formatDateTime(runDetail.completedAt) }}</span></div>
+                <div class="kv"><span class="kv-k">状态</span><span class="kv-v"><span class="status-badge"
+                      :class="statusBadgeClass(runDetail.status)">{{ statusLabelMap[runDetail.status] ||
+                        runDetail.status }}</span></span></div>
+                <div class="kv"><span class="kv-k">触发方式</span><span class="kv-v">{{
+                  triggerLabelMap[runDetail.triggerType] || runDetail.triggerType }}</span></div>
+                <div class="kv"><span class="kv-k">错误码</span><span class="kv-v">{{ runDetail.errorCode || "-" }}</span>
+                </div>
+                <div class="kv"><span class="kv-k">总耗时</span><span class="kv-v">{{ formatDuration(runDetail.durationMs)
+                }}</span></div>
+                <div class="kv"><span class="kv-k">开始时间</span><span class="kv-v">{{ formatDateTime(runDetail.startedAt)
+                }}</span></div>
+                <div class="kv"><span class="kv-k">结束时间</span><span class="kv-v">{{
+                  formatDateTime(runDetail.completedAt) }}</span></div>
               </div>
               <div v-if="runDetail.errorMessage" class="error-box">
                 <div class="error-box-head">
@@ -1063,22 +1093,26 @@ onBeforeUnmount(() => {
                 <pre class="error-pre">{{ runDetail.errorMessage }}</pre>
               </div>
               <div class="io-block">
-                <div class="io-head"><span>输入（已脱敏）</span><button class="link-btn" @click="copyText(formatJson(runDetail.input))">复制</button></div>
+                <div class="io-head"><span>输入（已脱敏）</span><button class="link-btn"
+                    @click="copyText(formatJson(runDetail.input))">复制</button></div>
                 <pre class="io-pre">{{ formatJson(runDetail.input) }}</pre>
               </div>
               <div class="io-block">
-                <div class="io-head"><span>输出（已脱敏）</span><button class="link-btn" @click="copyText(formatJson(runDetail.output))">复制</button></div>
+                <div class="io-head"><span>输出（已脱敏）</span><button class="link-btn"
+                    @click="copyText(formatJson(runDetail.output))">复制</button></div>
                 <pre class="io-pre">{{ formatJson(runDetail.output) }}</pre>
               </div>
             </div>
 
             <!-- Tab 2: 节点追踪 -->
             <div v-show="detailTab === 'nodes'" class="detail-pane">
-              <div v-for="node in runDetail.nodes" :key="node.id" class="node-trace" :class="{ 'node-failed': node.status === 'FAILED' }">
+              <div v-for="node in runDetail.nodes" :key="node.id" class="node-trace"
+                :class="{ 'node-failed': node.status === 'FAILED' }">
                 <div class="node-trace-head">
                   <span class="node-idx">{{ node.nodeType }}</span>
                   <span class="node-label">{{ node.label || "未命名节点" }}</span>
-                  <span class="status-badge" :class="statusBadgeClass(node.status)">{{ statusLabelMap[node.status] || node.status }}</span>
+                  <span class="status-badge" :class="statusBadgeClass(node.status)">{{ statusLabelMap[node.status] ||
+                    node.status }}</span>
                   <span class="node-dur">{{ formatDuration(node.durationMs) }}</span>
                 </div>
                 <div class="node-meta" v-if="node.attemptsMade || node.errorCode">
@@ -1100,28 +1134,17 @@ onBeforeUnmount(() => {
 
             <!-- Tab 4: 模型调用 -->
             <div v-show="detailTab === 'models'" class="detail-pane">
-              <table v-if="runDetail.modelCalls.length > 0" class="model-calls-table">
-                <thead>
-                  <tr>
-                    <th>模型</th>
-                    <th>类型</th>
-                    <th>Token</th>
-                    <th>延迟</th>
-                    <th>状态</th>
-                    <th>费用</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="mc in runDetail.modelCalls" :key="mc.id">
-                    <td>{{ mc.model }}<small class="muted"> · {{ mc.provider }}</small></td>
-                    <td>{{ mc.callType }}</td>
-                    <td>{{ formatNumber(mc.totalTokens) }}</td>
-                    <td>{{ formatDuration(mc.latencyMs) }}</td>
-                    <td><span class="status-badge" :class="mc.status === 'SUCCESS' ? 'badge-success' : 'badge-error'">{{ mc.status }}</span></td>
-                    <td>{{ formatCurrency(mc.estimatedCost) }}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <t-table v-if="runDetail.modelCalls.length > 0" :data="runDetail.modelCalls"
+                :columns="runModelCallsColumns" row-key="id" size="small" hover :pagination="null">
+                <template #model="{ row }">{{ row.model }}<small class="muted"> · {{ row.provider }}</small></template>
+                <template #totalTokens="{ row }">{{ formatNumber(row.totalTokens) }}</template>
+                <template #latencyMs="{ row }">{{ formatDuration(row.latencyMs) }}</template>
+                <template #status="{ row }">
+                  <span class="status-badge" :class="row.status === 'SUCCESS' ? 'badge-success' : 'badge-error'">{{
+                    row.status }}</span>
+                </template>
+                <template #estimatedCost="{ row }">{{ formatCurrency(row.estimatedCost) }}</template>
+              </t-table>
               <div v-else class="empty-state">
                 <t-icon name="data" />
                 <p>本次运行无模型调用记录</p>
@@ -1151,9 +1174,20 @@ onBeforeUnmount(() => {
   margin-bottom: @space-6;
 
   .header-left {
-    .page-title { font-size: @font-hero; font-weight: 600; color: @color-text; margin: 0 0 @space-1; }
-    .page-subtitle { font-size: @font-sm; color: @color-text-secondary; margin: 0; }
+    .page-title {
+      font-size: @font-hero;
+      font-weight: 600;
+      color: @color-text;
+      margin: 0 0 @space-1;
+    }
+
+    .page-subtitle {
+      font-size: @font-sm;
+      color: @color-text-secondary;
+      margin: 0;
+    }
   }
+
   .header-right {
     display: flex;
     align-items: center;
@@ -1163,7 +1197,12 @@ onBeforeUnmount(() => {
       display: flex;
       align-items: center;
       gap: @space-2;
-      .range-label { font-size: @font-sm; color: @color-text-secondary; }
+
+      .range-label {
+        font-size: @font-sm;
+        color: @color-text-secondary;
+      }
+
       .range-buttons {
         display: flex;
         background: @color-bg-surface;
@@ -1171,6 +1210,7 @@ onBeforeUnmount(() => {
         border-radius: @radius-md;
         padding: 2px;
       }
+
       .range-btn {
         padding: 4px 12px;
         font-size: @font-xs;
@@ -1180,8 +1220,16 @@ onBeforeUnmount(() => {
         border-radius: @radius-sm;
         cursor: pointer;
         transition: all @duration-fast;
-        &:hover { color: @color-text; }
-        &.active { background: @primary-light; color: @primary; font-weight: 500; }
+
+        &:hover {
+          color: @color-text;
+        }
+
+        &.active {
+          background: @primary-light;
+          color: @primary;
+          font-weight: 500;
+        }
       }
     }
 
@@ -1197,8 +1245,16 @@ onBeforeUnmount(() => {
       border-radius: @radius-md;
       cursor: pointer;
       transition: all @duration-fast;
-      &:hover:not(:disabled) { color: @primary; border-color: @primary; }
-      &:disabled { opacity: 0.6; cursor: not-allowed; }
+
+      &:hover:not(:disabled) {
+        color: @primary;
+        border-color: @primary;
+      }
+
+      &:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
     }
   }
 }
@@ -1208,6 +1264,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: @space-4;
+
   .skeleton-card {
     height: 100px;
     background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
@@ -1216,17 +1273,32 @@ onBeforeUnmount(() => {
     border-radius: @radius-card;
   }
 }
+
 @keyframes skeleton-pulse {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .error-state {
   text-align: center;
   padding: 60px 0;
   color: @color-error;
-  .t-icon { font-size: 48px; margin-bottom: @space-3; }
-  p { font-size: @font-md; color: @color-text-secondary; margin-bottom: @space-4; }
+
+  .t-icon {
+    font-size: 48px;
+    margin-bottom: @space-3;
+  }
+
+  p {
+    font-size: @font-md;
+    color: @color-text-secondary;
+    margin-bottom: @space-4;
+  }
 }
 
 /* ==================== 指标卡片 ==================== */
@@ -1236,6 +1308,7 @@ onBeforeUnmount(() => {
   gap: @space-4;
   margin-bottom: @space-6;
 }
+
 .metric-card {
   background: @color-bg-surface;
   border: 1px solid @color-border;
@@ -1246,7 +1319,10 @@ onBeforeUnmount(() => {
   gap: @space-4;
   box-shadow: @shadow-card;
   transition: box-shadow @duration-normal;
-  &:hover { box-shadow: @shadow-float; }
+
+  &:hover {
+    box-shadow: @shadow-float;
+  }
 
   .metric-icon {
     width: 44px;
@@ -1258,19 +1334,55 @@ onBeforeUnmount(() => {
     font-size: 22px;
     flex-shrink: 0;
   }
+
   .metric-body {
     flex: 1;
     min-width: 0;
-    .metric-value { font-size: @font-hero; font-weight: 700; color: @color-text; line-height: 1.2; }
-    .metric-label { font-size: @font-sm; color: @color-text-secondary; margin-top: 2px; }
-    .metric-sub { font-size: @font-xs; color: @color-text-tertiary; margin-top: 4px; }
+
+    .metric-value {
+      font-size: @font-hero;
+      font-weight: 700;
+      color: @color-text;
+      line-height: 1.2;
+    }
+
+    .metric-label {
+      font-size: @font-sm;
+      color: @color-text-secondary;
+      margin-top: 2px;
+    }
+
+    .metric-sub {
+      font-size: @font-xs;
+      color: @color-text-tertiary;
+      margin-top: 4px;
+    }
   }
 
-  &.metric-purple .metric-icon { background: @primary-light; color: @primary; }
-  &.metric-blue .metric-icon { background: rgba(24, 144, 255, 0.1); color: #1890FF; }
-  &.metric-green .metric-icon { background: rgba(43, 164, 113, 0.12); color: @color-success; }
-  &.metric-orange .metric-icon { background: rgba(227, 115, 24, 0.12); color: @color-warning; }
-  &.metric-pink .metric-icon { background: rgba(235, 47, 150, 0.1); color: #EB2F96; }
+  &.metric-purple .metric-icon {
+    background: @primary-light;
+    color: @primary;
+  }
+
+  &.metric-blue .metric-icon {
+    background: rgba(24, 144, 255, 0.1);
+    color: #1890FF;
+  }
+
+  &.metric-green .metric-icon {
+    background: rgba(43, 164, 113, 0.12);
+    color: @color-success;
+  }
+
+  &.metric-orange .metric-icon {
+    background: rgba(227, 115, 24, 0.12);
+    color: @color-warning;
+  }
+
+  &.metric-pink .metric-icon {
+    background: rgba(235, 47, 150, 0.1);
+    color: #EB2F96;
+  }
 }
 
 /* ==================== 图表卡片 ==================== */
@@ -1284,6 +1396,7 @@ onBeforeUnmount(() => {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
 .chart-card {
   background: @color-bg-surface;
   border: 1px solid @color-border;
@@ -1296,11 +1409,27 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     align-items: baseline;
     margin-bottom: @space-4;
-    .chart-title { font-size: @font-lg; font-weight: 600; color: @color-text; margin: 0; }
-    .chart-desc { font-size: @font-xs; color: @color-text-tertiary; }
+
+    .chart-title {
+      font-size: @font-lg;
+      font-weight: 600;
+      color: @color-text;
+      margin: 0;
+    }
+
+    .chart-desc {
+      font-size: @font-xs;
+      color: @color-text-tertiary;
+    }
   }
-  .chart-body { height: 280px; }
-  .chart-body-sm { height: 220px; }
+
+  .chart-body {
+    height: 280px;
+  }
+
+  .chart-body-sm {
+    height: 220px;
+  }
 }
 
 /* ==================== 区块标题 ==================== */
@@ -1309,8 +1438,18 @@ onBeforeUnmount(() => {
   align-items: baseline;
   gap: @space-3;
   margin: @space-6 0 @space-4;
-  h2 { font-size: @font-xl; font-weight: 600; color: @color-text; margin: 0; }
-  .section-desc { font-size: @font-xs; color: @color-text-tertiary; }
+
+  h2 {
+    font-size: @font-xl;
+    font-weight: 600;
+    color: @color-text;
+    margin: 0;
+  }
+
+  .section-desc {
+    font-size: @font-xs;
+    color: @color-text-tertiary;
+  }
 }
 
 /* ==================== 模型调用监控 ==================== */
@@ -1319,6 +1458,7 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(5, 1fr);
   gap: @space-4;
   margin-bottom: @space-4;
+
   .model-stat {
     background: @color-bg-surface;
     border: 1px solid @color-border;
@@ -1326,47 +1466,43 @@ onBeforeUnmount(() => {
     padding: @space-4;
     text-align: center;
     box-shadow: @shadow-card;
-    .model-stat-value { font-size: @font-xl; font-weight: 700; color: @primary; }
-    .model-stat-label { font-size: @font-xs; color: @color-text-secondary; margin-top: 4px; }
+
+    .model-stat-value {
+      font-size: @font-xl;
+      font-weight: 700;
+      color: @primary;
+    }
+
+    .model-stat-label {
+      font-size: @font-xs;
+      color: @color-text-secondary;
+      margin-top: 4px;
+    }
   }
 }
+
 .model-detail {
   display: grid;
   grid-template-columns: 1fr 1.4fr;
   gap: @space-4;
+
   .model-table {
     display: flex;
     flex-direction: column;
-    .model-table-body { flex: 1; overflow: auto; max-height: 260px; }
-  }
-}
 
-/* ==================== 表格通用 ==================== */
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: @font-sm;
-  th {
-    text-align: left;
-    padding: @space-2 @space-3;
-    color: @color-text-tertiary;
-    font-weight: 500;
-    border-bottom: 1px solid @color-border;
-    background: @color-bg;
-    position: sticky;
-    top: 0;
+    .model-table-body {
+      flex: 1;
+      overflow: auto;
+      max-height: 260px;
+    }
   }
-  td {
-    padding: @space-2 @space-3;
-    color: @color-text;
-    border-bottom: 1px solid @color-border;
-    vertical-align: middle;
-  }
-  tbody tr:hover { background: @color-bg-hover; }
 }
 
 /* ==================== 运行记录 ==================== */
-.runs-section { margin-bottom: @space-6; }
+.runs-section {
+  margin-bottom: @space-6;
+}
+
 .runs-filter {
   display: flex;
   align-items: center;
@@ -1377,9 +1513,20 @@ table {
   padding: @space-3 @space-4;
   margin-bottom: @space-3;
   flex-wrap: wrap;
-  .filter-item { display: flex; align-items: center; gap: @space-2; }
-  .filter-label { font-size: @font-sm; color: @color-text-secondary; }
-  .filter-select, .filter-input {
+
+  .filter-item {
+    display: flex;
+    align-items: center;
+    gap: @space-2;
+  }
+
+  .filter-label {
+    font-size: @font-sm;
+    color: @color-text-secondary;
+  }
+
+  .filter-select,
+  .filter-input {
     padding: 6px 10px;
     font-size: @font-sm;
     border: 1px solid @color-border;
@@ -1387,8 +1534,13 @@ table {
     background: @color-bg;
     color: @color-text;
     min-width: 160px;
-    &:focus { outline: none; border-color: @primary; }
+
+    &:focus {
+      outline: none;
+      border-color: @primary;
+    }
   }
+
   .filter-btn {
     padding: 6px 16px;
     font-size: @font-sm;
@@ -1398,37 +1550,35 @@ table {
     border-radius: @radius-sm;
     cursor: pointer;
     transition: opacity @duration-fast;
-    &:hover { opacity: 0.9; }
-    &.ghost { background: transparent; color: @color-text-secondary; border: 1px solid @color-border; }
+
+    &:hover {
+      opacity: 0.9;
+    }
+
+    &.ghost {
+      background: transparent;
+      color: @color-text-secondary;
+      border: 1px solid @color-border;
+    }
   }
 }
-.runs-table {
-  background: @color-bg-surface;
-  border: 1px solid @color-border;
-  border-radius: @radius-card;
-  padding: @space-2;
-  box-shadow: @shadow-card;
-  .run-name { font-weight: 500; }
-  .muted { color: @color-text-tertiary; }
-  .failed-node { color: @color-error; font-weight: 500; small { color: @color-text-tertiary; font-weight: 400; } }
-  .link-btn {
-    padding: 2px 8px; font-size: @font-xs; color: @primary; background: transparent;
-    border: none; cursor: pointer; border-radius: @radius-sm;
-    &:hover { background: @primary-light; }
-  }
+
+.run-name {
+  font-weight: 500;
 }
-.runs-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: @space-3;
-  margin-top: @space-3;
-  .page-btn {
-    padding: 4px 12px; font-size: @font-sm; color: @color-text-secondary;
-    background: @color-bg-surface; border: 1px solid @color-border; border-radius: @radius-sm; cursor: pointer;
-    &:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.muted {
+  color: @color-text-tertiary;
+}
+
+.failed-node {
+  color: @color-error;
+  font-weight: 500;
+
+  small {
+    color: @color-text-tertiary;
+    font-weight: 400;
   }
-  .page-info { font-size: @font-sm; color: @color-text-tertiary; }
 }
 
 /* ==================== 底部活动区 ==================== */
@@ -1451,178 +1601,448 @@ table {
     justify-content: space-between;
     align-items: center;
     margin-bottom: @space-4;
-    .chart-title { font-size: @font-lg; font-weight: 600; color: @color-text; margin: 0; }
+
+    .chart-title {
+      font-size: @font-lg;
+      font-weight: 600;
+      color: @color-text;
+      margin: 0;
+    }
+
     .error-count {
-      font-size: @font-xs; font-weight: 500; color: @color-error;
-      background: rgba(213, 73, 65, 0.1); padding: 2px 8px; border-radius: @radius-pill;
+      font-size: @font-xs;
+      font-weight: 500;
+      color: @color-error;
+      background: rgba(213, 73, 65, 0.1);
+      padding: 2px 8px;
+      border-radius: @radius-pill;
     }
   }
 
-  &.activity-error { border-left: 3px solid @color-error; }
+  &.activity-error {
+    border-left: 3px solid @color-error;
+  }
 
   .activity-list {
-    display: flex; flex-direction: column; gap: @space-2;
-    max-height: 360px; overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: @space-2;
+    max-height: 360px;
+    overflow-y: auto;
   }
-  .activity-item {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: @space-3; background: @color-bg; border-radius: @radius-md;
-    transition: background-color @duration-fast;
-    &.clickable { cursor: pointer; &:hover { background: @color-bg-hover; } }
 
-    .activity-info {
-      flex: 1; min-width: 0; display: flex; flex-direction: column;
-      .activity-name {
-        font-size: @font-base; color: @color-text; font-weight: 500;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      }
-      .activity-desc {
-        font-size: @font-xs; color: @color-text-tertiary; margin-top: 2px;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  .activity-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: @space-3;
+    background: @color-bg;
+    border-radius: @radius-md;
+    transition: background-color @duration-fast;
+
+    &.clickable {
+      cursor: pointer;
+
+      &:hover {
+        background: @color-bg-hover;
       }
     }
-    .activity-time { font-size: @font-xs; color: @color-text-tertiary; flex-shrink: 0; margin-left: @space-3; }
 
-    &.error-item { gap: @space-2;
-      .error-icon { color: @color-error; font-size: 16px; flex-shrink: 0; }
-      .activity-info .activity-name { color: @color-error; }
+    .activity-info {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+
+      .activity-name {
+        font-size: @font-base;
+        color: @color-text;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .activity-desc {
+        font-size: @font-xs;
+        color: @color-text-tertiary;
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    }
+
+    .activity-time {
+      font-size: @font-xs;
+      color: @color-text-tertiary;
+      flex-shrink: 0;
+      margin-left: @space-3;
+    }
+
+    &.error-item {
+      gap: @space-2;
+
+      .error-icon {
+        color: @color-error;
+        font-size: 16px;
+        flex-shrink: 0;
+      }
+
+      .activity-info .activity-name {
+        color: @color-error;
+      }
     }
   }
 
   .status-badge {
-    font-size: @font-xs; font-weight: 500; padding: 2px 10px;
-    border-radius: @radius-pill; flex-shrink: 0;
-    &.badge-success { background: rgba(43, 164, 113, 0.12); color: @color-success; }
-    &.badge-error { background: rgba(213, 73, 65, 0.1); color: @color-error; }
-    &.badge-primary { background: @primary-light; color: @primary; }
-    &.badge-warning { background: rgba(227, 115, 24, 0.12); color: @color-warning; }
-    &.badge-default { background: @color-bg-hover; color: @color-text-secondary; }
+    font-size: @font-xs;
+    font-weight: 500;
+    padding: 2px 10px;
+    border-radius: @radius-pill;
+    flex-shrink: 0;
+
+    &.badge-success {
+      background: rgba(43, 164, 113, 0.12);
+      color: @color-success;
+    }
+
+    &.badge-error {
+      background: rgba(213, 73, 65, 0.1);
+      color: @color-error;
+    }
+
+    &.badge-primary {
+      background: @primary-light;
+      color: @primary;
+    }
+
+    &.badge-warning {
+      background: rgba(227, 115, 24, 0.12);
+      color: @color-warning;
+    }
+
+    &.badge-default {
+      background: @color-bg-hover;
+      color: @color-text-secondary;
+    }
   }
 
   .empty-state {
-    text-align: center; padding: @space-8; color: @color-text-tertiary;
-    .t-icon { font-size: 32px; margin-bottom: @space-2; opacity: 0.5; }
-    p { font-size: @font-sm; margin: 0; }
+    text-align: center;
+    padding: @space-8;
+    color: @color-text-tertiary;
+
+    .t-icon {
+      font-size: 32px;
+      margin-bottom: @space-2;
+      opacity: 0.5;
+    }
+
+    p {
+      font-size: @font-sm;
+      margin: 0;
+    }
   }
 }
 
 /* ==================== 资源汇总 ==================== */
 .resource-summary {
-  display: flex; justify-content: space-around;
-  background: @color-bg-surface; border: 1px solid @color-border;
-  border-radius: @radius-card; padding: @space-4 @space-6;
+  display: flex;
+  justify-content: space-around;
+  background: @color-bg-surface;
+  border: 1px solid @color-border;
+  border-radius: @radius-card;
+  padding: @space-4 @space-6;
   box-shadow: @shadow-card;
 
   .resource-item {
-    display: flex; align-items: center; gap: @space-2;
-    .t-icon { color: @color-text-tertiary; font-size: 16px; }
-    .res-label { font-size: @font-sm; color: @color-text-secondary; }
-    .res-value { font-size: @font-md; font-weight: 600; color: @color-text; }
+    display: flex;
+    align-items: center;
+    gap: @space-2;
+
+    .t-icon {
+      color: @color-text-tertiary;
+      font-size: 16px;
+    }
+
+    .res-label {
+      font-size: @font-sm;
+      color: @color-text-secondary;
+    }
+
+    .res-value {
+      font-size: @font-md;
+      font-weight: 600;
+      color: @color-text;
+    }
   }
 }
 
 .dashboard-footer {
-  text-align: right; padding: @space-4 0;
-  font-size: @font-xs; color: @color-text-tertiary;
+  text-align: right;
+  padding: @space-4 0;
+  font-size: @font-xs;
+  color: @color-text-tertiary;
 }
 
 /* ==================== 运行详情抽屉 ==================== */
 .run-drawer-mask {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);
-  z-index: 1000; display: flex; justify-content: flex-end;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
 }
+
 .run-drawer {
-  position: relative; width: 760px; max-width: 94vw; height: 100%;
-  background: @color-bg-surface; box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
-  display: flex; flex-direction: column;
+  position: relative;
+  width: 760px;
+  max-width: 94vw;
+  height: 100%;
+  background: @color-bg-surface;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
   animation: drawer-slide 0.25s ease;
 
   .drawer-header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: @space-4 @space-5; border-bottom: 1px solid @color-border;
-    .drawer-title { display: flex; flex-direction: column;
-      span:first-child { font-size: @font-lg; font-weight: 600; color: @color-text; }
-      .drawer-sub { font-size: @font-xs; color: @color-text-tertiary; margin-top: 2px; }
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: @space-4 @space-5;
+    border-bottom: 1px solid @color-border;
+
+    .drawer-title {
+      display: flex;
+      flex-direction: column;
+
+      span:first-child {
+        font-size: @font-lg;
+        font-weight: 600;
+        color: @color-text;
+      }
+
+      .drawer-sub {
+        font-size: @font-xs;
+        color: @color-text-tertiary;
+        margin-top: 2px;
+      }
     }
+
     .drawer-close {
-      border: none; background: transparent; cursor: pointer; font-size: 20px; color: @color-text-tertiary;
-      &:hover { color: @color-text; }
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 20px;
+      color: @color-text-tertiary;
+
+      &:hover {
+        color: @color-text;
+      }
     }
   }
 
   .drawer-loading {
-    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: @color-text-tertiary; gap: @space-3;
-    .t-icon { font-size: 32px; }
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: @color-text-tertiary;
+    gap: @space-3;
+
+    .t-icon {
+      font-size: 32px;
+    }
   }
 
   .drawer-tabs {
-    display: flex; border-bottom: 1px solid @color-border; padding: 0 @space-5;
+    display: flex;
+    border-bottom: 1px solid @color-border;
+    padding: 0 @space-5;
+
     .detail-tab {
-      padding: @space-3 @space-4; font-size: @font-sm; color: @color-text-secondary;
-      background: transparent; border: none; border-bottom: 2px solid transparent; cursor: pointer;
+      padding: @space-3 @space-4;
+      font-size: @font-sm;
+      color: @color-text-secondary;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
       transition: all @duration-fast;
-      &:hover { color: @color-text; }
-      &.active { color: @primary; border-bottom-color: @primary; font-weight: 500; }
+
+      &:hover {
+        color: @color-text;
+      }
+
+      &.active {
+        color: @primary;
+        border-bottom-color: @primary;
+        font-weight: 500;
+      }
     }
   }
 
-  .drawer-body { flex: 1; overflow-y: auto; padding: @space-5; }
-  .detail-pane { display: flex; flex-direction: column; gap: @space-4; }
+  .drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: @space-5;
+  }
+
+  .detail-pane {
+    display: flex;
+    flex-direction: column;
+    gap: @space-4;
+  }
 
   .kv-grid {
-    display: grid; grid-template-columns: repeat(2, 1fr); gap: @space-3;
-    .kv { display: flex; justify-content: space-between; padding: @space-2 @space-3;
-      background: @color-bg; border-radius: @radius-md; border: 1px solid @color-border;
-      .kv-k { font-size: @font-sm; color: @color-text-secondary; }
-      .kv-v { font-size: @font-sm; color: @color-text; font-weight: 500; }
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: @space-3;
+
+    .kv {
+      display: flex;
+      justify-content: space-between;
+      padding: @space-2 @space-3;
+      background: @color-bg;
+      border-radius: @radius-md;
+      border: 1px solid @color-border;
+
+      .kv-k {
+        font-size: @font-sm;
+        color: @color-text-secondary;
+      }
+
+      .kv-v {
+        font-size: @font-sm;
+        color: @color-text;
+        font-weight: 500;
+      }
     }
   }
 
-  .error-box, .io-block {
-    border: 1px solid @color-border; border-radius: @radius-md; overflow: hidden;
-    .error-box-head, .io-head {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: @space-2 @space-3; background: @color-bg; font-size: @font-sm; color: @color-text-secondary;
+  .error-box,
+  .io-block {
+    border: 1px solid @color-border;
+    border-radius: @radius-md;
+    overflow: hidden;
+
+    .error-box-head,
+    .io-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: @space-2 @space-3;
+      background: @color-bg;
+      font-size: @font-sm;
+      color: @color-text-secondary;
       border-bottom: 1px solid @color-border;
     }
-    .error-pre, .io-pre {
-      margin: 0; padding: @space-3; font-size: @font-xs; line-height: 1.6; color: @color-text;
-      white-space: pre-wrap; word-break: break-all; max-height: 240px; overflow: auto;
+
+    .error-pre,
+    .io-pre {
+      margin: 0;
+      padding: @space-3;
+      font-size: @font-xs;
+      line-height: 1.6;
+      color: @color-text;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 240px;
+      overflow: auto;
       font-family: @font-mono;
     }
-    &.error-box .error-pre { color: @color-error; }
+
+    &.error-box .error-pre {
+      color: @color-error;
+    }
   }
 
   .node-trace {
-    border: 1px solid @color-border; border-radius: @radius-md; padding: @space-3;
+    border: 1px solid @color-border;
+    border-radius: @radius-md;
+    padding: @space-3;
     background: @color-bg;
-    &.node-failed { border-left: 3px solid @color-error; }
-    .node-trace-head { display: flex; align-items: center; gap: @space-2; flex-wrap: wrap; }
-    .node-idx {
-      font-size: @font-xs; font-weight: 600; color: @primary; background: @primary-light;
-      padding: 2px 8px; border-radius: @radius-sm;
+
+    &.node-failed {
+      border-left: 3px solid @color-error;
     }
-    .node-label { font-size: @font-sm; font-weight: 500; color: @color-text; }
-    .node-dur { font-size: @font-xs; color: @color-text-tertiary; margin-left: auto; }
-    .node-meta { font-size: @font-xs; color: @color-text-tertiary; margin-top: 4px; }
-    .node-error { font-size: @font-xs; color: @color-error; margin-top: 4px; }
-    .node-io { margin-top: @space-2; summary { cursor: pointer; font-size: @font-xs; color: @primary; } }
+
+    .node-trace-head {
+      display: flex;
+      align-items: center;
+      gap: @space-2;
+      flex-wrap: wrap;
+    }
+
+    .node-idx {
+      font-size: @font-xs;
+      font-weight: 600;
+      color: @primary;
+      background: @primary-light;
+      padding: 2px 8px;
+      border-radius: @radius-sm;
+    }
+
+    .node-label {
+      font-size: @font-sm;
+      font-weight: 500;
+      color: @color-text;
+    }
+
+    .node-dur {
+      font-size: @font-xs;
+      color: @color-text-tertiary;
+      margin-left: auto;
+    }
+
+    .node-meta {
+      font-size: @font-xs;
+      color: @color-text-tertiary;
+      margin-top: 4px;
+    }
+
+    .node-error {
+      font-size: @font-xs;
+      color: @color-error;
+      margin-top: 4px;
+    }
+
+    .node-io {
+      margin-top: @space-2;
+
+      summary {
+        cursor: pointer;
+        font-size: @font-xs;
+        color: @primary;
+      }
+    }
   }
 
   .log-pre {
-    margin: 0; padding: @space-3; background: #1e1e2e; color: #e4e4e7;
-    border-radius: @radius-md; font-size: @font-xs; line-height: 1.7; white-space: pre-wrap;
-    font-family: @font-mono; max-height: 60vh; overflow: auto;
-  }
-
-  .model-calls-table {
-    .muted { color: @color-text-tertiary; }
+    margin: 0;
+    padding: @space-3;
+    background: #1e1e2e;
+    color: #e4e4e7;
+    border-radius: @radius-md;
+    font-size: @font-xs;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    font-family: @font-mono;
+    max-height: 60vh;
+    overflow: auto;
   }
 }
 
 @keyframes drawer-slide {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
 }
 </style>

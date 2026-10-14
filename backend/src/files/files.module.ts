@@ -31,6 +31,6 @@ import { FilePreviewService } from './file-preview.service';
     FileStorageService,
     FilePreviewService,
   ],
-  exports: [FilesService, FileGeneratorService],
+  exports: [FilesService, FileGeneratorService, FilePreviewService],
 })
 export class FilesModule {}

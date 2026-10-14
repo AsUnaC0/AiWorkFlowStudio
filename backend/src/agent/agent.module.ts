@@ -5,6 +5,9 @@ import { FilesModule } from '../files/files.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { WorkflowsModule } from '../workflows/workflows.module';
 import { LlmConfigModule } from '../llm-config/llm-config.module';
+import { ChatFilesModule } from '../chat-files/chat-files.module';
+import { McpModule } from '../mcp/mcp.module';
+import { AssistantModule } from '../assistant/assistant.module';
 import { AgentController } from './agent.controller';
 import { AgentService } from './agent.service';
 import { ChatSessionService } from './chat-session.service';
@@ -35,6 +38,12 @@ import { GenerateFileTool } from './tools/generate-file.tool';
     forwardRef(() => WorkflowsModule),
     LlmConfigModule,
     FilesModule,
+    // MCP 工具调用（McpService 取配置、McpToolService 做工具发现与调用）
+    McpModule,
+    // 聊天附件上传/解析/上下文组装（ChatFilesService、FileContextService）
+    ChatFilesModule,
+    // 平台助理（默认系统 Agent 的专属 Prompt / 平台工具注册中心 / 操作审计）
+    AssistantModule,
   ],
   controllers: [AgentController],
   providers: [

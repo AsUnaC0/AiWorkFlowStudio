@@ -126,23 +126,32 @@ const hasChanges = computed(() => {
 
 const handleSave = async () => {
     if (!agent.value) return;
-    if (!form.value.name.trim()) {
+    if (!isSystemAgent.value && !form.value.name.trim()) {
         MessagePlugin.warning("Agent 名称不能为空");
         return;
     }
 
     saving.value = true;
     try {
-        await updateAgent(agent.value.id, {
-            name: form.value.name.trim(),
-            description: form.value.description || undefined,
-            llmModelId: form.value.llmModelId,
-            systemPrompt: form.value.systemPrompt || undefined,
-            workflowIds: form.value.workflowIds,
-            knowledgeBaseIds: form.value.knowledgeBaseIds,
-            maxToolIterations: form.value.maxToolIterations,
-            temperature: form.value.temperature,
-        });
+        if (isSystemAgent.value) {
+            // 系统预设 Agent：后端只放开模型配置，其余字段由系统维护。
+            // 这里必须「只发模型字段」——多带一个字段整个请求都会被拒（400）。
+            await updateAgent(agent.value.id, {
+                llmModelId: form.value.llmModelId,
+                temperature: form.value.temperature,
+            });
+        } else {
+            await updateAgent(agent.value.id, {
+                name: form.value.name.trim(),
+                description: form.value.description || undefined,
+                llmModelId: form.value.llmModelId,
+                systemPrompt: form.value.systemPrompt || undefined,
+                workflowIds: form.value.workflowIds,
+                knowledgeBaseIds: form.value.knowledgeBaseIds,
+                maxToolIterations: form.value.maxToolIterations,
+                temperature: form.value.temperature,
+            });
+        }
         MessagePlugin.success("保存成功");
         await loadAgent();
     } catch (err) {
@@ -310,7 +319,7 @@ const goChat = () => {
                     <div class="form-item">
                         <label for="iters">最大工具调用轮数 ({{ form.maxToolIterations }})</label>
                         <input id="iters" v-model.number="form.maxToolIterations" type="range" min="1" max="30" step="1"
-                            class="form-range" />
+                            class="form-range" :disabled="isSystemAgent" />
                         <div class="range-labels">
                             <span>1</span>
                             <span>30</span>
@@ -343,7 +352,7 @@ const goChat = () => {
 
                 <section v-if="isSystemAgent" class="config-section compact warning">
                     <t-icon name="info-circle" class="warning-icon" />
-                    <p>这是一个系统预设 Agent，部分配置不可修改。</p>
+                    <p>这是系统预设 Agent：名称、描述、系统提示词与绑定资源由系统维护，不可修改；<strong>模型配置（模型、温度）可以调整</strong>。</p>
                 </section>
             </aside>
         </div>

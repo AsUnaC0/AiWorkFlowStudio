@@ -5,6 +5,8 @@ import type {
   GenerateFileRequest,
   FilePreviewPayload,
   FileFormatOption,
+  ChatAttachment,
+  ChatFilePolicy,
 } from "@/types/files";
 
 export type {
@@ -12,6 +14,8 @@ export type {
   GenerateFileRequest,
   FilePreviewPayload,
   FileFormatOption,
+  ChatAttachment,
+  ChatFilePolicy,
 };
 
 // ===========================================================================
@@ -99,6 +103,80 @@ export const downloadFile = async (file: GeneratedFile): Promise<void> => {
   const link = document.createElement("a");
   link.href = url;
   link.download = file.fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+// ===========================================================================
+// 聊天附件 API（与知识库 Document 解耦，普通消息附件不上传知识库 / 不向量化）
+// ===========================================================================
+
+/** 上传策略：前端据此做类型 / 大小 / 数量前置校验 */
+export const getChatFilePolicy = (): Promise<ChatFilePolicy> =>
+  request.get(`/chat/files/policy`);
+
+/**
+ * 上传聊天附件（multipart/form-data，字段 file）。
+ * 不手动设置 Content-Type，让 axios 自动带上 multipart boundary。
+ */
+export const uploadChatFile = (file: File, sessionId?: string): Promise<ChatAttachment> => {
+  const form = new FormData();
+  form.append("file", file);
+  if (sessionId) form.append("sessionId", sessionId);
+  return request.post(`/chat/files/upload`, form);
+};
+
+/** 批量查询解析状态（前端轮询用） */
+export const getChatFileStatuses = (ids: string[]): Promise<ChatAttachment[]> =>
+  request.get(`/chat/files/status`, { params: { ids: ids.join(",") } });
+
+/** 删除附件 */
+export const deleteChatFile = (
+  id: string,
+): Promise<{ id: string; deleted: boolean }> =>
+  request.delete(`/chat/files/${id}`);
+
+/** 重新解析失败的附件 */
+export const reprocessChatFile = (id: string): Promise<ChatAttachment> =>
+  request.post(`/chat/files/${id}/reprocess`);
+
+/** 预览数据（HTML / 表格 / rawUrl），结构与文件预览一致 */
+export const getChatFilePreview = (id: string): Promise<FilePreviewPayload> =>
+  request.get(`/chat/files/${id}/preview`);
+
+/** 带鉴权抓取原始文件，返回 blob URL（私有对象存储不暴露永久地址） */
+export const fetchChatFileBlob = async (id: string): Promise<string> => {
+  const userStore = useUserStore();
+  const response = await fetch(`/api/chat/files/${id}/raw`, {
+    headers: {
+      ...(userStore.token ? { Authorization: `Bearer ${userStore.token}` } : {}),
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`文件读取失败: ${response.status}`);
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+};
+
+/** 触发浏览器下载聊天附件（走后端鉴权接口） */
+export const downloadChatFile = async (att: ChatAttachment): Promise<void> => {
+  const userStore = useUserStore();
+  const response = await fetch(`/api/chat/files/${att.id}/download`, {
+    headers: {
+      ...(userStore.token ? { Authorization: `Bearer ${userStore.token}` } : {}),
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`文件下载失败: ${response.status}`);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = att.originalName;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

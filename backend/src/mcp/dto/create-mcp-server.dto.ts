@@ -3,6 +3,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
   MaxLength,
 } from 'class-validator';
 
@@ -17,12 +18,18 @@ export class CreateMcpServerDto {
   @MaxLength(1000)
   description?: string;
 
+  /** Streamable HTTP（推荐）或旧版 HTTP + SSE */
   @IsOptional()
   @IsEnum(['SSE', 'STREAMABLE_HTTP'])
   transport?: string;
 
   @IsString()
   @IsNotEmpty()
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
   serverUrl!: string;
 
   @IsOptional()
@@ -31,9 +38,11 @@ export class CreateMcpServerDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   apiKey?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   bearerToken?: string;
 }

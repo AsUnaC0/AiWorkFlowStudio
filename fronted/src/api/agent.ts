@@ -10,6 +10,7 @@ import type {
   ChatMessage,
   AgentStreamEvent,
   AgentStreamMeta,
+  AgentOperation,
 } from "@/types/agent";
 
 // 便于消费方直接从 @/api/agent 引入这些类型
@@ -23,6 +24,7 @@ export type {
   ChatMessage,
   AgentStreamEvent,
   AgentStreamMeta,
+  AgentOperation,
 };
 
 // ===========================================================================
@@ -132,17 +134,30 @@ export interface AgentChatStreamRequest {
   agentId: string;
   /** Session ID（可选，传入则持久化 + 加载历史） */
   sessionId?: string;
+  /** 随消息上传的附件 ID 列表（后端会解析内容并注入 AI 上下文） */
+  attachmentIds?: string[];
+  /**
+   * 当前工作空间 ID（可选）。
+   * 仅作为「用户意图」传给后端 —— 后端会重新校验成员关系后才采用。
+   */
+  workspaceId?: string;
 }
 
 /**
  * SSE 流式聊天 —— 推事件给前端。
  * 基于 Agent ID 从后端读取配置，不需要前端传模型/知识库等。
  *
- * 事件类型：thinking → tool_call → tool_result → message → error
+ * 事件类型：meta → thinking → tool_call → tool_result → operation → file → message → error
+ *
+ * @param signal 可选的中止信号。页面被真正销毁（登出、跳转到独立路由）时
+ *               应 abort，避免流继续消费 token 却无人接收。
+ *               注意：被 keep-alive 缓存的页面切换菜单**不会**销毁组件，
+ *               不要在这种情况下 abort。
  */
 export const runAgentStream = async (
   data: AgentChatStreamRequest,
   onEvent: (event: AgentStreamEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> => {
   const userStore = useUserStore();
   const response = await fetch(`/api/agents/${data.agentId}/chat/stream`, {
@@ -154,7 +169,10 @@ export const runAgentStream = async (
     body: JSON.stringify({
       input: data.input,
       sessionId: data.sessionId,
+      attachmentIds: data.attachmentIds ?? [],
+      workspaceId: data.workspaceId,
     }),
+    signal,
   });
 
   if (!response.ok || !response.body) {

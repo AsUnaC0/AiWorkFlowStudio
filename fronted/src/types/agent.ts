@@ -2,7 +2,7 @@
 // Agent 基础类型
 // ===========================================================================
 
-import type { GeneratedFile } from "./files";
+import type { GeneratedFile, ChatAttachment } from "./files";
 
 export type AgentType = "GENERAL" | "KNOWLEDGE" | "WORKFLOW" | "TOOL" | "CUSTOM";
 export type AgentStatus = "DRAFT" | "PUBLISHED" | "DISABLED";
@@ -98,6 +98,8 @@ export interface ChatMessage {
   createdAt: string;
   /** 本条消息关联的文件（Agent 通过 generate_file 工具产出） */
   files?: GeneratedFile[];
+  /** 用户随消息上传的附件（PDF / Word / Excel / 图片等，直接作为 AI 上下文） */
+  attachments?: ChatAttachment[];
 }
 
 export interface ChatSessionDetail extends ChatSession {
@@ -116,6 +118,8 @@ export interface AgentStreamMeta {
   /** 本次实际使用的模型标识（后端解析 llmModelId 得到，未绑定时为本地 model） */
   model: string;
   provider: string;
+  /** 是否为平台助理（系统默认 Agent） */
+  isPlatformAssistant?: boolean;
 }
 
 export interface AgentStreamThinking {
@@ -134,6 +138,28 @@ export interface AgentStreamToolResult {
   tool: string;
   result: string;
   durationMs: number;
+}
+
+/** 平台助理执行的一次平台操作（后端 PlatformToolsService 产出） */
+export interface AgentOperation {
+  tool: string;
+  /** 工具中文名 */
+  label: string;
+  action: "QUERY" | "CREATE" | "UPDATE" | "DELETE" | "EXECUTE";
+  riskLevel: "LOW" | "MEDIUM" | "HIGH";
+  status: "SUCCESS" | "FAILED" | "DENIED";
+  targetType?: string;
+  targetId?: string;
+  targetName?: string;
+  summary?: string;
+  /** 前端可跳转的资源入口，如 /workspace/<workflowId> */
+  link?: string;
+  durationMs: number;
+}
+
+export interface AgentStreamOperation {
+  type: "operation";
+  operation: AgentOperation;
 }
 
 export interface AgentStreamMessage {
@@ -157,9 +183,44 @@ export type AgentStreamEvent =
   | AgentStreamThinking
   | AgentStreamToolCall
   | AgentStreamToolResult
+  | AgentStreamOperation
   | AgentStreamMessage
   | AgentStreamFile
   | AgentStreamError;
+
+// ===========================================================================
+// 平台助理
+// ===========================================================================
+
+/**
+ * 判断某个 Agent 是否为平台助理。
+ *
+ * 判据与后端 PlatformAssistantService.isPlatformAssistant 保持一致：
+ * 「系统默认 Agent」这个事实，而不是名字（名字可以被改，标识不能）。
+ */
+export const isPlatformAssistantAgent = (
+  agent?: Pick<Agent, "isSystem" | "isDefault"> | null,
+): boolean => agent?.isSystem === true && agent?.isDefault === true;
+
+/** 风险等级 → 展示配置 */
+export const RISK_LEVEL_META: Record<
+  AgentOperation["riskLevel"],
+  { label: string; theme: "success" | "warning" | "danger" }
+> = {
+  LOW: { label: "只读", theme: "success" },
+  MEDIUM: { label: "中风险", theme: "warning" },
+  HIGH: { label: "高风险", theme: "danger" },
+};
+
+/** 操作状态 → 展示配置 */
+export const OPERATION_STATUS_META: Record<
+  AgentOperation["status"],
+  { label: string; icon: string; theme: "success" | "danger" | "warning" }
+> = {
+  SUCCESS: { label: "已成功", icon: "check-circle", theme: "success" },
+  FAILED: { label: "已失败", icon: "close-circle", theme: "danger" },
+  DENIED: { label: "已拒绝", icon: "lock-on", theme: "warning" },
+};
 
 // ===========================================================================
 // Agent 模板预设（前端创建 Agent 时用）

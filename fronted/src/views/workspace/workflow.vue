@@ -69,7 +69,11 @@ const onNodeClick = (e: { node: any }) => {
 const runDialogVisible = ref(false);
 const runInput = ref("");
 const running = ref(false);
+/** 当前正在跑的模式：两个运行按钮共用一个 running 状态，用它区分谁在 loading */
+const runningMode = ref<"stream" | "async" | null>(null);
 const runResult = ref<unknown>(null);
+/** 运行结果默认折叠，跑完自动展开，可手动收起 */
+const runResultExpanded = ref(false);
 const runError = ref("");
 const currentNodeStatus = ref("");
 const chatMessages = ref<{ role: "user" | "assistant"; content: string }[]>([]);
@@ -166,6 +170,7 @@ const pollRunResult = async (runId: string) => {
     if (pollCount > POLL_MAX_COUNT) {
       stopRunPolling();
       running.value = false;
+      runningMode.value = null;
       runError.value = "运行超时（5分钟），请稍后查看运行历史或 Worker 日志";
       currentNodeStatus.value = "";
       MessagePlugin.warning(runError.value);
@@ -185,9 +190,11 @@ const pollRunResult = async (runId: string) => {
       if (run.status === "COMPLETED" || run.status === "FAILED") {
         stopRunPolling();
         running.value = false;
+        runningMode.value = null;
 
         if (run.status === "COMPLETED") {
           runResult.value = run.output;
+          runResultExpanded.value = true;
           currentNodeStatus.value = "工作流运行完成";
           MessagePlugin.success("工作流运行完成");
         } else {
@@ -210,8 +217,10 @@ const nodeLabel = (
 /** BullMQ 异步运行（生产模式：入队 → 轮询 → 显示结果） */
 const handleRunWorkflow = async () => {
   running.value = true;
+  runningMode.value = "async";
   runError.value = "";
   runResult.value = null;
+  runResultExpanded.value = false;
   currentRun.value = null;
 
   try {
@@ -235,13 +244,17 @@ const handleRunWorkflow = async () => {
     MessagePlugin.error(runError.value);
     console.error("Workflow enqueue failed", error);
     running.value = false;
+    runningMode.value = null;
   }
 };
 
 /** SSE 实时运行（开发调试用 —— 同步执行，流式反馈） */
 const handleRunWorkflowStream = async () => {
   running.value = true;
+  runningMode.value = "stream";
   runError.value = "";
+  runResult.value = null;
+  runResultExpanded.value = false;
 
   try {
     const definition = getCurrentDefinition();
@@ -277,6 +290,7 @@ const handleRunWorkflowStream = async () => {
           currentNodeStatus.value = `已完成：${event.nodeType}`;
         } else if (event.type === "complete") {
           runResult.value = { input: runInput.value, data: event.data };
+          runResultExpanded.value = true;
           currentNodeStatus.value = "工作流运行完成";
         }
       },
@@ -288,6 +302,7 @@ const handleRunWorkflowStream = async () => {
     console.error("Workflow run failed", error);
   } finally {
     running.value = false;
+    runningMode.value = null;
   }
 };
 const propertyDrawerVisible = ref(false);
@@ -419,6 +434,8 @@ const openRunDialog = () => {
   stopRunPolling();
   runInput.value = "";
   runResult.value = null;
+  runResultExpanded.value = false;
+  runningMode.value = null;
   runError.value = "";
   currentNodeStatus.value = "";
   chatMessages.value = [];
@@ -909,6 +926,8 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
     <t-dialog v-model:visible="runDialogVisible" header="运行工作流" :close-on-overlay-click="false" width="560px">
       <div class="run-dialog-content">
         <label class="form-label" for="workflow-run-input">输入内容</label>
+        <t-textarea id="workflow-run-input" v-model="runInput" :disabled="running"
+          :autosize="{ minRows: 5, maxRows: 10 }" placeholder="请输入本次运行传给工作流的内容" />
 
         <!-- 后台运行状态（BullMQ 异步） -->
         <div v-if="currentRun" class="run-meta">
@@ -932,13 +951,16 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
             <div class="chat-bubble">{{ message.content }}</div>
           </div>
         </div>
-        <t-textarea id="workflow-run-input" v-model="runInput" :disabled="running"
-          :autosize="{ minRows: 5, maxRows: 10 }" placeholder="请输入本次运行传给工作流的内容" />
-
         <div v-if="runError" class="run-error">{{ runError }}</div>
+
+        <!-- 运行结果：跟在工作流输出下方，默认折叠，点标题可展开 / 收起 -->
         <div v-if="runResult !== null" class="run-result">
-          <div class="form-label">运行结果</div>
-          <pre>{{ runResultText }}</pre>
+          <button type="button" class="run-result-toggle" :aria-expanded="runResultExpanded"
+            @click="runResultExpanded = !runResultExpanded">
+            <t-icon :name="runResultExpanded ? 'chevron-down' : 'chevron-right'" size="16px" />
+            <span class="form-label">运行结果</span>
+          </button>
+          <pre v-show="runResultExpanded" class="run-result-body">{{ runResultText }}</pre>
         </div>
       </div>
 
@@ -946,11 +968,12 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
       <template #footer>
         <div class="run-dialog-actions">
           <t-button variant="outline" @click="runDialogVisible = false" :disabled="running">取消</t-button>
-          <t-button variant="outline" theme="default" :loading="running" :disabled="running"
+          <!-- 运行期间两个按钮都禁用，只有被点的那个显示 loading -->
+          <t-button variant="outline" theme="default" :loading="runningMode === 'stream'" :disabled="running"
             @click="handleRunWorkflowStream" title="直接在前端传 definition 运行，未保存的画布改动也能试跑">
             调试运行（SSE）
           </t-button>
-          <t-button theme="primary" :loading="running" :disabled="running" @click="handleRunWorkflow">
+          <t-button theme="primary" :loading="runningMode === 'async'" :disabled="running" @click="handleRunWorkflow">
             运行（异步）
           </t-button>
         </div>
@@ -1470,6 +1493,26 @@ const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
 
   .run-result {
     margin-top: var(--space-2);
+
+    .run-result-toggle {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: var(--color-text);
+      font-size: var(--font-sm);
+      cursor: pointer;
+
+      &:hover {
+        color: var(--primary);
+      }
+
+      .form-label {
+        margin: 0;
+      }
+    }
 
     pre {
       max-height: 220px;

@@ -1,12 +1,26 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { EncryptionService } from '../common/crypto/encryption.service';
 import { CreateMcpServerDto } from './dto/create-mcp-server.dto';
 import { UpdateMcpServerDto } from './dto/update-mcp-server.dto';
+import { McpConnectionService } from './mcp-connection.service';
+import { McpToolService } from './mcp-tool.service';
+import { McpUrlGuardService } from './mcp-url-guard.service';
+import type {
+  McpAuthType,
+  McpServerRuntimeConfig,
+  McpTool,
+} from './types/mcp.types';
 
+/**
+ * 数据库查询字段：含 credentials（仅用于生成掩码预览，返回前端前会被剥离）。
+ */
 const mcpSelection = {
   id: true,
   ownerId: true,
@@ -18,52 +32,126 @@ const mcpSelection = {
   status: true,
   lastError: true,
   availableTools: true,
+  protocolVersion: true,
+  serverName: true,
+  serverVersion: true,
+  lastConnectedAt: true,
   createdAt: true,
   updatedAt: true,
+  credentials: true,
 } as const;
 
+/** 运行时用的完整配置（含解密后的凭据，仅在服务端内部流转） */
+export interface McpServerRuntime extends McpServerRuntimeConfig {
+  id: string;
+  name: string;
+  credentials: { apiKey?: string; bearerToken?: string };
+}
+
+/** 加密后的凭据存储格式 */
+interface EncryptedCredentials {
+  v: 2;
+  cipher: string;
+}
+
+/**
+ * MCP Server 配置管理 + 业务流程编排。
+ *
+ * 本服务不直接与 MCP Server 通信：
+ *  - 协议通信 → transports/*（Streamable HTTP / SSE）
+ *  - 会话生命周期 → McpConnectionService
+ *  - 工具发现与调用 → McpToolService
+ *  - 目标地址安全校验 → McpUrlGuardService
+ *
+ * 这里只负责：配置 CRUD、凭据加密、连接状态落库、对外接口编排。
+ */
 @Injectable()
 export class McpService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(McpService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly encryption: EncryptionService,
+    private readonly urlGuard: McpUrlGuardService,
+    private readonly connections: McpConnectionService,
+    private readonly toolService: McpToolService,
+  ) {}
+
+  // ===========================================================================
+  // CRUD
+  // ===========================================================================
 
   /** 创建 MCP Server（当前用户作为 owner） */
-  create(userId: string, dto: CreateMcpServerDto) {
-    return this.prisma.mcpServer.create({
+  async create(userId: string, dto: CreateMcpServerDto) {
+    // 同步校验 URL 形态（协议 / 内网主机 / 内嵌凭据），快速失败
+    this.urlGuard.assertSafeUrlShape(dto.serverUrl);
+
+    const authType = (dto.authType ?? 'NONE') as McpAuthType;
+    this.assertCredentialsProvided(authType, dto);
+
+    const server = await this.prisma.mcpServer.create({
       data: {
         ownerId: userId,
         name: dto.name,
         description: dto.description,
         transport: dto.transport ?? 'STREAMABLE_HTTP',
         serverUrl: dto.serverUrl,
-        authType: dto.authType ?? 'NONE',
-        credentials: this.buildCredentials(dto) as any,
+        authType,
+        credentials: this.encryptCredentials(dto) as never,
+        status: 'DISCONNECTED',
       },
       select: mcpSelection,
     });
+
+    return this.toPublicServer(server);
   }
 
   /** 获取当前用户的全部 MCP Servers */
-  findAll(userId: string) {
-    return this.prisma.mcpServer.findMany({
+  async findAll(userId: string) {
+    const servers = await this.prisma.mcpServer.findMany({
       where: { ownerId: userId },
       orderBy: { createdAt: 'desc' },
       select: mcpSelection,
     });
+    return servers.map((s) => this.toPublicServer(s));
   }
 
   /**
-   * 按 ID 列表批量获取 MCP Servers（工作流执行时用，无需 owner 校验）。
-   * 包含 credentials，用于运行时调用 MCP Server。
+   * 按 ID 批量获取运行时配置（工作流 / Agent 执行时用，无需 owner 校验）。
+   * 凭据在这里解密，只允许服务端内部使用，绝不能直接返回给前端。
    */
-  findByIds(ids: string[]) {
-    if (ids.length === 0) return [];
-    return this.prisma.mcpServer.findMany({
+  async findRuntimeConfigs(ids: string[]): Promise<McpServerRuntime[]> {
+    if (!ids || ids.length === 0) return [];
+
+    const servers = await this.prisma.mcpServer.findMany({
       where: { id: { in: ids } },
       select: {
-        ...mcpSelection,
+        id: true,
+        name: true,
+        transport: true,
+        serverUrl: true,
+        authType: true,
         credentials: true,
+        availableTools: true,
       },
     });
+
+    return servers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      transport: s.transport,
+      serverUrl: s.serverUrl,
+      authType: s.authType,
+      credentials: this.decryptCredentials(s.credentials),
+      cachedTools: Array.isArray(s.availableTools)
+        ? (s.availableTools as unknown as McpTool[])
+        : undefined,
+    }));
+  }
+
+  /** 兼容旧调用名（工作流 LLM 节点曾用 findByIds） */
+  findByIds(ids: string[]) {
+    return this.findRuntimeConfigs(ids);
   }
 
   /** 获取单个 MCP Server（owner 校验） */
@@ -74,12 +162,19 @@ export class McpService {
     });
     if (!server) throw new NotFoundException('MCP Server not found');
     this.assertOwner(userId, server);
-    return server;
+    return this.toPublicServer(server);
   }
 
   /** 更新 MCP Server */
   async update(userId: string, id: string, dto: UpdateMcpServerDto) {
-    const server = await this.assertOwnerExists(userId, id);
+    const existing = await this.assertOwnerExists(userId, id);
+
+    if (dto.serverUrl !== undefined) {
+      this.urlGuard.assertSafeUrlShape(dto.serverUrl);
+    }
+
+    const nextAuthType = (dto.authType ?? existing.authType) as McpAuthType;
+    this.assertCredentialsProvided(nextAuthType, dto, true);
 
     const data: Record<string, unknown> = {};
     if (dto.name !== undefined) data.name = dto.name;
@@ -88,360 +183,318 @@ export class McpService {
     if (dto.serverUrl !== undefined) data.serverUrl = dto.serverUrl;
     if (dto.authType !== undefined) data.authType = dto.authType;
 
-    // 如果有凭证更新，合并到现有 credentials
-    if (dto.apiKey !== undefined || dto.bearerToken !== undefined) {
-      const existing =
-        (server.credentials as Record<string, unknown>) ?? {};
-      if (dto.apiKey !== undefined) existing.apiKey = dto.apiKey;
-      if (dto.bearerToken !== undefined)
-        existing.bearerToken = dto.bearerToken;
-      data.credentials = existing as any;
+    // 凭据更新：与现有解密后的凭据合并后重新加密
+    if (
+      dto.apiKey !== undefined ||
+      dto.bearerToken !== undefined ||
+      dto.authType !== undefined
+    ) {
+      const merged = this.decryptCredentials(existing.credentials);
+      if (dto.apiKey !== undefined) merged.apiKey = dto.apiKey || undefined;
+      if (dto.bearerToken !== undefined) {
+        merged.bearerToken = dto.bearerToken || undefined;
+      }
+      data.credentials = this.encryptPlainCredentials(merged);
     }
 
-    // URL 或认证方式变更时重置连接状态
-    if (dto.serverUrl !== undefined || dto.authType !== undefined) {
+    // 连接相关字段变更 → 旧会话与工具缓存都不可信，重置
+    const connectionChanged =
+      dto.serverUrl !== undefined ||
+      dto.authType !== undefined ||
+      dto.transport !== undefined ||
+      dto.apiKey !== undefined ||
+      dto.bearerToken !== undefined;
+
+    if (connectionChanged) {
       data.status = 'DISCONNECTED';
       data.lastError = null;
-      data.availableTools = null as any;
+      data.availableTools = null;
+      data.protocolVersion = null;
+      data.serverName = null;
+      data.serverVersion = null;
+      data.lastConnectedAt = null;
+      await this.connections.invalidateById(id);
     }
 
-    return this.prisma.mcpServer.update({
+    const server = await this.prisma.mcpServer.update({
       where: { id },
-      data,
+      data: data as never,
       select: mcpSelection,
     });
+    return this.toPublicServer(server);
   }
 
   /** 删除 MCP Server */
   async remove(userId: string, id: string) {
     await this.assertOwnerExists(userId, id);
-    return this.prisma.mcpServer.delete({
+    await this.connections.invalidateById(id);
+    const server = await this.prisma.mcpServer.delete({
       where: { id },
       select: mcpSelection,
     });
+    return this.toPublicServer(server);
   }
 
   // ===========================================================================
-  // 连接测试 + 获取 Tools
+  // 连接测试 / 工具发现
   // ===========================================================================
 
-  /** 测试 MCP Server 连接，获取可用 tools 并缓存到数据库 */
+  /**
+   * 测试连接：完成 initialize 握手 + tools/list，并把结果落库。
+   * 返回统一的成功/失败结构，供前端展示「连接状态 / 可用工具 / 最后连接时间」。
+   */
   async testConnection(userId: string, id: string) {
-    const server = await this.prisma.mcpServer.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        ownerId: true,
-        transport: true,
-        serverUrl: true,
-        authType: true,
-        credentials: true,
-      },
-    });
-    if (!server) throw new NotFoundException('MCP Server not found');
-    this.assertOwner(userId, server);
+    const server = await this.assertOwnerExists(userId, id);
+    return this.runConnectionTest(id, server);
+  }
+
+  /** 刷新工具列表（与连接测试同一条链路，语义更明确） */
+  async refreshTools(userId: string, id: string) {
+    const server = await this.assertOwnerExists(userId, id);
+    return this.runConnectionTest(id, server);
+  }
+
+  private async runConnectionTest(
+    id: string,
+    server: {
+      name: string;
+      transport: string;
+      serverUrl: string;
+      authType: string;
+      credentials: unknown;
+    },
+  ) {
+    const runtime: McpServerRuntime = {
+      id,
+      name: server.name,
+      transport: server.transport,
+      serverUrl: server.serverUrl,
+      authType: server.authType,
+      credentials: this.decryptCredentials(server.credentials),
+    };
 
     try {
-      const tools = await this.fetchTools(server);
+      // 强制重新握手，确保「测试连接」拿到的是真实状态
+      await this.connections.invalidateById(id);
+      const connection = await this.connections.getConnection(runtime);
+      const tools = await connection.transport.listTools();
+
+      const connectedAt = new Date();
       await this.prisma.mcpServer.update({
         where: { id },
         data: {
           status: 'CONNECTED',
           lastError: null,
-          availableTools: tools as any,
+          availableTools: tools as never,
+          protocolVersion: connection.session.protocolVersion,
+          serverName: connection.session.serverInfo?.name ?? null,
+          serverVersion: connection.session.serverInfo?.version ?? null,
+          lastConnectedAt: connectedAt,
         },
       });
+
       return {
         success: true,
-        status: 'CONNECTED',
+        status: 'CONNECTED' as const,
+        transport: runtime.transport,
+        protocolVersion: connection.session.protocolVersion,
+        serverInfo: connection.session.serverInfo ?? null,
+        instructions: connection.session.instructions ?? null,
         tools,
+        lastConnectedAt: connectedAt.toISOString(),
         message: `连接成功，发现 ${tools.length} 个可用工具`,
       };
     } catch (err) {
-      const errorMsg =
-        err instanceof Error ? err.message : '连接失败';
+      const errorMsg = this.toErrorMessage(err);
       await this.prisma.mcpServer.update({
         where: { id },
         data: {
           status: 'ERROR',
           lastError: errorMsg,
-          availableTools: null as any,
+          availableTools: null as never,
+          lastConnectedAt: null,
         },
       });
+
       return {
         success: false,
-        status: 'ERROR',
-        tools: [],
+        status: 'ERROR' as const,
+        transport: runtime.transport,
+        tools: [] as McpTool[],
         message: errorMsg,
       };
     }
   }
 
   // ===========================================================================
-  // 工作流运行时：工具调用 + ToolDefinition 构建
+  // 工具调用
   // ===========================================================================
 
   /**
-   * 调用 MCP Server 上的某个工具。
-   * 工作流 LLM 节点执行时，当 LLM 返回 tool_calls 后调用此方法。
+   * 按 Server 配置调用工具（内部/工作流链路使用）。
+   * 返回模型可读的文本结果。
    */
   async callTool(
-    server: {
-      transport: string;
-      serverUrl: string;
-      authType: string;
-      credentials: unknown;
-    },
+    server: McpServerRuntimeConfig,
     toolName: string,
     args: Record<string, unknown>,
-  ): Promise<unknown> {
-    if (server.transport === 'SSE') {
-      throw new Error('SSE 传输方式暂不支持工具调用，请使用 Streamable HTTP');
-    }
-
-    const headers = this.buildHeaders(
-      server.authType,
-      server.credentials as Record<string, unknown> | null,
+  ): Promise<string> {
+    const outcome = await this.toolService.callToolStrict(
+      server,
+      toolName,
+      args,
     );
+    return outcome.text;
+  }
 
-    // Step 1: Initialize
-    const initResponse = await fetch(server.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...headers,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'ai-workflow-studio', version: '1.0.0' },
-        },
-      }),
-    });
-
-    if (!initResponse.ok) {
-      throw new Error(`MCP initialize 失败: HTTP ${initResponse.status}`);
-    }
-
-    await this.parseMcpResponse(initResponse);
-
-    // Step 2: notifications/initialized
-    await fetch(server.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...headers,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'notifications/initialized',
-      }),
-    });
-
-    // Step 3: tools/call
-    const callResponse = await fetch(server.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...headers,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 3,
-        method: 'tools/call',
-        params: {
-          name: toolName,
-          arguments: args,
-        },
-      }),
-    });
-
-    if (!callResponse.ok) {
-      throw new Error(
-        `tools/call 请求失败: HTTP ${callResponse.status}`,
-      );
-    }
-
-    const callResult = await this.parseMcpResponse(callResponse);
-    if (callResult.error) {
-      throw new Error(
-        `工具调用失败: ${JSON.stringify(callResult.error)}`,
-      );
-    }
-
-    const result = callResult.result as {
-      content?: Array<{ type: string; text?: string }>;
-      isError?: boolean;
+  /** 调试用：校验 owner 后调用某个工具，返回完整结果 */
+  async callToolForUser(
+    userId: string,
+    id: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ) {
+    const server = await this.assertOwnerExists(userId, id);
+    const runtime: McpServerRuntime = {
+      id,
+      name: server.name,
+      transport: server.transport,
+      serverUrl: server.serverUrl,
+      authType: server.authType,
+      credentials: this.decryptCredentials(server.credentials),
     };
 
-    if (result?.isError) {
-      const errorText = result.content?.[0]?.text || '工具执行返回错误';
-      throw new Error(errorText);
-    }
-
-    // 提取文本内容
-    if (result?.content && Array.isArray(result.content)) {
-      const texts = result.content
-        .filter((c) => c.type === 'text')
-        .map((c) => c.text || '');
-      return texts.join('\n');
-    }
-
-    return callResult.result;
-  }
-
-  // ===========================================================================
-  // MCP 协议通信
-  // ===========================================================================
-
-  private async fetchTools(server: {
-    transport: string;
-    serverUrl: string;
-    authType: string;
-    credentials: unknown;
-  }): Promise<unknown[]> {
-    if (server.transport === 'SSE') {
-      throw new Error(
-        'SSE 传输方式暂不支持自动连接测试，请使用 Streamable HTTP',
-      );
-    }
-
-    const headers = this.buildHeaders(
-      server.authType,
-      server.credentials as Record<string, unknown> | null,
+    const started = Date.now();
+    const outcome = await this.toolService.callToolStrict(
+      runtime,
+      toolName,
+      args ?? {},
     );
 
-    // Step 1: Initialize 握手
-    const initResponse = await fetch(server.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...headers,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: {
-            name: 'ai-workflow-studio',
-            version: '1.0.0',
-          },
-        },
-      }),
-    });
-
-    if (!initResponse.ok) {
-      throw new Error(
-        `MCP Server 返回 HTTP ${initResponse.status}: ${initResponse.statusText}`,
-      );
-    }
-
-    const initResult = await this.parseMcpResponse(initResponse);
-    if (initResult.error) {
-      throw new Error(
-        `MCP initialize 失败: ${JSON.stringify(initResult.error)}`,
-      );
-    }
-
-    // Step 2: 发送 initialized 通知（无需等待响应）
-    await fetch(server.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...headers,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'notifications/initialized',
-      }),
-    });
-
-    // Step 3: 获取 tools 列表
-    const toolsResponse = await fetch(server.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...headers,
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 2,
-        method: 'tools/list',
-        params: {},
-      }),
-    });
-
-    if (!toolsResponse.ok) {
-      throw new Error(
-        `tools/list 请求失败: HTTP ${toolsResponse.status}`,
-      );
-    }
-
-    const toolsResult = await this.parseMcpResponse(toolsResponse);
-    if (toolsResult.error) {
-      throw new Error(
-        `tools/list 失败: ${JSON.stringify(toolsResult.error)}`,
-      );
-    }
-
-    const tools = (toolsResult.result as { tools?: unknown[] })?.tools;
-    return Array.isArray(tools) ? tools : [];
+    return {
+      success: !outcome.isError,
+      toolName,
+      durationMs: Date.now() - started,
+      content: outcome.text,
+      structuredContent: outcome.result.structuredContent ?? null,
+      isError: outcome.isError,
+    };
   }
 
-  private async parseMcpResponse(
-    response: Response,
-  ): Promise<{ result?: unknown; error?: unknown }> {
-    const contentType = response.headers.get('content-type') || '';
+  /** 取某个 Server 当前可用的工具列表（实时发现，不落库） */
+  async listToolsLive(userId: string, id: string) {
+    const server = await this.assertOwnerExists(userId, id);
+    const runtime: McpServerRuntime = {
+      id,
+      name: server.name,
+      transport: server.transport,
+      serverUrl: server.serverUrl,
+      authType: server.authType,
+      credentials: this.decryptCredentials(server.credentials),
+    };
+    return this.toolService.listTools(runtime);
+  }
 
-    if (contentType.includes('text/event-stream')) {
-      const text = await response.text();
-      const lines = text.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            return JSON.parse(line.slice(6).trim());
-          } catch {
-            // 继续找下一行
-          }
-        }
+  // ===========================================================================
+  // 凭据处理
+  // ===========================================================================
+
+  /** 组装加密后的 credentials 字段 */
+  private encryptCredentials(dto: CreateMcpServerDto): EncryptedCredentials {
+    return this.encryptPlainCredentials({
+      apiKey: dto.apiKey || undefined,
+      bearerToken: dto.bearerToken || undefined,
+    });
+  }
+
+  private encryptPlainCredentials(plain: {
+    apiKey?: string;
+    bearerToken?: string;
+  }): EncryptedCredentials {
+    const payload: Record<string, string> = {};
+    if (plain.apiKey) payload.apiKey = plain.apiKey;
+    if (plain.bearerToken) payload.bearerToken = plain.bearerToken;
+    return {
+      v: 2,
+      cipher: this.encryption.encrypt(JSON.stringify(payload)),
+    };
+  }
+
+  /**
+   * 解密凭据。
+   * 兼容历史明文数据（旧版本直接把 { apiKey, bearerToken } 存进 credentials）。
+   */
+  private decryptCredentials(raw: unknown): {
+    apiKey?: string;
+    bearerToken?: string;
+  } {
+    if (!raw || typeof raw !== 'object') return {};
+    const obj = raw as Record<string, unknown>;
+
+    if (obj.v === 2 && typeof obj.cipher === 'string') {
+      try {
+        const decrypted = this.encryption.decrypt(obj.cipher);
+        const parsed = JSON.parse(decrypted) as Record<string, unknown>;
+        return {
+          apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : undefined,
+          bearerToken:
+            typeof parsed.bearerToken === 'string'
+              ? parsed.bearerToken
+              : undefined,
+        };
+      } catch (err) {
+        this.logger.error(
+          `MCP 凭据解密失败（可能是加密密钥变更）：${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return {};
       }
-      throw new Error('MCP Server SSE 响应中没有找到有效数据');
     }
 
-    return response.json();
+    // 历史明文格式
+    return {
+      apiKey: typeof obj.apiKey === 'string' ? obj.apiKey : undefined,
+      bearerToken:
+        typeof obj.bearerToken === 'string' ? obj.bearerToken : undefined,
+    };
   }
 
-  private buildHeaders(
-    authType: string,
-    credentials: Record<string, unknown> | null,
-  ): Record<string, string> {
-    const headers: Record<string, string> = {};
-    if (authType === 'API_KEY' && credentials?.apiKey) {
-      headers['X-API-Key'] = String(credentials.apiKey);
-    } else if (authType === 'BEARER_TOKEN' && credentials?.bearerToken) {
-      headers['Authorization'] = `Bearer ${credentials.bearerToken}`;
+  /**
+   * 把数据库行转成对前端安全的对象：
+   * 剥离 credentials，只保留「是否已配置凭据 + 掩码预览」。
+   */
+  private toPublicServer<T extends { credentials?: unknown }>(server: T) {
+    const { credentials, ...rest } = server;
+    const creds = this.decryptCredentials(credentials);
+    const secret = creds.bearerToken ?? creds.apiKey ?? null;
+
+    return {
+      ...rest,
+      hasCredentials: Boolean(secret),
+      credentialPreview: secret ? this.encryption.maskApiKey(secret) : null,
+    };
+  }
+
+  private assertCredentialsProvided(
+    authType: McpAuthType,
+    dto: { apiKey?: string; bearerToken?: string },
+    isUpdate = false,
+  ): void {
+    if (authType === 'NONE') return;
+    if (authType === 'API_KEY' && !dto.apiKey && !isUpdate) {
+      throw new BadRequestException('选择 API_KEY 认证时必须提供 apiKey');
     }
-    return headers;
+    if (authType === 'BEARER_TOKEN' && !dto.bearerToken && !isUpdate) {
+      throw new BadRequestException(
+        '选择 BEARER_TOKEN 认证时必须提供 bearerToken',
+      );
+    }
   }
 
-  private buildCredentials(dto: CreateMcpServerDto): Record<string, unknown> {
-    const creds: Record<string, unknown> = {};
-    if (dto.apiKey) creds.apiKey = dto.apiKey;
-    if (dto.bearerToken) creds.bearerToken = dto.bearerToken;
-    return creds;
+  private toErrorMessage(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    return String(err);
   }
 
   // ===========================================================================
@@ -457,7 +510,14 @@ export class McpService {
   private async assertOwnerExists(userId: string, id: string) {
     const server = await this.prisma.mcpServer.findUnique({
       where: { id },
-      select: { ownerId: true, credentials: true },
+      select: {
+        ownerId: true,
+        name: true,
+        transport: true,
+        serverUrl: true,
+        authType: true,
+        credentials: true,
+      },
     });
     if (!server) throw new NotFoundException('MCP Server not found');
     if (server.ownerId !== userId) {

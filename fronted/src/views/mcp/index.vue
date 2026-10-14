@@ -6,6 +6,7 @@ import {
   updateMcpServer,
   removeMcpServer,
   testMcpConnection,
+  refreshMcpTools,
 } from "@/api/mcp";
 import { MessagePlugin } from "tdesign-vue-next";
 import type { McpServer, TestConnectionResult } from "@/types/mcp";
@@ -88,6 +89,22 @@ const submitForm = async () => {
     formError.value = "请输入 Server URL";
     return;
   }
+  if (
+    formData.value.authType === "API_KEY" &&
+    !formData.value.apiKey &&
+    !editingServer.value
+  ) {
+    formError.value = "选择 API Key 认证时请填写 API Key";
+    return;
+  }
+  if (
+    formData.value.authType === "BEARER_TOKEN" &&
+    !formData.value.bearerToken &&
+    !editingServer.value
+  ) {
+    formError.value = "选择 Bearer Token 认证时请填写 Token";
+    return;
+  }
 
   formSaving.value = true;
   formError.value = "";
@@ -143,8 +160,9 @@ const submitDelete = async () => {
   }
 };
 
-// ========== 测试连接 ==========
+// ========== 测试连接 / 刷新工具 ==========
 const testingId = ref<string | null>(null);
+const refreshingId = ref<string | null>(null);
 
 const handleTestConnection = async (server: McpServer) => {
   testingId.value = server.id;
@@ -161,6 +179,23 @@ const handleTestConnection = async (server: McpServer) => {
     fetchServers();
   } finally {
     testingId.value = null;
+  }
+};
+
+const handleRefreshTools = async (server: McpServer) => {
+  refreshingId.value = server.id;
+  try {
+    const result: TestConnectionResult = await refreshMcpTools(server.id);
+    if (result.success) {
+      MessagePlugin.success(`工具列表已刷新，共 ${result.tools.length} 个工具`);
+    } else {
+      MessagePlugin.error(result.message);
+    }
+    fetchServers();
+  } catch {
+    MessagePlugin.error("刷新工具列表失败");
+  } finally {
+    refreshingId.value = null;
   }
 };
 
@@ -245,6 +280,20 @@ onMounted(() => {
               <div v-if="server.description" class="server-desc">
                 {{ server.description }}
               </div>
+              <div class="server-meta">
+                <span v-if="server.protocolVersion" class="meta-chip">
+                  MCP {{ server.protocolVersion }}
+                </span>
+                <span v-if="server.serverName" class="meta-text">
+                  {{ server.serverName }}{{ server.serverVersion ? ` v${server.serverVersion}` : "" }}
+                </span>
+                <span v-if="server.lastConnectedAt" class="meta-text">
+                  Last connected {{ formatRelativeTime(server.lastConnectedAt) }}
+                </span>
+              </div>
+              <div v-if="server.status === 'ERROR' && server.lastError" class="server-error">
+                {{ server.lastError }}
+              </div>
             </div>
 
             <!-- 状态 -->
@@ -280,23 +329,20 @@ onMounted(() => {
               >
                 Test
               </t-button>
-              <t-dropdown @click.stop>
-                <button class="row-more-btn" @click.stop>
-                  <t-icon name="more" />
-                </button>
-                <template #dropdown>
-                  <t-dropdown-menu>
-                    <t-dropdown-item @click.stop="openEditDialog(server)">
-                      <template #prefix><t-icon name="edit-1" /></template>
-                      Edit
-                    </t-dropdown-item>
-                    <t-dropdown-item @click.stop="openDeleteDialog(server)">
-                      <template #prefix><t-icon name="delete" /></template>
-                      Delete
-                    </t-dropdown-item>
-                  </t-dropdown-menu>
-                </template>
-              </t-dropdown>
+              <t-button
+                size="small"
+                variant="outline"
+                :loading="refreshingId === server.id"
+                @click.stop="handleRefreshTools(server)"
+              >
+                Refresh
+              </t-button>
+              <button class="row-action-btn" type="button" title="Edit" @click.stop="openEditDialog(server)">
+                <t-icon name="edit-1" />
+              </button>
+              <button class="row-action-btn row-action-danger" type="button" title="Delete" @click.stop="openDeleteDialog(server)">
+                <t-icon name="delete" />
+              </button>
             </div>
           </div>
         </div>
@@ -320,10 +366,12 @@ onMounted(() => {
     <t-dialog
       v-model:visible="createDialogVisible"
       :header="editingServer ? 'Edit MCP Server' : 'Add MCP Server'"
-      :footer="false"
+      :confirm-btn="{ content: editingServer ? 'Save' : 'Add', theme: 'primary', loading: formSaving }"
+      cancel-btn="Cancel"
       width="560px"
+      @confirm="submitForm"
     >
-      <t-form layout="vertical" @submit="submitForm">
+      <t-form layout="vertical" label-align="top" @submit="submitForm">
         <t-form-item label="Name">
           <t-input v-model="formData.name" placeholder="GitHub MCP" maxlength="200" />
         </t-form-item>
@@ -365,15 +413,13 @@ onMounted(() => {
             :placeholder="editingServer ? 'Enter new token to update' : 'Your bearer token'"
           />
         </t-form-item>
+        <t-alert
+          v-if="editingServer && editingServer.hasCredentials"
+          theme="info"
+          class="form-alert"
+          :message="`已保存凭据：${editingServer.credentialPreview || '****'}（留空表示不修改）`"
+        />
         <t-alert v-if="formError" theme="error" :message="formError" class="form-alert" />
-        <div class="dialog-actions">
-          <t-button variant="outline" type="button" @click="createDialogVisible = false">
-            Cancel
-          </t-button>
-          <t-button theme="primary" type="submit" :loading="formSaving">
-            {{ editingServer ? 'Save' : 'Add' }}
-          </t-button>
-        </div>
       </t-form>
     </t-dialog>
 
@@ -381,20 +427,14 @@ onMounted(() => {
     <t-dialog
       v-model:visible="deleteDialogVisible"
       header="Delete MCP Server"
-      :footer="false"
+      :confirm-btn="{ content: 'Delete', theme: 'danger', loading: deleting }"
+      cancel-btn="Cancel"
       width="420px"
+      @confirm="submitDelete"
     >
       <p class="delete-tip">
         Are you sure you want to delete "{{ deleteTarget?.name }}"? This will disconnect all tools from this server.
       </p>
-      <div class="dialog-actions">
-        <t-button variant="outline" type="button" @click="deleteDialogVisible = false">
-          Cancel
-        </t-button>
-        <t-button theme="danger" type="button" :loading="deleting" @click="submitDelete">
-          Delete
-        </t-button>
-      </div>
     </t-dialog>
   </div>
 </template>
@@ -463,7 +503,7 @@ onMounted(() => {
       color: @primary;
     }
 
-    .row-more-btn {
+    .row-action-btn {
       opacity: 1;
     }
   }
@@ -522,6 +562,38 @@ onMounted(() => {
     .server-desc {
       font-size: @font-xs;
       color: @color-text-tertiary;
+    }
+
+    .server-meta {
+      display: flex;
+      align-items: center;
+      gap: @space-2;
+      flex-wrap: wrap;
+      margin-top: 2px;
+    }
+
+    .meta-chip {
+      font-size: @font-xs;
+      padding: 1px 6px;
+      border-radius: @radius-sm;
+      background: fade(@primary, 12%);
+      color: @primary;
+      font-family: @font-mono;
+    }
+
+    .meta-text {
+      font-size: @font-xs;
+      color: @color-text-tertiary;
+    }
+
+    .server-error {
+      margin-top: 2px;
+      font-size: @font-xs;
+      color: @color-error;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 420px;
     }
   }
 
@@ -612,7 +684,7 @@ onMounted(() => {
     gap: @space-1;
     flex-shrink: 0;
 
-    .row-more-btn {
+    .row-action-btn {
       width: 32px;
       height: 32px;
       border: none;
@@ -630,10 +702,15 @@ onMounted(() => {
         background: @color-bg-hover;
         color: @color-text;
       }
+
+      &.row-action-danger:hover {
+        background: lighten(@color-error, 42%);
+        color: @color-error;
+      }
     }
   }
 
-  &:hover .row-more-btn {
+  &:hover .row-action-btn {
     opacity: 1;
   }
 }
@@ -680,13 +757,6 @@ onMounted(() => {
   font-size: @font-md;
   color: @color-text;
   margin: 0;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: @space-2;
-  margin-top: @space-4;
 }
 
 .form-alert {

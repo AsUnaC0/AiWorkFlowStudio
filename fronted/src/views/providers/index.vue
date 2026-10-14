@@ -441,10 +441,9 @@ onMounted(fetchConfigs);
     <t-dialog
       v-model:visible="dialogVisible"
       :header="editingId ? '编辑模型配置' : '添加模型'"
-      :footer="false"
       width="560px"
     >
-      <t-form :data="form" layout="vertical">
+      <t-form :data="form" layout="vertical" label-align="top">
         <t-form-item label="配置名称" required-mark>
           <t-input
             v-model="form.name"
@@ -525,36 +524,30 @@ onMounted(fetchConfigs);
           class="test-result"
         />
 
+      </t-form>
+
+      <!-- 底部：左侧「测试连接」是额外操作，用 footer 插槽承载 -->
+      <template #footer>
         <div class="dialog-footer">
-          <t-button
-            variant="outline"
-            :loading="testing"
-            @click="onTest"
-            >测试连接</t-button
-          >
+          <t-button variant="outline" :loading="testing" @click="onTest">测试连接</t-button>
           <div class="footer-right">
-            <t-button
-              theme="default"
-              variant="outline"
-              @click="dialogVisible = false"
-              >取消</t-button
-            >
-            <t-button :loading="saving" theme="primary" @click="onSubmit"
-              >保存</t-button
-            >
+            <t-button theme="default" variant="outline" @click="dialogVisible = false">取消</t-button>
+            <t-button :loading="saving" theme="primary" @click="onSubmit">保存</t-button>
           </div>
         </div>
-      </t-form>
+      </template>
     </t-dialog>
 
     <!-- 编辑 模型 对话框 -->
     <t-dialog
       v-model:visible="modelDialogVisible"
       header="编辑模型"
-      :footer="false"
+      :confirm-btn="{ content: '保存', theme: 'primary', loading: savingModel }"
+      cancel-btn="取消"
       width="440px"
+      @confirm="onSaveModel"
     >
-      <t-form layout="vertical">
+      <t-form layout="vertical" label-align="top">
         <t-form-item label="显示名称">
           <t-input v-model="modelForm.displayName" placeholder="留空使用模型 ID" />
         </t-form-item>
@@ -564,20 +557,6 @@ onMounted(fetchConfigs);
             :options="capabilityOptions"
           />
         </t-form-item>
-        <div class="dialog-footer">
-          <span />
-          <div class="footer-right">
-            <t-button
-              theme="default"
-              variant="outline"
-              @click="modelDialogVisible = false"
-              >取消</t-button
-            >
-            <t-button :loading="savingModel" theme="primary" @click="onSaveModel"
-              >保存</t-button
-            >
-          </div>
-        </div>
       </t-form>
     </t-dialog>
   </div>

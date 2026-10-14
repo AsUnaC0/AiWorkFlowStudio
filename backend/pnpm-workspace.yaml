@@ -1,3 +1,9 @@
+# Windows 环境下 pnpm 默认的 isolated 布局依赖符号链接，
+# 本机多次出现链接未生成导致 require() 解析到错误版本的问题
+# （如 proper-lockfile 拿到 signal-exit@4、pkg-types 拿到 confbox@0.2.4）。
+# hoisted 布局把依赖平铺到 node_modules 根目录，不使用符号链接，重装后依然稳定。
+nodeLinker: hoisted
+
 allowBuilds:
   '@parcel/watcher': false
   '@prisma/engines': true

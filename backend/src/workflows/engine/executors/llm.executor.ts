@@ -15,6 +15,10 @@ import { KnowledgeRetrievalService } from '../../../knowledge/retrieval/knowledg
 import type { SearchMode } from '../../../knowledge/retrieval/types';
 import { SkillService } from '../../../skill/skill.service';
 import { McpService } from '../../../mcp/mcp.service';
+import {
+  McpToolService,
+  type McpToolBinding,
+} from '../../../mcp/mcp-tool.service';
 import { toErrorCode } from '../../../common/error-code.util';
 
 /** LLM 节点配置（v1.5：含 Skill/MCP 工具调用） */
@@ -59,12 +63,13 @@ export class LLMNodeExecutor {
     private readonly knowledgeRetrievalService: KnowledgeRetrievalService,
     private readonly skillService: SkillService,
     private readonly mcpService: McpService,
+    private readonly mcpToolService: McpToolService,
     private readonly llmConfigService: LlmConfigService,
   ) {}
 
   async execute(context: NodeExecutionContext, node: any) {
     const telemetry = context.telemetry;
-    const { messages, options, tools, mcpServerMap, provider } =
+    const { messages, options, tools, mcpBindings, provider } =
       await this.createParams(context, node);
 
     // 有 MCP 工具 → 走 chatWithTools 循环
@@ -74,7 +79,7 @@ export class LLMNodeExecutor {
         messages,
         options,
         tools,
-        mcpServerMap,
+        mcpBindings,
         telemetry,
       );
     }
@@ -154,15 +159,7 @@ export class LLMNodeExecutor {
     messages: ChatMessage[],
     options: ChatOptions,
     tools: ToolDefinition[],
-    mcpServerMap: Map<
-      string,
-      {
-        transport: string;
-        serverUrl: string;
-        authType: string;
-        credentials: unknown;
-      }
-    >,
+    mcpBindings: Map<string, McpToolBinding>,
     telemetry?: ModelCallTelemetry,
   ) {
     const MAX_ROUNDS = 5;
@@ -210,8 +207,8 @@ export class LLMNodeExecutor {
 
         // 执行每个工具调用
         for (const call of result.toolCalls) {
-          const server = mcpServerMap.get(call.function.name);
-          if (!server) {
+          const binding = mcpBindings.get(call.function.name);
+          if (!binding) {
             currentMessages.push({
               role: 'tool',
               content: `工具 "${call.function.name}" 未找到对应的 MCP Server`,
@@ -222,17 +219,10 @@ export class LLMNodeExecutor {
 
           try {
             const args = parseToolArguments(call.function.arguments);
-            const toolResult = await this.mcpService.callTool(
-              server,
-              call.function.name,
-              args,
-            );
+            const outcome = await this.mcpToolService.callTool(binding, args);
             currentMessages.push({
               role: 'tool',
-              content:
-                typeof toolResult === 'string'
-                  ? toolResult
-                  : JSON.stringify(toolResult),
+              content: outcome.text,
               tool_call_id: call.id,
             });
           } catch (err) {
@@ -283,15 +273,7 @@ export class LLMNodeExecutor {
     messages: ChatMessage[];
     options: ChatOptions;
     tools: ToolDefinition[];
-    mcpServerMap: Map<
-      string,
-      {
-        transport: string;
-        serverUrl: string;
-        authType: string;
-        credentials: unknown;
-      }
-    >;
+    mcpBindings: Map<string, McpToolBinding>;
     provider: AiProvider;
   }> {
     const config = (node.config ?? {}) as LlmNodeConfig;
@@ -400,73 +382,20 @@ export class LLMNodeExecutor {
     messages.push({ role: 'user', content: userInput });
 
     // ------------------------------------------------------------------
-    // MCP 工具定义：从选中 MCP Server 的 availableTools 构建
+    // MCP 工具定义：连接层负责握手/会话复用，工具层负责 schema 转换与调用
     // ------------------------------------------------------------------
-    const tools: ToolDefinition[] = [];
-    const mcpServerMap = new Map<
-      string,
-      {
-        transport: string;
-        serverUrl: string;
-        authType: string;
-        credentials: unknown;
-      }
-    >();
+    let tools: ToolDefinition[] = [];
+    let mcpBindings = new Map<string, McpToolBinding>();
 
     if (Array.isArray(config.mcpServerIds) && config.mcpServerIds.length > 0) {
       const servers = await this.mcpService.findByIds(config.mcpServerIds);
-      for (const server of servers) {
-        const serverInfo = {
-          transport: server.transport,
-          serverUrl: server.serverUrl,
-          authType: server.authType,
-          credentials: server.credentials,
-        };
-
-        const availableTools =
-          (server.availableTools as Array<{
-            name: string;
-            description?: string;
-            inputSchema?: {
-              type: string;
-              properties?: Record<string, unknown>;
-              required?: string[];
-            };
-          }> | null) ?? [];
-
-        for (const tool of availableTools) {
-          tools.push({
-            type: 'function',
-            function: {
-              name: tool.name,
-              description: tool.description ?? '',
-              parameters:
-                tool.inputSchema && typeof tool.inputSchema === 'object'
-                  ? {
-                      type: 'object' as const,
-                      properties:
-                        (tool.inputSchema.properties as Record<
-                          string,
-                          {
-                            type: string;
-                            description?: string;
-                            enum?: string[];
-                            items?: Record<string, unknown>;
-                          }
-                        >) ?? {},
-                      required: tool.inputSchema.required ?? [],
-                    }
-                  : undefined,
-            },
-          });
-          // 映射 tool name → server（用于执行时查找）
-          mcpServerMap.set(tool.name, serverInfo);
-        }
-      }
+      const built = await this.mcpToolService.buildBindings(servers);
+      tools = built.tools;
+      mcpBindings = built.bindings;
 
       if (tools.length > 0) {
         console.log(
-          `[LLM] 已加载 ${tools.length} 个 MCP 工具，来自 ${mcpServerMap.size} 个 Server`,
+          `[LLM] 已加载 ${tools.length} 个 MCP 工具，来自 ${servers.length} 个 Server`,
         );
       }
     }
@@ -492,7 +421,7 @@ export class LLMNodeExecutor {
         maxTokens: config.maxTokens,
       },
       tools,
-      mcpServerMap,
+      mcpBindings,
       provider,
     };
   }

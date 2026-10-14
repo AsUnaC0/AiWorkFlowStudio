@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { useRouter } from "vue-router";
 import AppSidebar from "./components/AppSidebar.vue";
 import AppHeader from "./components/AppHeader.vue";
 
@@ -11,6 +12,26 @@ const toggleSidebar = () => {
 
 // 点击外部关闭下拉（简单实现：Header 内部已有各自 showXxx 状态）
 // 如需更完整的 click-outside 可后续引入 composable
+
+const router = useRouter();
+
+/**
+ * 需要缓存的页面组件名。
+ *
+ * 由路由 meta.keepAlive 声明，而不是在这里硬编码，新增缓存页面无需改本文件。
+ *
+ * 两个容易踩的点：
+ *   1. <keep-alive :include> 匹配的是「组件 name」，不是路由 name。
+ *      所以被缓存的页面组件必须用 defineOptions({ name: "Xxx" }) 显式声明，
+ *      且与路由 name 保持一致（否则 include 匹配不上，缓存静默失效）。
+ *   2. 只缓存声明过的页面。其余页面每次进入都重新加载，保证数据新鲜度。
+ */
+const cachedViews = computed(() =>
+  router
+    .getRoutes()
+    .filter((r) => r.meta?.keepAlive === true && typeof r.name === "string")
+    .map((r) => r.name as string),
+);
 </script>
 
 <template>
@@ -23,11 +44,13 @@ const toggleSidebar = () => {
       <!-- Header -->
       <AppHeader />
 
-      <!-- 内容区（带页面过渡）-->
+      <!-- 内容区（带页面过渡 + 按需缓存）-->
       <main class="main-content">
         <router-view v-slot="{ Component }">
           <transition name="page" mode="out-in">
-            <component :is="Component" />
+            <keep-alive :include="cachedViews">
+              <component :is="Component" />
+            </keep-alive>
           </transition>
         </router-view>
       </main>

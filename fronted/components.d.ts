@@ -11,6 +11,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    ChatAttachmentBar: typeof import('./src/components/files/ChatAttachmentBar.vue')['default']
+    ChatFilePreviewDrawer: typeof import('./src/components/files/ChatFilePreviewDrawer.vue')['default']
     CustomNode: typeof import('./src/components/workflow/CustomNode.vue')['default']
     ExcelPreview: typeof import('./src/components/files/ExcelPreview.vue')['default']
     FilePreviewDrawer: typeof import('./src/components/files/FilePreviewDrawer.vue')['default']

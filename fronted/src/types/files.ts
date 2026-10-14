@@ -106,6 +106,45 @@ export interface FileFormatOption {
 }
 
 // ===========================================================================
+// 聊天附件（上传后随消息一起交给 AI 解析上下文，与知识库 Document 解耦）
+// 字段与后端 ChatFilesService.AttachmentView 保持一致
+// ===========================================================================
+
+export type ChatAttachmentStatus =
+  | "UPLOADED"
+  | "PROCESSING"
+  | "READY"
+  | "FAILED";
+
+export interface ChatAttachment {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  extension: string;
+  size: number;
+  kind: string;
+  status: ChatAttachmentStatus;
+  /** 由后端按扩展名推导的预览类型（pdf/image/document/spreadsheet/markdown/text/csv） */
+  previewType: string;
+  summary: string | null;
+  parseError: string | null;
+  charCount: number;
+  createdAt: string;
+}
+
+/** GET /chat/files/policy 返回的上传策略，前端据此做前置校验 */
+export interface ChatFilePolicy {
+  /** 单文件大小上限（字节） */
+  maxSize: number;
+  /** 单条消息最多附件数 */
+  maxPerMessage: number;
+  /** 允许上传的扩展名列表（小写，不含点） */
+  allowedExtensions: string[];
+  /** 按扩展名分类后的说明，便于前端提示 */
+  kinds?: Record<string, string[]>;
+}
+
+// ===========================================================================
 // 展示辅助
 // ===========================================================================
 
@@ -172,4 +211,31 @@ export const fileColor = (formatOrExt?: string): string => {
     default:
       return "#6366f1";
   }
+};
+
+/**
+ * 根据扩展名推导预览类型（pdf / image / document / spreadsheet / markdown / csv / text）。
+ * 后端 ChatAttachment 不持久化 previewType，历史消息里的附件可能缺失该字段，
+ * 此时前端按扩展名兜底，保证预览组件能选对渲染方式。
+ */
+const EXT_PREVIEW_MAP: Record<string, string> = {
+  pdf: "pdf",
+  docx: "document",
+  xlsx: "spreadsheet",
+  xlsm: "spreadsheet",
+  csv: "csv",
+  tsv: "csv",
+  md: "markdown",
+  markdown: "markdown",
+  png: "image",
+  jpg: "image",
+  jpeg: "image",
+  webp: "image",
+  gif: "image",
+  bmp: "image",
+};
+
+export const previewTypeFromExt = (ext?: string): string => {
+  const e = (ext ?? "").toLowerCase().replace(/^\./, "");
+  return EXT_PREVIEW_MAP[e] ?? "text";
 };

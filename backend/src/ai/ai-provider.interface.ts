@@ -5,9 +5,17 @@ export const AI_PROVIDER: InjectionToken = Symbol('AI_PROVIDER');
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
+/** 图片输入（视觉模型用，base64，不含 data: 前缀） */
+export interface ChatImage {
+  mimeType: string;
+  base64: string;
+}
+
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  /** 图片输入：当前仅 user 消息 + 支持视觉输入的模型会用到 */
+  images?: ChatImage[];
   /** function/tool 调用时：assistant 消息可带 tool_calls */
   tool_calls?: ToolCall[];
   /** tool 消息必填：对应哪个 call 的结果 */

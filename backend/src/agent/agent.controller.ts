@@ -60,18 +60,12 @@ export class AgentController {
   }
 
   @Post('agents')
-  async createAgent(
-    @CurrentUser() user: JwtUser,
-    @Body() dto: CreateAgentDto,
-  ) {
+  async createAgent(@CurrentUser() user: JwtUser, @Body() dto: CreateAgentDto) {
     return this.agentService.create(user.id, dto);
   }
 
   @Get('agents/:id')
-  async getAgent(
-    @CurrentUser() user: JwtUser,
-    @Param('id') id: string,
-  ) {
+  async getAgent(@CurrentUser() user: JwtUser, @Param('id') id: string) {
     return this.agentService.findOne(user.id, id);
   }
 
@@ -85,10 +79,7 @@ export class AgentController {
   }
 
   @Delete('agents/:id')
-  async deleteAgent(
-    @CurrentUser() user: JwtUser,
-    @Param('id') id: string,
-  ) {
+  async deleteAgent(@CurrentUser() user: JwtUser, @Param('id') id: string) {
     return this.agentService.remove(user.id, id);
   }
 
@@ -158,32 +149,49 @@ export class AgentController {
   async run(
     @CurrentUser() user: JwtUser,
     @Param('agentId') agentId: string,
-    @Body() body: { input: string; sessionId?: string },
+    @Body()
+    body: {
+      input: string;
+      sessionId?: string;
+      attachmentIds?: string[];
+      /** 当前工作空间（仅作为意图传入，后端会重新校验成员关系） */
+      workspaceId?: string;
+    },
   ) {
     if (!body.input?.trim()) {
       throw new HttpException('input 不能为空', HttpStatus.BAD_REQUEST);
     }
 
     // 历史消息（如果有 sessionId）
-    let history: Awaited<ReturnType<ChatSessionService['getHistoryForLLM']>> | undefined;
+    let history:
+      Awaited<ReturnType<ChatSessionService['getHistoryForLLM']>> | undefined;
     if (body.sessionId) {
       history = await this.sessionService.getHistoryForLLM(body.sessionId);
       // 排除最后一条（用户刚发的）
       history = history.slice(0, -1);
     }
 
-    let lastEvent: { answer?: string; error?: string } = {};
+    const lastEvent: { answer?: string; error?: string } = {};
     for await (const event of this.agentService.runStream(
       user.id,
-      { agentId, input: body.input, sessionId: body.sessionId },
-      history as any,
+      {
+        agentId,
+        input: body.input,
+        sessionId: body.sessionId,
+        attachmentIds: body.attachmentIds,
+        workspaceId: body.workspaceId,
+      },
+      history,
     )) {
       if (event.type === 'message') lastEvent.answer = event.content;
       if (event.type === 'error') lastEvent.error = event.message;
     }
 
     if (lastEvent.error) {
-      throw new HttpException(lastEvent.error, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        lastEvent.error,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
     return { answer: lastEvent.answer };
   }
@@ -192,17 +200,25 @@ export class AgentController {
    * SSE 流式 —— 推事件给前端聊天页。
    *
    * 请求体：
-   *   input       用户输入（必填）
-   *   sessionId   会话 ID（可选，传入则持久化 + 加载历史）
+   *   input          用户输入（必填）
+   *   sessionId      会话 ID（可选，传入则持久化 + 加载历史）
+   *   attachmentIds  随消息上传的附件 ID
+   *   workspaceId    当前工作空间（可选，仅作为意图传入，后端会重新校验）
    *
    * SSE 事件类型：
-   *   thinking / tool_call / tool_result / message / error
+   *   meta / thinking / tool_call / tool_result / operation / file / message / error
    */
   @Post('agents/:agentId/chat/stream')
   async runStream(
     @CurrentUser() user: JwtUser,
     @Param('agentId') agentId: string,
-    @Body() body: { input: string; sessionId?: string },
+    @Body()
+    body: {
+      input: string;
+      sessionId?: string;
+      attachmentIds?: string[];
+      workspaceId?: string;
+    },
     @Res() response: Response,
   ) {
     if (!body.input?.trim()) {
@@ -221,15 +237,22 @@ export class AgentController {
 
     try {
       // 历史消息
-      let history: Awaited<ReturnType<ChatSessionService['getHistoryForLLM']>> | undefined;
+      let history:
+        Awaited<ReturnType<ChatSessionService['getHistoryForLLM']>> | undefined;
       if (body.sessionId) {
         history = await this.sessionService.getHistoryForLLM(body.sessionId);
       }
 
       for await (const event of this.agentService.runStream(
         user.id,
-        { agentId, input: body.input, sessionId: body.sessionId },
-        history as any,
+        {
+          agentId,
+          input: body.input,
+          sessionId: body.sessionId,
+          attachmentIds: body.attachmentIds,
+          workspaceId: body.workspaceId,
+        },
+        history,
       )) {
         send(event);
       }

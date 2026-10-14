@@ -239,11 +239,7 @@ onMounted(() => {
       <!-- Skill 列表 -->
       <template v-else-if="skills.length > 0">
         <div class="skill-list">
-          <div
-            v-for="skill in skills"
-            :key="skill.id"
-            class="skill-row"
-          >
+          <div v-for="skill in skills" :key="skill.id" class="skill-row">
             <!-- 图标 -->
             <div class="skill-icon" :class="getTypeLabel(skill.type).cls">
               <t-icon :name="skill.type === 'WORKFLOW' ? 'flow' : skill.type === 'TOOL' ? 'plugin' : 'code'" />
@@ -268,23 +264,12 @@ onMounted(() => {
 
             <!-- 操作 -->
             <div class="skill-row-actions">
-              <t-dropdown @click.stop>
-                <button class="row-more-btn" @click.stop>
-                  <t-icon name="more" />
-                </button>
-                <template #dropdown>
-                  <t-dropdown-menu>
-                    <t-dropdown-item @click.stop="openEditDialog(skill)">
-                      <template #prefix><t-icon name="edit-1" /></template>
-                      Edit
-                    </t-dropdown-item>
-                    <t-dropdown-item @click.stop="openDeleteDialog(skill)">
-                      <template #prefix><t-icon name="delete" /></template>
-                      Delete
-                    </t-dropdown-item>
-                  </t-dropdown-menu>
-                </template>
-              </t-dropdown>
+              <button class="row-action-btn" type="button" title="Edit" @click.stop="openEditDialog(skill)">
+                <t-icon name="edit-1" />
+              </button>
+              <button class="row-action-btn row-action-danger" type="button" title="Delete" @click.stop="openDeleteDialog(skill)">
+                <t-icon name="delete" />
+              </button>
             </div>
           </div>
         </div>
@@ -295,7 +280,8 @@ onMounted(() => {
         <div class="empty-icon"><t-icon name="code" /></div>
         <h3 class="empty-title">No skills yet</h3>
         <p class="empty-desc">
-          Create your first skill to give your Agent reusable capabilities like SEO writing, code review, or data analysis.
+          Create your first skill to give your Agent reusable capabilities like SEO writing, code review, or data
+          analysis.
         </p>
         <t-button theme="primary" @click="openCreateDialog">
           <template #icon><t-icon name="add" /></template>
@@ -305,23 +291,17 @@ onMounted(() => {
     </t-loading>
 
     <!-- 创建 / 编辑 Skill 对话框 -->
-    <t-dialog
-      v-model:visible="createDialogVisible"
-      :header="editingSkill ? 'Edit Skill' : 'Create Skill'"
-      :footer="false"
-      width="600px"
-    >
-      <t-form layout="vertical" @submit="submitForm">
+    <t-dialog v-model:visible="createDialogVisible" :header="editingSkill ? 'Edit Skill' : 'Create Skill'"
+      :confirm-btn="{ content: editingSkill ? 'Save' : 'Create', theme: 'primary', loading: formSaving }"
+      cancel-btn="Cancel" :width="'auto'"
+      :dialog-style="{ minWidth: 'min(880px, 90vw)', maxWidth: '90vw' }" @confirm="submitForm">
+      <t-form layout="vertical" label-align="top" @submit="submitForm">
         <t-form-item label="Name">
           <t-input v-model="formData.name" placeholder="SEO Article Generation" maxlength="200" />
         </t-form-item>
         <t-form-item label="Description (optional)">
-          <t-textarea
-            v-model="formData.description"
-            placeholder="Generate SEO-optimized articles from keywords"
-            :maxlength="1000"
-            :autosize="{ minRows: 2, maxRows: 4 }"
-          />
+          <t-textarea v-model="formData.description" placeholder="Generate SEO-optimized articles from keywords"
+            :maxlength="1000" :autosize="{ minRows: 2, maxRows: 4 }" />
         </t-form-item>
         <t-form-item label="Type">
           <t-select v-model="formData.type">
@@ -331,24 +311,21 @@ onMounted(() => {
           </t-select>
         </t-form-item>
         <t-form-item v-if="formData.type === 'PROMPT'" label="System Instructions">
-          <t-textarea
-            v-model="formData.instructions"
-            placeholder="You are a professional SEO content expert..."
-            :autosize="{ minRows: 4, maxRows: 10 }"
-          />
+          <t-textarea v-model="formData.instructions" placeholder="You are a professional SEO content expert..."
+            :autosize="{ minRows: 4, maxRows: 10 }" />
         </t-form-item>
         <t-form-item label="Input Parameters (optional)">
           <div class="param-editor">
             <div v-if="formData.params.length > 0" class="param-list">
               <div v-for="(param, idx) in formData.params" :key="idx" class="param-row">
-                <t-input v-model="param.name" placeholder="param_name" size="small" />
-                <t-select v-model="param.type" size="small" :style="{ width: '120px' }">
+                <t-input v-model="param.name" class="param-name" placeholder="param_name" size="small" />
+                <t-select v-model="param.type" class="param-type" size="small">
                   <t-option value="string" label="string" />
                   <t-option value="number" label="number" />
                   <t-option value="boolean" label="boolean" />
                 </t-select>
-                <t-input v-model="param.description" placeholder="description" size="small" />
-                <t-checkbox v-model="param.required">Required</t-checkbox>
+                <t-input v-model="param.description" class="param-desc" placeholder="description" size="small" />
+                <t-checkbox v-model="param.required" class="param-required">Required</t-checkbox>
                 <button class="param-remove" @click="removeParam(idx)">
                   <t-icon name="close" size="14px" />
                 </button>
@@ -361,42 +338,23 @@ onMounted(() => {
           </div>
         </t-form-item>
         <t-form-item label="Output Format">
-          <t-select v-model="formData.outputFormat" :style="{ width: '200px' }">
+          <t-select v-model="formData.outputFormat" class="output-format-select">
             <t-option value="Markdown" label="Markdown" />
             <t-option value="JSON" label="JSON" />
             <t-option value="Text" label="Text" />
           </t-select>
         </t-form-item>
         <t-alert v-if="formError" theme="error" :message="formError" class="form-alert" />
-        <div class="dialog-actions">
-          <t-button variant="outline" type="button" @click="createDialogVisible = false">
-            Cancel
-          </t-button>
-          <t-button theme="primary" type="submit" :loading="formSaving">
-            {{ editingSkill ? 'Save' : 'Create' }}
-          </t-button>
-        </div>
       </t-form>
     </t-dialog>
 
     <!-- 删除确认 -->
-    <t-dialog
-      v-model:visible="deleteDialogVisible"
-      header="Delete Skill"
-      :footer="false"
-      width="420px"
-    >
+    <t-dialog v-model:visible="deleteDialogVisible" header="Delete Skill"
+      :confirm-btn="{ content: 'Delete', theme: 'danger', loading: deleting }" cancel-btn="Cancel" width="420px"
+      @confirm="submitDelete">
       <p class="delete-tip">
         Are you sure you want to delete "{{ deleteTarget?.name }}"? This action cannot be undone.
       </p>
-      <div class="dialog-actions">
-        <t-button variant="outline" type="button" @click="deleteDialogVisible = false">
-          Cancel
-        </t-button>
-        <t-button theme="danger" type="button" :loading="deleting" @click="submitDelete">
-          Delete
-        </t-button>
-      </div>
     </t-dialog>
   </div>
 </template>
@@ -465,7 +423,7 @@ onMounted(() => {
       opacity: 1;
     }
 
-    .row-more-btn {
+    .row-action-btn {
       opacity: 1;
     }
 
@@ -576,7 +534,7 @@ onMounted(() => {
     gap: @space-1;
     flex-shrink: 0;
 
-    .row-more-btn {
+    .row-action-btn {
       width: 32px;
       height: 32px;
       border: none;
@@ -594,12 +552,24 @@ onMounted(() => {
         background: @color-bg-hover;
         color: @color-text;
       }
+
+      &.row-action-danger:hover {
+        background: lighten(@color-error, 42%);
+        color: @color-error;
+      }
     }
   }
 
-  &:hover .row-more-btn {
+  &:hover .row-action-btn {
     opacity: 1;
   }
+}
+
+/* ========== 对话框 ========== */
+/* 宽度不写死（见模板里的 :width="'auto'" + dialogStyle），这里只放内容相关样式 */
+.output-format-select {
+  width: 200px;
+  max-width: 100%;
 }
 
 /* ========== 参数编辑器 ========== */
@@ -620,6 +590,29 @@ onMounted(() => {
     display: flex;
     align-items: center;
     gap: @space-2;
+
+    /* 名称/描述可伸缩，类型/是否必填/删除按钮固定不压缩 */
+    .param-name {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .param-type {
+      flex: 0 0 130px;
+    }
+
+    .param-desc {
+      flex: 1.5 1 0;
+      min-width: 0;
+    }
+
+    .param-required {
+      flex: 0 0 auto;
+
+      :deep(.t-checkbox__label) {
+        white-space: nowrap;
+      }
+    }
 
     .param-remove {
       width: 28px;
@@ -684,13 +677,6 @@ onMounted(() => {
   font-size: @font-md;
   color: @color-text;
   margin: 0;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: @space-2;
-  margin-top: @space-4;
 }
 
 .form-alert {

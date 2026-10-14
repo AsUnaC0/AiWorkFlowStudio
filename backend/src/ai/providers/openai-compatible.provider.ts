@@ -80,6 +80,22 @@ export class OpenAICompatibleProvider implements AiProvider {
         role: m.role,
         content: m.content,
       };
+      // 视觉输入：user 消息带 images 时，把 content 转成多模态 content parts
+      if (m.role === 'user' && m.images && m.images.length > 0) {
+        const parts: unknown[] = [];
+        if (m.content && m.content.trim()) {
+          parts.push({ type: 'text', text: m.content });
+        }
+        for (const img of m.images) {
+          parts.push({
+            type: 'image_url',
+            image_url: {
+              url: `data:${img.mimeType};base64,${img.base64}`,
+            },
+          });
+        }
+        base.content = parts;
+      }
       if (m.tool_calls && m.tool_calls.length > 0) {
         base.tool_calls = m.tool_calls.map((tc) => ({
           id: tc.id,

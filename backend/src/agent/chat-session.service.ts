@@ -71,6 +71,19 @@ export class ChatSessionService {
                 createdAt: true,
               },
             },
+            attachments: {
+              orderBy: { createdAt: 'asc' },
+              select: {
+                id: true,
+                originalName: true,
+                extension: true,
+                kind: true,
+                mimeType: true,
+                size: true,
+                status: true,
+                summary: true,
+              },
+            },
           },
         },
       },
@@ -114,14 +127,17 @@ export class ChatSessionService {
     return this.prisma.chatSession.delete({ where: { id: sessionId } });
   }
 
-  async getHistoryForLLM(sessionId: string): Promise<LlmChatMessage[]> {
+  async getHistoryForLLM(
+    sessionId: string,
+  ): Promise<Array<LlmChatMessage & { id: string }>> {
     const dbMessages = await this.prisma.chatMessage.findMany({
       where: { sessionId },
       orderBy: { createdAt: 'asc' },
     });
 
     return dbMessages.map((m) => {
-      const base: LlmChatMessage = {
+      const base: LlmChatMessage & { id: string } = {
+        id: m.id,
         role: m.role as LlmChatMessage['role'],
         content: m.content,
       };

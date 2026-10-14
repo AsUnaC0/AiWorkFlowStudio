@@ -11,6 +11,7 @@ import { AGENT_TEMPLATES, type AgentType } from "@/types/agent";
 import { getLlmModels } from "@/api/provider";
 import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
+import { isAuthFailure } from "@/utils/request";
 
 const router = useRouter();
 
@@ -48,8 +49,9 @@ const loadAgents = async () => {
   loading.value = true;
   try {
     agents.value = await listAgents();
-  } catch {
-    MessagePlugin.error("加载 Agent 列表失败");
+  } catch (err) {
+    // 登录失效时拦截器已经统一提示并跳转，这里不再补一条
+    if (!isAuthFailure(err)) MessagePlugin.error("加载 Agent 列表失败");
   } finally {
     loading.value = false;
   }
@@ -223,7 +225,9 @@ const goDetail = (agentId: string) => {
     </div>
 
     <!-- 创建对话框 -->
-    <t-dialog v-model:visible="showCreateDialog" header="创建 Agent" :footer="false" :width="520">
+    <t-dialog v-model:visible="showCreateDialog" header="创建 Agent"
+      :confirm-btn="{ content: '创建并配置', theme: 'primary', loading: creatingLoading }" cancel-btn="取消" :width="520"
+      @confirm="handleCreate">
       <div class="create-form">
         <div class="form-item">
           <label>选择类型</label>
@@ -260,14 +264,6 @@ const goDetail = (agentId: string) => {
           </select>
         </div>
 
-        <div class="form-actions">
-          <t-button theme="default" @click="showCreateDialog = false">
-            取消
-          </t-button>
-          <t-button theme="primary" :loading="creatingLoading" @click="handleCreate">
-            创建并配置
-          </t-button>
-        </div>
       </div>
     </t-dialog>
   </div>
@@ -643,14 +639,6 @@ const goDetail = (agentId: string) => {
   .form-textarea {
     resize: vertical;
     min-height: 60px;
-  }
-
-  .form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: @space-3;
-    padding-top: @space-2;
-    border-top: 1px solid @color-border;
   }
 }
 </style>

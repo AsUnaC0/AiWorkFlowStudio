@@ -1,7 +1,10 @@
 import { request } from "@/utils/request";
 import type {
+  CallMcpToolRequest,
+  CallMcpToolResult,
   CreateMcpServerRequest,
   McpServer,
+  McpTool,
   TestConnectionResult,
   UpdateMcpServerRequest,
 } from "@/types/mcp";
@@ -38,7 +41,25 @@ export const removeMcpServer = (serverId: string): Promise<McpServer> => {
   return request.delete(`/mcp-servers/${serverId}`);
 };
 
-/** 测试 MCP Server 连接 */
+/** 测试 MCP Server 连接（initialize 握手 + tools/list，结果落库） */
 export const testMcpConnection = (serverId: string): Promise<TestConnectionResult> => {
   return request.post(`/mcp-servers/${serverId}/test`);
+};
+
+/** 刷新工具列表（重新握手并覆盖缓存） */
+export const refreshMcpTools = (serverId: string): Promise<TestConnectionResult> => {
+  return request.post(`/mcp-servers/${serverId}/tools/refresh`);
+};
+
+/** 实时发现工具列表（不落库） */
+export const getMcpTools = (serverId: string): Promise<McpTool[]> => {
+  return request.get(`/mcp-servers/${serverId}/tools`);
+};
+
+/** 调试用：直接调用某个 MCP 工具 */
+export const callMcpTool = (
+  serverId: string,
+  data: CallMcpToolRequest,
+): Promise<CallMcpToolResult> => {
+  return request.post(`/mcp-servers/${serverId}/tools/call`, data);
 };

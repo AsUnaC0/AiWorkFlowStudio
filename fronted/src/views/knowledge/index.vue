@@ -222,23 +222,12 @@ onMounted(() => {
 
             <!-- 右侧操作 + 箭头 -->
             <div class="kb-row-actions">
-              <t-dropdown @click.stop>
-                <button class="row-more-btn" @click.stop>
-                  <t-icon name="more" />
-                </button>
-                <template #dropdown>
-                  <t-dropdown-menu>
-                    <t-dropdown-item @click.stop="enterKnowledge(kb)">
-                      <template #prefix><t-icon name="view-list" /></template>
-                      Open
-                    </t-dropdown-item>
-                    <t-dropdown-item @click.stop="openDeleteDialog(kb)">
-                      <template #prefix><t-icon name="delete" /></template>
-                      Delete
-                    </t-dropdown-item>
-                  </t-dropdown-menu>
-                </template>
-              </t-dropdown>
+              <button class="row-action-btn" type="button" title="Open" @click.stop="enterKnowledge(kb)">
+                <t-icon name="view-list" />
+              </button>
+              <button class="row-action-btn row-action-danger" type="button" title="Delete" @click.stop="openDeleteDialog(kb)">
+                <t-icon name="delete" />
+              </button>
               <t-icon name="chevron-right" class="row-arrow" />
             </div>
           </div>
@@ -262,8 +251,10 @@ onMounted(() => {
     </t-loading>
 
     <!-- 创建知识库对话框 -->
-    <t-dialog v-model:visible="createDialogVisible" header="Create Knowledge Base" :footer="false" width="480px">
-      <t-form layout="vertical" @submit="submitCreate">
+    <t-dialog v-model:visible="createDialogVisible" header="Create Knowledge Base"
+      :confirm-btn="{ content: 'Create', theme: 'primary', loading: kbCreating }" cancel-btn="Cancel" width="480px"
+      @confirm="submitCreate">
+      <t-form layout="vertical" label-align="top" @submit="submitCreate">
         <t-form-item label="Name">
           <t-input v-model="createName" placeholder="Product Documentation" maxlength="200" />
         </t-form-item>
@@ -288,31 +279,17 @@ onMounted(() => {
           <t-input-number v-model="createEmbeddingDimension" :min="1" :max="8192" :step="8" />
         </t-form-item>
         <t-alert v-if="createError" theme="error" :message="createError" class="form-alert" />
-        <div class="dialog-actions">
-          <t-button variant="outline" type="button" @click="createDialogVisible = false">
-            Cancel
-          </t-button>
-          <t-button theme="primary" type="submit" :loading="kbCreating">
-            Create
-          </t-button>
-        </div>
       </t-form>
     </t-dialog>
 
     <!-- 删除确认对话框 -->
-    <t-dialog v-model:visible="deleteDialogVisible" header="Delete Knowledge Base" :footer="false" width="420px">
+    <t-dialog v-model:visible="deleteDialogVisible" header="Delete Knowledge Base"
+      :confirm-btn="{ content: 'Delete', theme: 'danger', loading: kbDeleting }" cancel-btn="Cancel" width="420px"
+      @confirm="submitDelete">
       <p class="delete-tip">
         Are you sure you want to delete "{{ deleteTarget?.name }}"? All documents and chunks will be permanently removed.
       </p>
       <t-alert v-if="deleteError" theme="error" :message="deleteError" class="form-alert" />
-      <div class="dialog-actions">
-        <t-button variant="outline" type="button" @click="deleteDialogVisible = false">
-          Cancel
-        </t-button>
-        <t-button theme="danger" type="button" :loading="kbDeleting" @click="submitDelete">
-          Delete
-        </t-button>
-      </div>
     </t-dialog>
   </div>
 </template>
@@ -481,7 +458,7 @@ onMounted(() => {
     gap: @space-1;
     flex-shrink: 0;
 
-    .row-more-btn {
+    .row-action-btn {
       width: 32px;
       height: 32px;
       border: none;
@@ -499,6 +476,11 @@ onMounted(() => {
         background: @color-bg-hover;
         color: @color-text;
       }
+
+      &.row-action-danger:hover {
+        background: lighten(@color-error, 42%);
+        color: @color-error;
+      }
     }
 
     .row-arrow {
@@ -509,7 +491,7 @@ onMounted(() => {
     }
   }
 
-  &:hover .row-more-btn {
+  &:hover .row-action-btn {
     opacity: 1;
   }
 }

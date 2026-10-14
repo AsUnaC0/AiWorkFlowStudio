@@ -7,12 +7,26 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AIService } from '../ai/ai.service';
-import type { AiProvider, ChatMessage } from '../ai/ai-provider.interface';
+import type {
+  AiProvider,
+  ChatMessage,
+  ChatImage,
+  ToolDefinition,
+} from '../ai/ai-provider.interface';
 import { parseToolArguments } from '../ai/tool-args.util';
 import { LlmConfigService } from '../llm-config/llm-config.service';
+import { McpService } from '../mcp/mcp.service';
+import { McpToolService, type McpToolBinding } from '../mcp/mcp-tool.service';
 import { FilesService } from '../files/files.service';
+import { ChatFilesService } from '../chat-files/chat-files.service';
+import { FileContextService } from '../chat-files/file-context.service';
+import type { ChatAttachmentLike } from '../chat-files/parsers/parser.types';
 import { ToolRegistry } from './tool-registry.service';
 import type { GeneratedFileRef } from './tools/agent-tool.interface';
+import { PlatformAssistantService } from '../assistant/platform-assistant.service';
+import type { PlatformAssistantContext } from '../assistant/platform-assistant.context';
+import type { PlatformToolContext } from '../platform-tools/platform-tool.interface';
+import type { PlatformOperationPayload } from '../platform-tools/platform-tools.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 
@@ -21,11 +35,7 @@ import { UpdateAgentDto } from './dto/update-agent.dto';
 // ===========================================================================
 
 export type AgentType =
-  | 'GENERAL'
-  | 'KNOWLEDGE'
-  | 'WORKFLOW'
-  | 'TOOL'
-  | 'CUSTOM';
+  'GENERAL' | 'KNOWLEDGE' | 'WORKFLOW' | 'TOOL' | 'CUSTOM';
 export type AgentStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED';
 
 export type AgentStreamEvent =
@@ -35,10 +45,14 @@ export type AgentStreamEvent =
       agentName: string;
       model: string;
       provider: string;
+      /** 是否为平台助理（前端据此渲染「平台助理」标识） */
+      isPlatformAssistant?: boolean;
     }
   | { type: 'thinking'; message: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   | { type: 'tool_result'; tool: string; result: string; durationMs: number }
+  /** 平台助理执行了一次平台操作（前端渲染操作卡片：风险等级 / 目标资源 / 跳转链接） */
+  | { type: 'operation'; operation: PlatformOperationPayload }
   /** Agent 通过 generate_file 工具产出的文件（前端渲染为文件卡片） */
   | { type: 'file'; file: AgentFilePayload }
   | { type: 'message'; content: string }
@@ -64,22 +78,40 @@ export interface AgentRunOptions {
   input: string;
   agentId: string;
   sessionId?: string;
+  /** 本次消息携带的聊天附件 ID（用户上传给模型阅读的文件） */
+  attachmentIds?: string[];
+  /**
+   * 当前工作空间 ID（可选）。
+   * 只作为「用户意图」传入：后端会重新校验成员关系后才采用，
+   * 校验不通过则忽略（见 PlatformAssistantService.buildContext）。
+   */
+  workspaceId?: string;
 }
 
 /** 未绑定自定义模型时使用的本地 Ollama 默认模型 */
 const DEFAULT_LOCAL_MODEL = 'qwen2.5:7b';
 
-/** 系统预设 Agent（启动时或首次访问时自动创建） */
-const SYSTEM_AGENTS = [
-  {
-    name: 'meibus',
-    description: '默认聊天助手',
-    type: 'CUSTOM' as AgentType,
-    isDefault: true,
-    model: DEFAULT_LOCAL_MODEL,
-    systemPrompt: '你是一个友好、专业的 AI 助手。直接回答用户问题即可。',
-  },
-];
+/**
+ * 系统预设 Agent 允许用户修改的字段白名单 —— 只放开「模型配置」。
+ *
+ * 系统 Agent（平台助理）的名称 / 描述 / System Prompt / 绑定资源由系统维护
+ * （ensure() 会在每次访问时把它们纠正回来），改了也没有意义；
+ * 但模型配置必须放开：用户可能接的是自己的模型服务，
+ * 需要能决定默认助手到底用哪个模型、什么温度。
+ */
+const SYSTEM_AGENT_EDITABLE_FIELDS = [
+  'llmModelId',
+  'model',
+  'temperature',
+] as const;
+
+/**
+ * 系统预设 Agent。
+ *
+ * 注：默认聊天助手已升级为「平台助理」，由 PlatformAssistantService.ensure()
+ * 统一创建 / 迁移（它需要同时维护专属 Prompt 与工具注册，放在这里会造成职责分裂）。
+ * 因此这里不再重复声明默认 Agent。
+ */
 
 const USER_TEMPLATES: Record<AgentType, Partial<CreateAgentDto>> = {
   GENERAL: {
@@ -122,6 +154,12 @@ export class AgentService {
     private readonly toolRegistry: ToolRegistry,
     private readonly llmConfigService: LlmConfigService,
     private readonly filesService: FilesService,
+    private readonly chatFiles: ChatFilesService,
+    private readonly fileContext: FileContextService,
+    private readonly mcpService: McpService,
+    private readonly mcpToolService: McpToolService,
+    /** 平台助理（默认系统 Agent 的专属 Prompt / 平台工具 / 审计） */
+    private readonly platformAssistant: PlatformAssistantService,
   ) {}
 
   /** 把 GeneratedFileRef 转成可 JSON 序列化的 SSE 载荷 */
@@ -151,62 +189,23 @@ export class AgentService {
 
   /**
    * 确保系统预设 Agent 存在（幂等，应用启动或首次访问时调用）。
-   * AWS 是系统默认助手（isDefault=true, isSystem=true）。
+   *
+   * 现在只有「平台助理」一个系统 Agent，且它的创建 / 历史迁移由
+   * PlatformAssistantService.ensure() 负责（那里同时维护专属 Prompt 与工具注册）。
    */
   async ensureSystemAgents() {
-    for (const preset of SYSTEM_AGENTS) {
-      const existing = await this.prisma.agent.findFirst({
-        where: { isSystem: true, name: preset.name },
-      });
-      if (!existing) {
-        await this.prisma.agent.create({
-          data: {
-            workspaceId: null,
-            createdBy: null,
-            name: preset.name,
-            description: preset.description,
-            type: preset.type,
-            isDefault: preset.isDefault ?? false,
-            isSystem: true,
-            status: 'PUBLISHED',
-            model: preset.model,
-            systemPrompt: preset.systemPrompt,
-            workflowIds: [],
-            knowledgeBaseIds: [],
-            skillIds: [],
-            mcpServerIds: [],
-            maxToolIterations: 10,
-            temperature: 0.7,
-          },
-        });
-      }
-    }
-  }
-
-  // ===========================================================================
-  // 权限判断
-  // ===========================================================================
-
-  private async canAccess(agentId: string, userId: string): Promise<boolean> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-    });
-    if (!agent) return false;
-    return agent.isSystem || agent.createdBy === userId;
-  }
-
-  private async canModify(agentId: string, userId: string): Promise<boolean> {
-    const agent = await this.prisma.agent.findUnique({
-      where: { id: agentId },
-    });
-    if (!agent) return false;
-    // 系统 Agent 只有 creator=null 时才允许（即系统本身不可修改——但此处没有系统级 user，所以系统 Agent 不可修改）
-    if (agent.isSystem) return false;
-    return agent.createdBy === userId;
+    await this.platformAssistant.ensure();
   }
 
   // ===========================================================================
   // Agent CRUD
+  // ===========================================================================
+  //
+  // 权限约定（直接内联在各自方法里，不抽公共布尔方法 —— 三处规则并不相同）：
+  //   可见（list / findOne）：isSystem 或 createdBy === userId
+  //   修改（update）：系统 Agent 只允许改模型配置（见 SYSTEM_AGENT_EDITABLE_FIELDS），
+  //                  用户 Agent 要求 createdBy === userId
+  //   删除（remove）：系统 Agent 一律不允许
   // ===========================================================================
 
   async list(userId: string) {
@@ -301,14 +300,35 @@ export class AgentService {
     });
     if (!agent) throw new NotFoundException('Agent 不存在');
 
-    if (agent.isSystem) {
-      throw new BadRequestException('系统预设 Agent 不允许修改');
-    }
-    if (agent.createdBy !== userId) {
-      throw new ForbiddenException('无权修改此 Agent');
-    }
+    let data: Record<string, unknown>;
 
-    const data: Record<string, unknown> = { ...dto };
+    if (agent.isSystem) {
+      // 系统预设 Agent：只放开模型配置（见 SYSTEM_AGENT_EDITABLE_FIELDS），
+      // 其余字段一律拒绝并明确告知调用方。
+      // 注意 createdBy 为 null（系统创建），因此这里不做归属校验。
+      const provided = Object.entries(dto as Record<string, unknown>).filter(
+        ([, value]) => value !== undefined,
+      );
+      const rejected = provided
+        .map(([key]) => key)
+        .filter(
+          (key) =>
+            !(SYSTEM_AGENT_EDITABLE_FIELDS as readonly string[]).includes(key),
+        );
+      if (rejected.length > 0) {
+        throw new BadRequestException(
+          `系统预设 Agent 仅允许修改模型配置（${SYSTEM_AGENT_EDITABLE_FIELDS.join(
+            ' / ',
+          )}），不支持修改：${rejected.join('、')}`,
+        );
+      }
+      data = Object.fromEntries(provided);
+    } else {
+      if (agent.createdBy !== userId) {
+        throw new ForbiddenException('无权修改此 Agent');
+      }
+      data = { ...dto };
+    }
 
     // llmModelId 传空字符串表示清除（回退本地默认 model）；undefined 表示不改。
     // 同时把 model 列同步为真实模型名，保证「模型名」字段始终正确。
@@ -420,22 +440,127 @@ export class AgentService {
       return;
     }
 
-    // 2. 准备消息
+    // 2. 解析运行时 Provider（优先用户自定义模型，否则回退全局 Ollama）
+    //    平台助理是「一份记录服务所有用户」，因此它不绑定固定模型：
+    //    运行时按当前用户的默认对话模型解析，找不到才回退全局 Ollama。
+    const isPlatformAssistant =
+      this.platformAssistant.isPlatformAssistant(agent);
+    let chatBackend: AiProvider = this.aiService.getProvider();
+    let chatModel = agent.model;
+    if (agent.llmModelId) {
+      const runtime = await this.llmConfigService.resolveModelRuntime(
+        agent.llmModelId,
+      );
+      chatBackend = runtime.provider;
+      chatModel = runtime.modelId;
+    } else if (isPlatformAssistant) {
+      const preferred =
+        await this.llmConfigService.resolveUserDefaultChatModel(userId);
+      if (preferred) {
+        chatBackend = preferred.provider;
+        chatModel = preferred.modelName;
+      }
+    }
+
+    // 2.1 平台助理上下文：userId 来自已验证的认证上下文，
+    //     workspaceId 由后端重新校验成员关系后才采信（模型无权覆盖）
+    let assistantContext: PlatformAssistantContext | undefined;
+    let platformToolContext: PlatformToolContext | undefined;
+    if (isPlatformAssistant) {
+      assistantContext = await this.platformAssistant.buildContext(
+        userId,
+        options.workspaceId,
+      );
+      platformToolContext = this.platformAssistant.buildToolContext(
+        assistantContext,
+        { agentId: agent.id, sessionId: options.sessionId },
+      );
+    }
+
+    // 3. 处理附件：校验归属与解析状态，组装上下文（图片走视觉通道）
+    let currentUserImages: ChatImage[] | undefined;
+    let currentUserContent = options.input;
+    let attachmentError: string | null = null;
+
+    if (options.attachmentIds?.length) {
+      try {
+        const attachments = await this.chatFiles.resolveForChat(
+          userId,
+          options.attachmentIds,
+          options.sessionId,
+        );
+        const ctx = await this.fileContext.build({
+          question: options.input,
+          attachments,
+          model: chatModel,
+          userId,
+        });
+        currentUserContent = ctx.text || options.input;
+        if (ctx.images.length) currentUserImages = ctx.images;
+      } catch (e) {
+        attachmentError = e instanceof Error ? e.message : '附件处理失败';
+      }
+    }
+
+    // 4. 组装消息：system + 历史（含历史附件上下文）+ 当前用户回合
+    //    平台助理的 System Prompt = 专属身份规则 + 服务端注入的动态上下文，
+    //    因此这里覆盖库里存的静态 systemPrompt。
     const messages: ChatMessage[] = [];
-    if (agent.systemPrompt) {
-      messages.push({ role: 'system', content: agent.systemPrompt });
+    const systemPrompt = assistantContext
+      ? this.platformAssistant.buildSystemPrompt(assistantContext)
+      : agent.systemPrompt;
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
     }
     if (history?.length) {
-      messages.push(...history);
+      messages.push(
+        ...(await this.augmentHistoryWithAttachments(
+          history,
+          userId,
+          options.sessionId,
+        )),
+      );
     }
-    messages.push({ role: 'user', content: options.input });
+    messages.push({
+      role: 'user',
+      content: currentUserContent,
+      ...(currentUserImages ? { images: currentUserImages } : {}),
+    });
 
-    // 3. 工具（generate_file 为内置能力，由 Agent.enableFileGeneration 控制）
-    const tools = await this.toolRegistry.buildDefinitions(
+    // 5. 工具（generate_file 为内置能力，由 Agent.enableFileGeneration 控制）
+    const tools: ToolDefinition[] = await this.toolRegistry.buildDefinitions(
       agent.workflowIds,
       agent.knowledgeBaseIds,
       { enableFileGeneration: agent.enableFileGeneration !== false },
     );
+
+    // 5.0 平台助理专属工具：整套平台内置工具，由后端注册（用户无法临时定义）。
+    //     与 Agent 绑定的资源工具互不影响 —— 普通 Agent 拿不到这些工具。
+    if (isPlatformAssistant) {
+      const platformDefs = this.platformAssistant.buildToolDefinitions();
+      tools.push(...platformDefs);
+      this.logger.log(
+        `平台助理加载 ${platformDefs.length} 个平台工具（用户 ${userId}，工作空间 ${
+          assistantContext?.currentWorkspaceId ?? '未指定'
+        }）`,
+      );
+    }
+
+    // 5.1 MCP 工具：按 Agent 配置筛选（不做「所有 MCP 工具无差别塞给模型」）
+    let mcpBindings = new Map<string, McpToolBinding>();
+    if (Array.isArray(agent.mcpServerIds) && agent.mcpServerIds.length > 0) {
+      const servers = await this.mcpService.findRuntimeConfigs(
+        agent.mcpServerIds,
+      );
+      const built = await this.mcpToolService.buildBindings(servers);
+      tools.push(...built.tools);
+      mcpBindings = built.bindings;
+      if (built.tools.length > 0) {
+        this.logger.log(
+          `agent "${agent.name}" 加载 ${built.tools.length} 个 MCP 工具（来自 ${servers.length} 个 Server）`,
+        );
+      }
+    }
 
     // 3.5 本次运行生成的文件收集器（generate_file 工具会往里 push）
     const runFiles: GeneratedFileRef[] = [];
@@ -452,33 +577,38 @@ export class AgentService {
       return events;
     };
 
-    // 4. 持久化用户消息
+    // 4. 持久化用户消息（保留用户原始问题；附件另行关联到该消息）
+    let userMessageId: string | undefined;
     if (options.sessionId) {
-      await this.prisma.chatMessage.create({
+      const created = await this.prisma.chatMessage.create({
         data: {
           sessionId: options.sessionId,
           role: 'user',
           content: options.input,
         },
       });
+      userMessageId = created.id;
       await this.prisma.chatSession.update({
         where: { id: options.sessionId },
         data: { updatedAt: new Date() },
       });
+      if (options.attachmentIds?.length) {
+        await this.chatFiles.attachToMessage(
+          userId,
+          options.attachmentIds,
+          created.id,
+          options.sessionId,
+        );
+      }
     }
 
-    // 4.5 解析运行时 Provider：优先用户所选自定义模型，否则回退全局 Ollama
-    let chatBackend: AiProvider = this.aiService.getProvider();
-    let chatModel = agent.model;
-    if (agent.llmModelId) {
-      const runtime = await this.llmConfigService.resolveModelRuntime(
-        agent.llmModelId,
-      );
-      chatBackend = runtime.provider;
-      chatModel = runtime.modelId;
+    // 附件解析失败：保留用户消息，但回报错误并结束本轮
+    if (attachmentError) {
+      yield { type: 'error', message: attachmentError };
+      return;
     }
 
-    // 4.6 把「本次实际使用的模型」推给前端 + 打日志，便于核对（避免"改了模型但感觉没生效"）
+    // 4.5 把「本次实际使用的模型」推给前端 + 打日志，便于核对（避免"改了模型但感觉没生效"）
     this.logger.log(
       `run agent "${agent.name}"(${agent.id}) -> model="${chatModel}" provider=${chatBackend.name} llmModelId=${agent.llmModelId ?? 'null'}`,
     );
@@ -488,10 +618,11 @@ export class AgentService {
       agentName: agent.name,
       model: chatModel,
       provider: chatBackend.name,
+      isPlatformAssistant,
     };
 
     // 5. ReAct 循环
-    let currentMessages = messages;
+    const currentMessages = messages;
     const maxIters = agent.maxToolIterations;
     const allTrailSteps: Array<Record<string, unknown>> = [];
     const chatOptions = { model: chatModel, temperature: agent.temperature };
@@ -594,18 +725,41 @@ export class AgentService {
 
         const toolStart = Date.now();
         let toolResult = '';
+        let operationPayload: PlatformOperationPayload | undefined;
         try {
-          toolResult = await this.toolRegistry.executeTool(
-            tc.function.name,
-            args,
-            {
-              agentId: agent.id,
-              userId,
-              sessionId: options.sessionId,
-              files: runFiles,
-              knowledgeBaseIds: agent.knowledgeBaseIds,
-            },
-          );
+          // 平台工具优先：只有平台助理拿得到这些工具定义，
+          // 执行一律经 PlatformAssistantService（权限校验 + 审计 + 异常兜底）
+          if (
+            platformToolContext &&
+            this.platformAssistant.isPlatformTool(tc.function.name)
+          ) {
+            const execution = await this.platformAssistant.executeTool(
+              tc.function.name,
+              args,
+              platformToolContext,
+            );
+            toolResult = execution.text;
+            operationPayload = execution.operation;
+          } else {
+            // MCP 工具：按 binding 路由到对应 Server（会话由连接层复用）
+            const binding = mcpBindings.get(tc.function.name);
+            if (binding) {
+              const outcome = await this.mcpToolService.callTool(binding, args);
+              toolResult = outcome.text;
+            } else {
+              toolResult = await this.toolRegistry.executeTool(
+                tc.function.name,
+                args,
+                {
+                  agentId: agent.id,
+                  userId,
+                  sessionId: options.sessionId,
+                  files: runFiles,
+                  knowledgeBaseIds: agent.knowledgeBaseIds,
+                },
+              );
+            }
+          }
         } catch (err) {
           toolResult = `工具执行错误：${err instanceof Error ? err.message : String(err)}`;
         }
@@ -628,6 +782,15 @@ export class AgentService {
           result: toolResult,
           durationMs,
         });
+
+        // 平台操作卡片：真实执行结果 + 风险等级 + 目标资源 + 入口链接
+        if (operationPayload) {
+          yield { type: 'operation', operation: operationPayload };
+          allTrailSteps.push({
+            type: 'operation',
+            operation: operationPayload,
+          });
+        }
 
         if (options.sessionId) {
           await this.prisma.chatMessage.create({
@@ -693,5 +856,35 @@ export class AgentService {
     });
 
     return message;
+  }
+
+  /**
+   * 把历史用户消息里附带的附件上下文重新注入。
+   * 这样即使是「上传文件 → 后续追问」的多轮对话，模型也能持续引用文件内容。
+   */
+  private async augmentHistoryWithAttachments(
+    history: ChatMessage[],
+    userId: string,
+    sessionId?: string,
+  ): Promise<ChatMessage[]> {
+    if (!sessionId) return history;
+
+    const map = await this.chatFiles.getAttachmentsByMessages(
+      userId,
+      sessionId,
+    );
+    if (map.size === 0) return history;
+
+    return history.map((m) => {
+      const messageId = (m as ChatMessage & { id?: string }).id;
+      const attachments = messageId ? map.get(messageId) : undefined;
+      if (m.role === 'user' && attachments?.length) {
+        return {
+          ...m,
+          content: m.content + this.fileContext.buildHistoryBlock(attachments),
+        };
+      }
+      return m;
+    });
   }
 }

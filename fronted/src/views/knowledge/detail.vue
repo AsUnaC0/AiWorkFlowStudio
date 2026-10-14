@@ -338,7 +338,9 @@ onBeforeUnmount(() => {
     </t-loading>
 
     <!-- 上传对话框 -->
-    <t-dialog v-model:visible="uploadDialogVisible" header="上传文档" :footer="false" width="520px">
+    <t-dialog v-model:visible="uploadDialogVisible" header="上传文档"
+      :confirm-btn="{ content: uploading ? '上传中...' : `上传 ${fileList.length} 个文件`, theme: 'primary', loading: uploading, disabled: fileList.length === 0 }"
+      cancel-btn="取消" width="520px" @confirm="submitUpload">
       <div class="upload-area">
         <label class="upload-dropzone" for="kb-file-input">
           <input id="kb-file-input" type="file" :accept="fileAccept" multiple hidden @change="handlePickFiles" />
@@ -358,25 +360,16 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-
-      <div class="dialog-actions">
-        <t-button variant="outline" type="button" @click="uploadDialogVisible = false">取消</t-button>
-        <t-button theme="primary" :loading="uploading" :disabled="fileList.length === 0" @click="submitUpload">
-          {{ uploading ? "上传中..." : `上传 ${fileList.length} 个文件` }}
-        </t-button>
-      </div>
     </t-dialog>
 
     <!-- 删除确认 -->
-    <t-dialog v-model:visible="deleteDialogVisible" header="删除文档" :footer="false" width="420px">
+    <t-dialog v-model:visible="deleteDialogVisible" header="删除文档"
+      :confirm-btn="{ content: '确认删除', theme: 'danger', loading: deleting }" cancel-btn="取消" width="420px"
+      @confirm="submitDelete">
       <p class="delete-tip">
         确定要删除文档「{{ deleteTarget?.fileName }}」吗？
         <br />删除后其关联的向量分块将一并清理。
       </p>
-      <div class="dialog-actions">
-        <t-button variant="outline" type="button" @click="deleteDialogVisible = false">取消</t-button>
-        <t-button theme="danger" :loading="deleting" @click="submitDelete">确认删除</t-button>
-      </div>
     </t-dialog>
   </div>
 </template>

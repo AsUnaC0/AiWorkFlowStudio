@@ -54,31 +54,49 @@ model Agent {
 |---|---|
 | list() | 返回所有 `isSystem=true` + 自己创建的 `createdBy=userId` |
 | findOne() | 系统 Agent 对所有人可见；非系统 Agent 只有 owner 能访问 |
-| update() | 只有 owner 能改；`isSystem=true` 直接拒绝 |
-| remove() | 同上；系统 Agent 不可删 |
+| update() | 非系统 Agent 只有 owner 能改；系统 Agent **只放开模型配置**（`llmModelId` / `model` / `temperature`，白名单见 `SYSTEM_AGENT_EDITABLE_FIELDS`），带其他字段即 400 |
+| remove() | 只有 owner 能删；系统 Agent 一律不可删 |
 
-### 系统预设 Agent
+> 系统 Agent 的 `createdBy` 为 null，所以模型配置的修改不做归属校验 ——
+> 谁改谁负责，改完对所有用户生效（`llmModelId` 有值时优先于「按用户默认对话模型解析」）。
 
-应用首次启动时 `ensureSystemAgents()` 会自动创建一个名为 `"meibus"` 的默认助手：
-- `isSystem=true, isDefault=true, createdBy=null`
-- `model='qwen2.5:7b'`
-- `systemPrompt='你是一个友好、专业的 AI 助手。直接回答用户问题即可。'`
-- 不绑定任何工具 → 纯聊天
+### 系统预设 Agent —— 现在只有「平台助理」一个
+
+`ensureSystemAgents()` 已经不再自己创建助手，而是一行委托给平台助理服务（`agent.service.ts:182`）：
+
+```typescript
+async ensureSystemAgents() {
+  await this.platformAssistant.ensure();   // 创建 / 迁移 / 升级都由它负责
+}
+```
+
+也就是说**系统预设 Agent 有且只有一个，就是「平台助理」**：
+
+- 识别判据是 `isSystem=true && isDefault=true`（**不是名字**，名字可以被改）
+- 专属 System Prompt 由 `PlatformAssistantService.buildSystemPrompt()` 动态生成
+- 工具不是绑定的资源，而是**一整套平台工具**（17 个）
+- 默认不绑定固定模型（`llmModelId` 为 null），运行时按每个用户各自的默认对话模型解析；
+  用户可在 Agent 配置页手动指定模型，此时 `llmModelId` 有值，运行时优先按它解析（对该实例下所有用户生效）
+
+> 📌 **完整契约见 [11 - 平台助理](./11-平台助理.md)**：初始化与历史迁移（旧的 `meibus` 记录会**原地升级**，id 和会话历史都保留）、
+> 动态上下文注入、17 个工具清单、审计表 `PlatformOperationLog`、前端操作卡片。
+> 本文只讲它与 `runStream` 的衔接点。
+
+> ⚠️ **早期文档里写的「自动创建一个名为 `meibus` 的默认助手」已过时**：
+> `meibus` 只是升级前的历史名字，`ensure()` 会把这类遗留记录就地升级成平台助理，不会新建。
 
 ---
 
-> 📌 **接入状态：Agent 侧的 Skill / MCP 「仅 CRUD，未接入运行时」——已确认暂缓实现，不是 bug。**
+> 📌 **接入状态（2026-10-14 核对）：MCP 已接入，Skill 仍是预留字段。**
 >
-> `Agent.skillIds` / `Agent.mcpServerIds` 会在创建/更新时**写进数据库**（DTO 有字段、`getAvailableResources()` 也会返回可选列表），但 `AgentService` 运行时**从不读取**——它的构造函数只有 `prisma / aiService / toolRegistry / llmConfigService`，没注入 SkillService / McpService。
+> | 字段 | 运行时是否生效 | 说明 |
+> |---|---|---|
+> | `Agent.mcpServerIds` | ✅ **已接入** | `runStream()` 初始化阶段调 `McpService.findRuntimeConfigs()` + `McpToolService.buildBindings()`，把选中 Server 的工具合并进 ReAct 工具集；tool_call 先查 MCP binding，没命中才回落 `ToolRegistry`（`agent.service.ts:531/537`、`:725/727`） |
+> | `Agent.skillIds` | ❌ **仅 CRUD** | 字段能存能查（`getAvailableResources()` 会返回可选列表），但 `AgentService` 没有注入 `SkillService`，运行时不把 `instructions` 拼进 System Prompt。**已由产品确认暂缓实现，不是 bug** |
 >
-> 所以在 Agent 配置页勾选 Skill / MCP Server **不会有任何效果**，属于预留字段。
+> 所以：**在 Agent 配置页勾选 MCP Server 会生效；勾选 Skill 不会。** 想用 Skill 只能走工作流的 LLM 节点（画布上勾选），详见 [05](./05-工作流引擎.md)。
 >
-> **想用 Skill / MCP，请走工作流 LLM 节点**（画布上勾选），那里是真实生效的：
-> - Skill → `instructions` 追加进 System Prompt
-> - MCP → 转成 ToolDefinition 走 Function Calling 循环
-> 详见 [05](./05-工作流引擎.md) / [08](./08-MCP-Skill-Storage-其他模块.md)。
->
-> 如果将来要接，改动点是：给 `AgentModule` 导入 `SkillModule` / `McpModule`，在 `runStream()` 的初始化阶段把 `agent.skillIds` 注入 System Prompt、把 `agent.mcpServerIds` 拼进 `ToolRegistry.buildDefinitions()`。
+> 如果将来要接 Skill，改动点是：给 `AgentModule` 导入 `SkillModule`，在 `runStream()` 的初始化阶段把 `agent.skillIds` 查出的 `instructions` 追加到 System Prompt。
 
 ---
 
@@ -91,22 +109,55 @@ model Agent {
 ### 初始化阶段（非 ReAct 循环）
 
 ```
-1. ensureSystemAgents() → 确保系统 Agent 存在
-2. findOne(userId, agentId) → 查 Agent 记录 + 权限校验
-3. 检查 agent.status !== 'DISABLED'
-4. 构建 messages：
+1. ensureSystemAgents() → 确保系统 Agent（平台助理）存在（委托 PlatformAssistantService.ensure()）
+2. findOne(userId, agentId) → 查 Agent 记录 + 权限校验；检查 agent.status !== 'DISABLED'
+3. 解析运行时 Provider：
+   agent.llmModelId 有值        → llmConfigService.resolveModelRuntime()          → 云端 Provider
+   平台助理（llmModelId 为 null）→ llmConfigService.resolveUserDefaultChatModel(userId) → 该用户各自的默认对话模型
+   都没命中                      → aiService.getProvider()                        → 全局 Ollama 单例
+4. 平台助理上下文（仅平台助理走这一步）：
+   isPlatformAssistant = agent.isSystem && agent.isDefault
+   assistantContext    = platformAssistant.buildContext(userId, options.workspaceId)  // workspaceId 后端重新校验成员关系
+   platformToolContext = platformAssistant.buildToolContext(...)                      // userId 只来自已验证的 JWT
+5. 处理附件（options.attachmentIds 非空时，见 10）：
+   attachments = chatFiles.resolveForChat(userId, attachmentIds, sessionId)  // 校验归属 + 等 READY
+   ctx = fileContext.build({ question, attachments, model, userId })         // 文本截断 + 图片转 base64
+   currentUserContent = ctx.text || options.input
+   currentUserImages  = ctx.images            // 仅视觉模型
+6. 构建 messages：
+   systemPrompt = assistantContext
+     ? platformAssistant.buildSystemPrompt(assistantContext)   // 平台助理：身份规则 + 服务端注入的动态上下文
+     : agent.systemPrompt                                      // 普通 Agent：库里存的静态 Prompt
    messages = [
-     { role: 'system', content: agent.systemPrompt },
-     ...history,                                    // 前端传来的历史对话
-     { role: 'user',   content: options.input },    // 当前用户输入
+     { role: 'system', content: systemPrompt },
+     ...augmentHistoryWithAttachments(history, userId, sessionId),  // 历史消息的附件上下文重新注入
+     { role: 'user', content: currentUserContent, images: currentUserImages },
    ]
-5. ToolRegistry.buildDefinitions(agent.workflowIds, agent.knowledgeBaseIds) → ToolDefinition[]
-6. 持久化用户消息到 ChatMessage（如果有 sessionId），并 `chatSession.update({ updatedAt })` 把会话顶到列表最前
-7. 解析 LLM Provider：
-   agent.llmModelId 有值 → llmConfigService.resolveModelRuntime() → 云端 Provider
-   否则 → aiService.getProvider() → 全局 Ollama 单例
-8. yield { type: 'meta', agentId, agentName, model, provider }
+7. 拼装工具集（三段，按顺序 push 进同一个 tools 数组）：
+   ① 资源工具   = ToolRegistry.buildDefinitions(workflowIds, knowledgeBaseIds, { enableFileGeneration })
+   ② 平台工具   = 仅平台助理：platformAssistant.buildToolDefinitions()（17 个）
+   ③ MCP 工具   = 仅当 agent.mcpServerIds 非空：mcpService.findRuntimeConfigs() → mcpToolService.buildBindings()
+8. 持久化用户消息到 ChatMessage（如果有 sessionId，content = 原始 options.input），并 `chatSession.update({ updatedAt })` 把会话顶到列表最前
+   若有 attachmentIds → chatFiles.attachToMessage(userId, ids, messageId, sessionId) 把附件关联到这条消息
+9. yield { type: 'meta', agentId, agentName, model, provider, isPlatformAssistant }
 ```
+
+**工具路由优先级**（ReAct 循环里 `tool_calls` 来了之后）：
+
+```
+① 平台工具（platformAssistant.isPlatformTool）→ platformAssistant.executeTool()  // 权限校验 + 审计 + 异常兜底
+② MCP 工具（mcpBindings.get(name)）           → mcpToolService.callTool()
+③ 资源工具（兜底）                             → toolRegistry.executeTool()
+```
+
+> **平台助理的三点特别之处**（详见 [11](./11-平台助理.md)）：
+> 1. **不绑定固定模型** —— 一份记录服务所有用户，所以 `llmModelId` 为 null，靠第 3 步按用户解析
+> 2. **System Prompt 是动态生成的** —— 库里存的 `systemPrompt` 会被覆盖
+> 3. **工具来自后端注册，不是用户配置** —— 17 个平台工具，用户无法通过聊天临时定义
+
+> **附件解析失败**：用户消息已落库（不丢），但本轮会 `yield { type: 'error', message }` 直接结束，不再调用 LLM。
+>
+> 附件上下文注入的完整逻辑（解析器分派、预算截断、视觉通道、越权防护）见 **[10 - 聊天文件上传模块](./10-聊天文件上传模块.md)**。
 
 ### 分支 A：无工具（纯聊天）
 
@@ -169,16 +220,32 @@ for (let i = 0; i < maxIters; i++) {
 
     yield { type: 'tool_call', tool: tc.function.name, args };
 
-    // ⭐ ToolRegistry 路由到具体 Tool
+    // ⭐ 三级路由：平台工具 → MCP 工具 → 资源工具（ToolRegistry）
     //    context 里还带了 knowledgeBaseIds —— KnowledgeTool 用它确定检索范围
     const toolStart = Date.now();
     let toolResult = '';
     try {
-      toolResult = await this.toolRegistry.executeTool(tc.function.name, args, {
-        agentId: agent.id,
-        userId,
-        knowledgeBaseIds: agent.knowledgeBaseIds,   // ← 别漏，KnowledgeTool 要用
-      });
+      if (this.platformAssistant.isPlatformTool(tc.function.name)) {
+        // ① 平台工具：走 PlatformAssistantService，内部做权限校验 + 审计 + operation 事件
+        const execution = await this.platformAssistant.executeTool(
+          tc.function.name, args, platformToolContext,
+        );
+        toolResult = execution.text;
+        if (execution.operation) yield { type: 'operation', operation: execution.operation };
+      } else if (mcpBindings.has(tc.function.name)) {
+        // ② MCP 工具：会话由连接层复用，失败自动重连一次
+        const outcome = await this.mcpToolService.callTool(
+          mcpBindings.get(tc.function.name), args,
+        );
+        toolResult = outcome.text;
+      } else {
+        // ③ 资源工具（workflow / knowledge / generate_file）
+        toolResult = await this.toolRegistry.executeTool(tc.function.name, args, {
+          agentId: agent.id,
+          userId,
+          knowledgeBaseIds: agent.knowledgeBaseIds,   // ← 别漏，KnowledgeTool 要用
+        });
+      }
     } catch (err) {
       // 工具报错不中断循环 —— 转成字符串喂回 LLM，让它自己决定怎么办
       toolResult = `工具执行错误：${err.message}`;
@@ -210,12 +277,15 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 
 | 事件 type | 含义 | 数据 |
 |---|---|---|
-| `meta` | 模型信息 | agentId, agentName, model, provider |
+| `meta` | 模型信息 | agentId, agentName, model, provider, **isPlatformAssistant** |
 | `thinking` | LLM 正在推理 | message |
 | `tool_call` | LLM 调用工具 | tool name, args |
 | `tool_result` | 工具返回结果 | tool name, result, durationMs |
+| **`operation`** | **平台工具的一次操作记录**（仅平台助理） | operation（工具 / 风险 / 目标资源 / 状态 / 耗时 / 跳转链接），前端渲染成操作卡片，见 11 |
+| **`file`** | **`generate_file` 产出的文件**（仅开启文件生成时） | file，前端渲染成文件卡片，见 09 |
 | `thinking` | 继续下一轮... | |
 | `message` | 最终回答（累积内容） | content（每次都是完整内容） |
+| `error` | 出错（附件解析失败 / 达到工具调用上限 / Agent 被禁用） | message |
 
 ---
 
@@ -417,6 +487,8 @@ ChatMessage 的 role 有 4 种：`user` / `assistant` / `system` / `tool`。
 | `toolCalls`（Json?） | 仅 assistant：LLM 返回的原始 tool_calls，用于多轮对话历史重建 |
 | `trail`（Json?） | 仅 assistant：本轮的 `thinking / tool_call / tool_result` 执行轨迹，前端渲染折叠面板 |
 | `toolCallId` | 仅 tool：对应 assistant 消息里某个 toolCall 的 `id` |
+| `files`（关联） | 仅 assistant：本轮 `generate_file` 产出的文件（`GeneratedFile`），渲染成文件卡片，见 09 |
+| `attachments`（关联） | 仅 user：随消息上传的聊天附件（`ChatAttachment`），历史回看能看到用户当时发了哪些文件，见 10 |
 
 **历史回放**（`ChatSessionService.getHistoryForLLM()`）：
 ```typescript
@@ -426,5 +498,7 @@ ChatMessage 的 role 有 4 种：`user` / `assistant` / `system` / `tool`。
 3. tool 且有 toolCallId → 补上 tool_call_id
 4. 返回 ChatMessage[]，作为 runStream 的 history 参数
 ```
+
+> `getWithMessages()`（前端**读取**会话详情用）会 `include` `messages.attachments` 与 `messages.files`，所以历史消息的附件/文件卡片都能直接渲染。注意它和 `getHistoryForLLM()`（喂给**模型**用）是两条不同的查询——后者不带关联，附件内容由 `augmentHistoryWithAttachments()` 单独按预算拼接。
 
 > 两个入口的 history 处理略有差异：SSE 流式接口传**完整历史**；非流式 `POST /agents/:id/chat` 会 `history.slice(0, -1)` 去掉最后一条。

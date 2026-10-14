@@ -56,6 +56,7 @@ import { RunMonitorService } from './engine/run-monitor.service';
     HttpNodeExecutor,
     ConditionNodeExecutor,
   ],
-  exports: [WorkflowEngine],
+  // WorkflowsService 供平台助理等上层模块复用（含工作空间成员权限校验 + 版本管理）
+  exports: [WorkflowEngine, WorkflowsService],
 })
 export class WorkflowsModule {}

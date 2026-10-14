@@ -288,8 +288,18 @@ model DocumentChunk {
   chunkIndex  Int
   tokenCount  Int?
   // pgvector 向量列 —— Prisma Unsupported 类型，由手写 migration 维护
-  // 注意：每次 prisma migrate dev 可能会认为这是"多余列"并生成 DROP，
-  //       请保留手写 migration 中的 IF NOT EXISTS 防护。
+  //
+  // ⚠️ 重要：Prisma 7 无法在 schema 里声明向量索引（官方 pgvector 扩展要 Prisma 8），
+  // 所以 dc_embedding_ivf（IVFFlat）只存在于手写 SQL 迁移中。
+  // 结果是：**每次 `prisma migrate dev` 都会把这个索引当成"多余对象"并生成
+  // `DROP INDEX "dc_embedding_ivf";`**。
+  //
+  // 正确做法：用 `npx prisma migrate dev --create-only` 生成迁移后，先打开 SQL
+  // 检查，删掉这类 DROP 语句（必要时在末尾补 `CREATE INDEX IF NOT EXISTS`），
+  // 再执行 `npx prisma migrate dev` 应用。否则向量索引会被静默删除。
+  //
+  // 另注：IVFFlat 索引在表数据很少时召回率很低（PostgreSQL 会提示 low recall），
+  // 数据量上来后建议重建，或改用 HNSW。
   embedding   Unsupported("vector(768)")?
   metadata    Json?
 
@@ -367,6 +377,8 @@ model ChatSession {
   agent       Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
   messages    ChatMessage[]
   files       GeneratedFile[]
+  /** 本会话中用户上传的附件（聊天输入文件，与 AI 产出文件分开管理） */
+  attachments ChatAttachment[]
 
   @@index([userId, agentId, updatedAt])
 }
@@ -395,9 +407,66 @@ model ChatMessage {
   session     ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   /** 本条消息关联的生成文件（Agent 通过 generate_file 工具产出） */
   files       GeneratedFile[]
+  /** 本条消息携带的用户上传附件 */
+  attachments ChatAttachment[]
 
   @@index([sessionId])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// ChatAttachment —— 聊天输入附件（用户上传给 AI 的文件）
+//
+// 与 GeneratedFile（AI 产出文件）分开管理：
+//   - 生命周期不同：附件随会话存在，可独立删除，不会自动进知识库、不参与向量化
+//   - 处理状态不同：UPLOADED → PROCESSING → READY / FAILED（解析完成后才能对话）
+//   - 用途不同：解析出的文本交给模型做上下文，而不是给用户下载
+//
+// 二进制同样不入库：落到 StorageService（本地磁盘 / 七牛云），库内只存 storageKey。
+// ---------------------------------------------------------------------------
+
+model ChatAttachment {
+  id           String   @id @default(uuid())
+
+  /** 归属用户（权限校验依据） */
+  userId       String
+  /** 所属会话（可选，上传时可能还没创建会话） */
+  sessionId    String?
+  /** 随哪条用户消息发送给模型（发送后回填） */
+  messageId    String?
+
+  originalName String
+  mimeType     String
+  extension    String
+  size         Int      @default(0)
+  storageKey   String   @unique
+
+  /** 文件大类：PDF / DOCUMENT / SPREADSHEET / TEXT / IMAGE */
+  kind         String   @default("TEXT")
+  /** 处理状态：UPLOADED / PROCESSING / READY / FAILED */
+  status       String   @default("UPLOADED")
+
+  /** 解析出的纯文本（超长文档会截断，避免单条记录过大） */
+  extractedText String?
+  /** 解析文本字符数 */
+  charCount    Int      @default(0)
+  /** 结构化摘要（如 Excel 工作表 / 列统计信息） */
+  summary      String?
+  /** 失败原因（status = FAILED 时，可直接展示给用户） */
+  parseError   String?
+  /** 解析器附加元数据（页数 / 工作表数 / 图片尺寸等） */
+  meta         Json?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  session      ChatSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  message      ChatMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([messageId])
+  @@index([status])
 }
 
 // ---------------------------------------------------------------------------
@@ -546,12 +615,78 @@ model McpServer {
   // 可用 Tools 列表（连接成功后缓存，JSON 数组）
   availableTools Json?
 
+  // 协议协商结果（initialize 握手成功后写入）
+  protocolVersion String?
+  serverName      String?
+  serverVersion   String?
+
+  // 最后一次成功连接时间
+  lastConnectedAt DateTime?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   owner        User     @relation("McpServerOwner", fields: [ownerId], references: [id])
 
   @@index([ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// PlatformOperationLog —— 平台助理操作审计
+//
+// 平台助理（默认 Chat Agent）通过内置平台工具创建 / 修改 / 执行平台资源时，
+// 每次工具调用都会落一条记录，用于事后追溯与排查：
+//   谁（userId）在哪个会话（sessionId）里、用哪个工具（tool）、
+//   对哪个资源（targetType + targetId）、做了什么（action）、结果如何（status）。
+//
+// 只记录「已进入工具执行阶段」的调用；模型层被拒绝 / 未触发的调用不入库。
+// 与 ChatMessage.trail 的区别：trail 属于会话上下文（会被模型看到），
+// 本表是独立的审计账本（不参与对话，可按用户/资源/时间维度检索）。
+// ---------------------------------------------------------------------------
+
+model PlatformOperationLog {
+  id            String   @id @default(uuid())
+
+  /** 执行用户（来自后端已验证的 JWT 上下文，绝不信任模型传参） */
+  userId        String
+  /** 当前 Workspace（可空：跨空间或用户级操作） */
+  workspaceId   String?
+  /** 触发该操作的聊天会话 */
+  sessionId     String?
+  /** 触发该操作的 Agent（通常为平台助理） */
+  agentId       String?
+
+  /** 工具名，如 create_workflow_draft */
+  tool          String
+  /** 语义动作：QUERY / CREATE / UPDATE / DELETE / EXECUTE */
+  action        String   @default("QUERY")
+  /** 风险等级：LOW / MEDIUM / HIGH（产品授权策略，非技术限制） */
+  riskLevel     String   @default("LOW")
+
+  /** 目标资源类型：workflow / knowledge_base / document / agent / workspace / skill / mcp_server */
+  targetType    String?
+  targetId      String?
+  targetName    String?
+
+  /** 结果：SUCCESS / FAILED / DENIED */
+  status        String   @default("SUCCESS")
+  /** 人类可读的结果摘要（前端操作卡片直接展示） */
+  summary       String?
+  /** 前端可跳转的资源入口，如 /workspace/<workflowId> */
+  link          String?
+
+  /** 工具入参（已剥离敏感字段，超长会截断） */
+  params        Json?
+  errorMessage  String?
+  durationMs    Int?
+
+  createdAt     DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([sessionId])
+  @@index([tool])
+  @@index([targetType, targetId])
+  @@index([status])
 }
 
 // ---------------------------------------------------------------------------

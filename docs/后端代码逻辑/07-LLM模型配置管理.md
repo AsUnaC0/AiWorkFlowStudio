@@ -194,7 +194,7 @@ async resolveModelRuntime(modelId: string) {
 }
 ```
 
-### 其余对外方法（此前文档漏了 5 个）
+### 其余对外方法（此前文档漏了 7 个）
 
 | 方法 | 作用 |
 |---|---|
@@ -203,6 +203,32 @@ async resolveModelRuntime(modelId: string) {
 | `listModels(userId, capability?)` | 列出当前用户**启用**的模型，可按能力过滤（`capabilities: { has: capability }`），排序 `isDefault desc, createdAt asc` |
 | `updateModel(userId, modelId, dto)` | 改 displayName / capabilities / enabled |
 | `setDefaultModel(userId, modelId)` | 事务里先把该 owner 所有 `isDefault=true` 置 false，再把目标置 true —— 保证同一 owner 只有一个默认模型 |
+| **`resolveUserDefaultChatModel(userId)`** | 取「当前用户的默认对话模型」：`enabled=true` + `capabilities has 'CHAT'`，排序 `isDefault desc, createdAt asc`，返回 `{ llmModelId, modelName, provider }`；**找不到返回 null**。用途见下方说明 |
+| **`listOwnedModelIds(userId)`** | 取当前用户拥有的**全部**模型 id（**含未启用**）。用途是归属校验 —— 平台助理生成工作流 / Agent 时，模型可能传一个不属于该用户的 `llmModelId`，据此拒绝 |
+
+#### `resolveUserDefaultChatModel()` 是给谁用的
+
+**平台助理**（见 [11](./11-平台助理.md)）是一份 Agent 记录服务所有用户，所以它**不能绑定固定模型**
+（`Agent.llmModelId` 为 `null`）。运行时由 `AgentService.runStream()` 调这个方法，
+**按每个用户各自的默认对话模型解析**；返回 `null` 才回退全局 Ollama。
+
+```typescript
+// agent.service.ts
+if (agent.llmModelId) {
+  const runtime = await this.llmConfigService.resolveModelRuntime(agent.llmModelId);
+  chatBackend = runtime.provider;
+  chatModel   = runtime.modelId;
+} else if (isPlatformAssistant) {
+  const preferred = await this.llmConfigService.resolveUserDefaultChatModel(userId);
+  if (preferred) {
+    chatBackend = preferred.provider;
+    chatModel   = preferred.modelName;
+  }
+}
+```
+
+> 所以「我在模型管理里设了默认模型，为什么平台助理用的还是 Ollama」这类问题的排查顺序是：
+> 该模型是否 `enabled`、是否有 `CHAT` 能力、`resolveModelRuntime()` 能否成功解密并构造 Provider。
 
 > 另：`update()` 还支持 `dto.disabled` → `status = 'DISABLED' | 'UNKNOWN'`，等于一个软开关。
 

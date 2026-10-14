@@ -96,7 +96,7 @@ export class LlmConfigService {
           provider: dto.provider,
           modelId: dto.modelId,
           displayName: dto.displayName || dto.modelId,
-          capabilities: (dto.capabilities ?? ['CHAT', 'STREAM']) as string[],
+          capabilities: dto.capabilities ?? ['CHAT', 'STREAM'],
         },
       });
     }
@@ -369,6 +369,52 @@ export class LlmConfigService {
     return model?.modelId ?? null;
   }
 
+  /**
+   * 取当前用户拥有的全部模型 id（含未启用）。
+   * 用途：校验「模型是否属于该用户」——平台助理生成工作流 / Agent 时，
+   * 模型可能传入一个不存在的 llmModelId，需要据此拒绝。
+   */
+  async listOwnedModelIds(userId: string): Promise<string[]> {
+    const models = await this.prisma.llmModel.findMany({
+      where: { config: { ownerId: userId } },
+      select: { id: true },
+    });
+    return models.map((m) => m.id);
+  }
+
+  /**
+   * 取当前用户的「默认对话模型」。
+   * 用途：系统内置的平台助理不绑定固定模型（一份 Agent 记录服务所有用户），
+   * 因此运行时按用户各自的默认对话模型解析；找不到则调用方回退全局 Ollama。
+   */
+  async resolveUserDefaultChatModel(userId: string): Promise<{
+    llmModelId: string;
+    modelName: string;
+    provider: AiProvider;
+  } | null> {
+    const model = await this.prisma.llmModel.findFirst({
+      where: {
+        config: { ownerId: userId },
+        enabled: true,
+        capabilities: { has: 'CHAT' },
+      },
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      select: { id: true, modelId: true },
+    });
+    if (!model) return null;
+
+    try {
+      const runtime = await this.resolveModelRuntime(model.id);
+      return {
+        llmModelId: model.id,
+        modelName: model.modelId,
+        provider: runtime.provider,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async updateModel(userId: string, modelId: string, dto: UpdateLlmModelDto) {
     const model = await this.prisma.llmModel.findUnique({
       where: { id: modelId },
@@ -384,7 +430,7 @@ export class LlmConfigService {
           ? { displayName: dto.displayName }
           : {}),
         ...(dto.capabilities !== undefined
-          ? { capabilities: dto.capabilities as string[] }
+          ? { capabilities: dto.capabilities }
           : {}),
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
       },

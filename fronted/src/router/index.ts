@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useUserStore } from "@/stores/user";
+import { isTokenExpired } from "@/utils/token";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -20,7 +21,12 @@ const router = createRouter({
           path: "chat",
           name: "Chat",
           component: () => import("@/views/chat/index.vue"),
-          meta: { title: "chat" },
+          // keepAlive：聊天页必须缓存。
+          // 流式回答期间切到别的菜单，组件一旦销毁，SSE 回调就找不到目标消息、
+          // 数据被静默丢弃，切回来只能看到空白回答。
+          // 注意：MainLayout 的 <keep-alive :include> 匹配的是「组件 name」，
+          // 因此该页面组件必须 defineOptions({ name: "Chat" }) 与这里保持一致。
+          meta: { title: "chat", keepAlive: true },
         },
         // 知识库列表（先选 workspace）
         {
@@ -110,8 +116,14 @@ const router = createRouter({
 // 全局路由守卫
 router.beforeEach((to) => {
   const userStore = useUserStore();
-  const isAuthenticated = !!userStore.token;
   const isPublic = to.meta.public === true;
+
+  // token 存在但已过期：先清掉，避免「先放行进页面、请求 401 后才被踢回登录页」
+  const expired = !!userStore.token && isTokenExpired(userStore.token);
+  if (expired) {
+    userStore.logout();
+  }
+  const isAuthenticated = !!userStore.token && !expired;
 
   if (isPublic) {
     if (isAuthenticated) return { path: "/chat" };

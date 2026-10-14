@@ -3,6 +3,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
   MaxLength,
 } from 'class-validator';
 
@@ -25,6 +26,11 @@ export class UpdateMcpServerDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @IsUrl({
+    require_tld: false,
+    require_protocol: true,
+    protocols: ['http', 'https'],
+  })
   serverUrl?: string;
 
   @IsOptional()
@@ -33,9 +39,11 @@ export class UpdateMcpServerDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   apiKey?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(4000)
   bearerToken?: string;
 }

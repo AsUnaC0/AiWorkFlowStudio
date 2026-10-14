@@ -1,22 +1,54 @@
 # 08 - MCP Server + Skill + 存储 + 其他模块
 
-> 阅读本文后，你应该能回答：MCP Server 怎么在 LLM 节点里被调用？Skill 是什么？StorageService 怎么切换本地/七牛云？Dashboard 统计了什么？Workspace 的成员权限模型是怎样的？
+> 阅读本文后，你应该能回答：MCP Server 怎么在 LLM 节点/Agent 里被调用？Skill 是什么？StorageService 怎么切换本地/七牛云？Dashboard 统计了什么？Workspace 的成员权限模型是怎样的？
 
 ---
 
 ## 一、MCP Server 模块
 
-**文件路径**：`backend/src/mcp/mcp.service.ts`
+**目录**：`backend/src/mcp/`（已按传输 / 连接 / 工具 / 安全分层）
 
 ### 接入状态（先看这个）
 
 | 位置 | 状态 |
 |---|---|
-| **工作流 LLM 节点**（画布勾选 `mcpServerIds`） | ✅ **已接入**。非流式 `execute()` 会把 availableTools 转成 ToolDefinition，LLM 调工具时走 `callTool()` |
+| **工作流 LLM 节点**（画布勾选 `mcpServerIds`） | ✅ **已接入**。`createParams()` 经 `McpToolService.buildBindings()` 把工具转成 ToolDefinition，工具调用走 `McpToolService.callTool()` |
 | 流式 / 画布调试运行（`executeStream()`） | ❌ 未接入。忽略 tools，见 [05](./05-工作流引擎.md) |
-| **Agent 配置页**（`Agent.mcpServerIds`） | ❌ **仅 CRUD，未接入运行时**——已确认暂缓实现，字段预留 |
+| **Agent 配置页**（`Agent.mcpServerIds`） | ✅ **已接入**。`AgentService.runStream()` 把选中 Server 的工具合并进 ReAct 工具集，tool_call 先查 MCP binding 再回落到内置工具 |
 
-也就是说：**要用 MCP，就在工作流的 LLM 节点上勾**，并且走 BullMQ 异步执行（不是画布上的流式调试）。
+> 📌 **Agent 侧 Skill（`Agent.skillIds`）仍未接入运行时**——字段能存能查，但 `AgentService` 没有注入 `SkillService`。
+> 也就是说：**在 Agent 配置页勾选 Skill 不会生效**，只有在画布上给 LLM 节点勾选 Skill 才会注入 System Prompt。
+
+### 目录结构与职责
+
+```
+backend/src/mcp/
+├── mcp.module.ts                  # 模块装配 + 应用关闭时释放所有 MCP 会话
+├── mcp.controller.ts              # 前端入口：CRUD / 测试连接 / 刷新工具 / 工具调试调用
+├── mcp.service.ts                 # 配置管理 + 凭据加密 + 业务流程编排（唯一碰 Prisma 的地方）
+├── mcp-connection.service.ts      # 连接建立、协议协商、会话缓存与失效重连
+├── mcp-tool.service.ts            # 工具发现、schema 转换、工具调用与结果规范化
+├── mcp-url-guard.service.ts       # 目标地址安全校验（SSRF / DNS 重绑定 / 重定向）
+├── transports/
+│   ├── mcp-transport.interface.ts # 传输抽象：connect / listTools / callTool / close
+│   ├── mcp-http.util.ts           # 受限 fetch、SSE 增量解析、JSON-RPC 响应解析
+│   ├── streamable-http.transport.ts  # Streamable HTTP（2025-06-18 / 2025-03-26）
+│   └── sse.transport.ts           # 旧版 HTTP + SSE（2024-11-05）
+├── dto/                           # create / update / call-tool
+└── types/mcp.types.ts             # JSON-RPC + MCP 协议类型、错误类型
+```
+
+| 模块 | 职责 |
+|---|---|
+| `McpController` | 接收前端的创建、连接测试、工具查询和调用请求 |
+| `McpService` | MCP 服务配置 CRUD、凭据加解密、连接状态落库、编排调用 |
+| `McpConnectionService` | 初始化连接、协议协商、会话生命周期与缓存 |
+| `McpTransport`（接口） | 抽象不同传输方式的通信行为 |
+| `McpToolService` | 工具发现（含分页）、参数 schema 转换、工具调用与结果处理 |
+| `McpUrlGuardService` | URL / 私有 IP / 保留地址 / DNS 解析 / 重定向安全校验 |
+
+**分层原则**：MCP 模块只负责连接标准 MCP Server、发现工具和调用工具；
+普通 HTTP / REST API 一律交给工作流 HTTP 节点，不在这里重复实现。
 
 ### 数据模型
 
@@ -29,78 +61,130 @@ model McpServer {
   transport      String   @default("STREAMABLE_HTTP")  // "SSE" | "STREAMABLE_HTTP"
   serverUrl      String                                 // MCP Server 地址
   authType       String   @default("NONE")              // "NONE" | "API_KEY" | "BEARER_TOKEN"
-  credentials    Json?    // { apiKey?, bearerToken? } —— ⚠️ 目前是【明文】JSON，未加密
-  availableTools Json?    // [{ name, description, inputSchema }]，连接成功后缓存
+  credentials    Json?    // ✅ 已加密：{ v: 2, cipher: "<iv:tag:data>" }（AES-256-GCM）
+  availableTools Json?    // [{ name, description, inputSchema, ... }]，连接成功后缓存
   status         String   @default("DISCONNECTED")      // DISCONNECTED | CONNECTED | ERROR
   lastError      String?
+  protocolVersion String?  // 握手协商出的协议版本，如 2025-06-18
+  serverName      String?  // 服务端自报名称
+  serverVersion   String?  // 服务端自报版本
+  lastConnectedAt DateTime? // 最后一次成功连接时间
 }
 ```
 
-**三个容易记错的点**：
-1. 枚举值是 **`STREAMABLE_HTTP`**，不是 "http"；`SSE` 只是存得下，**工具调用时直接抛错**（见下）
+**四个容易记错的点**：
+1. 枚举值是 **`STREAMABLE_HTTP`**，不是 "http"
 2. `authType` 是 `NONE / API_KEY / BEARER_TOKEN`，不是 "bearer"/"api_key"
-3. `credentials` **没有走 EncryptionService**，是 `buildCredentials()` 直接明文入库（schema 注释里也标了"生产环境应加密存储"）。LLM 的 API Key 是加密的，MCP 的凭据不是——这是个不一致的地方。
+3. `credentials` **已改为 AES-256-GCM 加密存储**（复用 `EncryptionService`，与 LLM 模型配置同一套密钥）。
+   解密逻辑兼容历史明文数据，下次更新该配置时自动重新加密。
+4. `availableTools / status / lastConnectedAt` 属于平台运行状态，由「测试连接 / 刷新工具」写入，用户创建时不用填
 
-### 与 LLMNodeExecutor 的集成
+### 认证与凭据
 
-LLM 节点的 `createParams()` 方法里：
+| authType | 请求头 |
+|---|---|
+| `NONE` | 不带 |
+| `BEARER_TOKEN` | `Authorization: Bearer <token>` |
+| `API_KEY` | `X-API-Key: <key>` |
+
+- 凭据写入时用 `EncryptionService.encrypt()` 加密，读取时解密，**绝不返回给前端**；
+- 接口只返回 `hasCredentials` + `credentialPreview`（掩码，如 `sk-a****1234`）；
+- `serverUrl` 中不允许内嵌 `user:pass@`，否则会被写进日志/错误信息；
+- OAuth 未实现，留待有实际服务接入需求时扩展。
+
+### 协议实现（这是与"手写三个 POST"的关键差别）
+
+#### Streamable HTTP（推荐，`streamable-http.transport.ts`）
+
+```
+① POST {serverUrl}  initialize            → 响应头可能带 Mcp-Session-Id；校验返回的 protocolVersion
+② POST {serverUrl}  notifications/initialized（无 id，预期 202）
+③ POST {serverUrl}  tools/list            → 支持 nextCursor 分页，最多 20 页
+④ POST {serverUrl}  tools/call
+⑤ DELETE {serverUrl}                       → 主动结束会话（best-effort）
+```
+
+- 所有请求带 `Accept: application/json, text/event-stream`；
+- **响应体两种形态都要处理**：`application/json` 直接解析；`text/event-stream` 则在 SSE 流里按 id 找到目标响应后**立即停止读取**（不会因为服务端不关流而挂住）；
+- initialize 之后的请求都会带 `MCP-Protocol-Version` 与 `Mcp-Session-Id`；
+- 服务端返回的 `protocolVersion` 不在支持列表（2025-06-18 / 2025-03-26 / 2024-11-05）内会直接报错，不做静默降级；
+- 服务端对无效会话返回 404 时，标记为「会话失效」，连接层会自动重新握手并重试一次。
+
+#### 旧版 HTTP + SSE（`sse.transport.ts`）
+
+与 Streamable HTTP **完全独立的实现**，不是"改个 URL 就行"：
+
+```
+① GET  {serverUrl}                 → 建立 SSE 长连接，服务端先下发 event: endpoint（POST 目标地址）
+② POST {endpoint}   initialize      → 服务端只回 202
+③ 从 SSE 流的 event: message 里按 id 拿到 JSON-RPC 响应
+④ POST {endpoint}   notifications/initialized
+⑤ POST {endpoint}   tools/list / tools/call
+```
+
+- endpoint 可能是相对路径，会基于 SSE URL 解析，并且**单独再做一次安全校验**（可能指向另一个主机）；
+- 服务端反向发起的请求（server → client）目前不支持，会回 `Method not found` 避免对端挂起。
+
+### 与 LLMNodeExecutor / AgentService 的集成
 
 ```typescript
-// 1. 查 MCP Server 表
-const servers = await this.mcpService.findByIds(config.mcpServerIds);
+// 1. 取运行时配置（凭据在这里解密，仅服务端内部流转）
+const servers = await this.mcpService.findRuntimeConfigs(config.mcpServerIds);
 
-// 2. 把每个 server 的 availableTools 转成 ToolDefinition[]
-for (const tool of server.availableTools) {
-  tools.push({ type: 'function', function: { name, description, parameters } });
-  mcpServerMap.set(tool.name, serverInfo);   // 名字 → 连接信息
-}
+// 2. 转成 ToolDefinition + 路由表（优先复用 availableTools 缓存，无缓存才实时发现）
+const { tools, bindings } = await this.mcpToolService.buildBindings(servers);
 
-// 3. executeWithTools() 里执行
-const server = mcpServerMap.get(call.function.name);
-const toolResult = await this.mcpService.callTool(server, call.function.name, args);
+// 3. 模型返回 tool_calls 后，按 binding 路由执行（会话由连接层复用，失败自动重连一次）
+const outcome = await this.mcpToolService.callTool(bindings.get(name), args);
+currentMessages.push({ role: 'tool', content: outcome.text, tool_call_id: id });
 ```
 
-### callTool() — 一次调用要发 3 个 HTTP 请求
+- **不做「所有 MCP 工具无差别塞给每一次模型调用」**：只加载当前 Agent / LLM 节点勾选的 Server 的工具；
+- 工具重名时保留先注册的那个并打 warn 日志（MCP 工具名的全局唯一性无法保证）；
+- `McpToolService.formatResult()` 统一处理 `content`（text / image / resource）、`structuredContent`、`isError`：
+  优先取 text 块，没有文本时回退 `structuredContent` 的 JSON，`isError` 时加「工具返回错误：」前缀。
 
-MCP（Model Context Protocol）是 JSON-RPC 2.0 over HTTP。本项目实现的是 **Streamable HTTP** 传输，`callTool()` 每次都会完整跑一遍握手：
+### 会话缓存
 
-```
-① POST {serverUrl}  { jsonrpc:'2.0', id:1, method:'initialize',
-                      params:{ protocolVersion:'2024-11-05', capabilities:{}, clientInfo:{...} } }
-② POST {serverUrl}  { jsonrpc:'2.0', method:'notifications/initialized' }   // 通知，不等响应
-③ POST {serverUrl}  { jsonrpc:'2.0', id:3, method:'tools/call',
-                      params:{ name: toolName, arguments: args } }
-```
+`McpConnectionService` 按 `transport | serverId | 配置指纹` 缓存会话（TTL 10 分钟，上限 50 条）：
 
-三步都带 `Accept: application/json, text/event-stream`。
+- Streamable HTTP 的 `Mcp-Session-Id`、SSE 的长连接都是有状态的，缓存避免每次工具调用都重新握手；
+- 同一 Server 并发调用会做**握手去重**（只发一次 initialize）；
+- 配置变更（URL / transport / 认证 / 凭据）会重置 `status / availableTools / lastConnectedAt` 并让旧会话失效；
+- 会话失效（404）时 `withConnection()` 会自动重连重试一次。
 
-**响应解析**（`parseMcpResponse`）：看 `content-type`
-- 含 `text/event-stream` → 按行找 `data: ` 前缀再 `JSON.parse`（找不到有效数据就抛错）
-- 否则直接 `response.json()`
+### 安全：SSRF / DNS 重绑定 / 重定向
 
-**鉴权头**（`buildHeaders`）：
-- `API_KEY` → `X-API-Key: <credentials.apiKey>`
-- `BEARER_TOKEN` → `Authorization: Bearer <credentials.bearerToken>`
-- `NONE` → 不带
+`McpUrlGuardService` 比工作流 HTTP 节点的 `SsrfCheckService` 更严格：
 
-**结果处理**：
-- `callResult.error` 有值 → 抛 `工具调用失败: {...}`
-- `result.isError === true` → 抛 `content[0].text`
-- 成功 → 取 `content` 数组里所有 `type === 'text'` 的 `text`，用 `\n` 拼起来返回
+1. 协议白名单（http / https），拒绝 `file:` / `gopher:` 等；
+2. 拒绝 URL 内嵌认证信息；
+3. 主机名黑名单（`localhost`、`*.local`、`*.internal`、`metadata.google.internal` 等）；
+4. IP 字面量 + **DNS 解析结果**都要过私网/保留地址检查
+   （`10/8`、`172.16/12`、`192.168/16`、`127/8`、`169.254/16`、`100.64/10`、组播/保留段、
+   IPv6 `::1`、`fc00::/7`、`fe80::/10`、`ff00::/8`、IPv4-mapped、NAT64、6to4、Teredo），
+   从而防住「域名 A 记录指向 127.0.0.1」的 DNS 重绑定；
+5. 传输层 `redirect: 'manual'`，**3xx 一律报错不跟随**；
+6. 单请求超时 30s、响应体上限 4MB，超出即中断。
 
-> ⚠️ **SSE 传输不支持工具调用**：`callTool()` 开头就是
-> `if (server.transport === 'SSE') throw new Error('SSE 传输方式暂不支持工具调用，请使用 Streamable HTTP')`。
-> `fetchTools()` 同样拒绝对 SSE 做连接测试。
+> 校验时机：创建/更新配置时做同步形态校验（快速失败）；真正连接时做完整校验（含 DNS）。
 
-### testConnection() — 连接测试并缓存工具
+### 接口一览
 
-```
-fetchTools() 走 initialize → notifications/initialized → tools/list
-  成功 → status=CONNECTED, lastError=null, availableTools=tools  返回 { success:true, tools, message:'连接成功，发现 N 个可用工具' }
-  失败 → status=ERROR,     lastError=msg,  availableTools=null    返回 { success:false, tools:[], message:msg }
-```
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/mcp-servers` | 创建 |
+| GET | `/mcp-servers` | 列表（含状态 / 工具数 / 协议版本 / 凭据掩码） |
+| GET | `/mcp-servers/:id` | 详情 |
+| PUT | `/mcp-servers/:id` | 更新（连接相关字段变更会重置连接状态） |
+| DELETE | `/mcp-servers/:id` | 删除（同时释放会话） |
+| POST | `/mcp-servers/:id/test` | 测试连接：握手 + tools/list，结果落库 |
+| POST | `/mcp-servers/:id/tools/refresh` | 刷新工具列表（重新握手并覆盖缓存） |
+| GET | `/mcp-servers/:id/tools` | 实时发现工具列表（不落库） |
+| POST | `/mcp-servers/:id/tools/call` | 调试用：直接调用某个工具 |
 
-另外 `update()` 时如果改了 `serverUrl` 或 `authType`，会**重置** `status='DISCONNECTED'`、`lastError=null`、`availableTools=null`——因为旧的工具列表已经不可信了。
+`test` / `refresh` 返回 `{ success, status, transport, protocolVersion, serverInfo, instructions, tools, lastConnectedAt, message }`；
+失败不抛异常，而是 `success:false + message`，前端可直接展示错误详情。
 
 ---
 
@@ -158,10 +242,10 @@ if (skillInstructions) {
 }
 ```
 
-> 📌 **Agent 侧仅 CRUD，未接入运行时——已确认暂缓实现，不是 bug**。
+> 📌 **Agent 侧 Skill 仅 CRUD，未接入运行时——已确认暂缓实现，不是 bug**。
 > `Agent.skillIds` 字段存在且能存能查，但 `AgentService` **没有注入 SkillService**，运行时从不读取。
 > 也就是说：**在 Agent 配置页勾选 Skill 不会生效**，只有在画布上给 LLM 节点勾选 Skill 才会注入。
-> `Agent.mcpServerIds` 同理。
+> （对比：`Agent.mcpServerIds` **已接入运行时**，见本文第一节。）
 
 **Skill 本质上就是一段可复用的 System Prompt 片段**——比如写一个"代码审查" Skill，保存固定的审查标准，LLM 节点勾选后自动注入。
 注意 schema 虽然定义了 `WORKFLOW` / `TOOL` 两种类型（对应 `workflowId` / `mcpServerId` + `mcpToolName`），但当前注入逻辑**只处理 `instructions`**，那两个类型还没有对应的执行分支。
@@ -346,6 +430,9 @@ HTTP 节点执行前必须过这一关（`validate(urlString)`，不通过抛 Ba
 > ⚠️ **两个已知不足**（别以为这样就万无一失）：
 > 1. **没有防重定向绕过**——`axios` 默认会跟随 3xx。如果攻击者控制的公网地址 302 到 `http://127.0.0.1/...`，SSRF 检查（只验初始 URL）就绕过去了。要堵需给 axios 加 `maxRedirects: 0` 或自定义 `beforeRedirect` 再验一次。
 > 2. **不解析域名**——只做字符串/正则匹配 hostname。若攻击者把自己的域名 A 记录指到 `127.0.0.1`（DNS rebinding），同样绕过。彻底防需要 `dns.lookup()` 后校验解析出的 IP。
+>
+> ✅ **MCP 侧没有这两个缺口**：`McpUrlGuardService` 会做 DNS 解析后校验每个 IP，且传输层用 `redirect: 'manual'` 拒绝跟随任何 3xx（详见本文第一节「安全」）。
+> 但工作流 HTTP 节点仍然走上面这个旧实现——两者是独立的两套校验，改一处不会影响另一处。
 
 ---
 
