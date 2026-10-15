@@ -8,7 +8,9 @@ import {
   removeLlmConfig,
   testLlmConfig,
   testSavedLlmConfig,
-  fetchLlmModels,
+  fetchRemoteLlmModels,
+  addLlmModels,
+  removeLlmModel,
   updateLlmModel,
   setDefaultLlmModel,
 } from "@/api/provider";
@@ -139,6 +141,130 @@ async function onSaveModel() {
   }
 }
 
+// ===================== 手动添加单个模型 =====================
+const addModelDialogVisible = ref(false);
+const addModelSaving = ref(false);
+const addModelConfigId = ref<string | null>(null);
+const addModelConfigName = ref("");
+const addModelForm = reactive({
+  modelId: "",
+  displayName: "",
+  capabilities: ["CHAT", "STREAM"] as ModelCapability[],
+});
+
+function openAddModel(cfg: LlmProviderConfig) {
+  addModelConfigId.value = cfg.id;
+  addModelConfigName.value = cfg.name;
+  addModelForm.modelId = "";
+  addModelForm.displayName = "";
+  addModelForm.capabilities = ["CHAT", "STREAM"];
+  addModelDialogVisible.value = true;
+}
+
+async function onAddModelSubmit() {
+  const modelId = addModelForm.modelId.trim();
+  if (!modelId) {
+    MessagePlugin.warning("请填写模型 ID");
+    return;
+  }
+  if (!addModelConfigId.value) return;
+  addModelSaving.value = true;
+  try {
+    await addLlmModels(addModelConfigId.value, {
+      modelIds: [modelId], // 只添加用户填写的这一个
+      capabilities: addModelForm.capabilities,
+    });
+    MessagePlugin.success(`已添加模型「${modelId}」`);
+    addModelDialogVisible.value = false;
+    await fetchConfigs();
+  } catch {
+    /* 错误提示由拦截器处理 */
+  } finally {
+    addModelSaving.value = false;
+  }
+}
+
+// ===================== 获取模型（表格勾选弹窗） =====================
+const remoteDialogVisible = ref(false);
+const remoteLoading = ref(false);
+const remoteSaving = ref(false);
+const remoteConfigId = ref<string | null>(null);
+const remoteConfigName = ref("");
+const remoteKeyword = ref("");
+const remoteRows = ref<{ modelId: string; existing: boolean }[]>([]);
+const remoteSelected = ref<string[]>([]);
+
+const remoteColumns = [
+  { colKey: "row-select", type: "multiple", width: 48 },
+  { colKey: "modelId", title: "模型 ID", minWidth: 240 },
+  { colKey: "status", title: "状态", width: 100 },
+];
+
+const filteredRemoteRows = computed(() => {
+  const kw = remoteKeyword.value.trim().toLowerCase();
+  if (!kw) return remoteRows.value;
+  return remoteRows.value.filter((r) => r.modelId.toLowerCase().includes(kw));
+});
+
+async function onFetchModels(cfg: LlmProviderConfig) {
+  remoteConfigId.value = cfg.id;
+  remoteConfigName.value = cfg.name;
+  remoteKeyword.value = "";
+  remoteSelected.value = [];
+  remoteRows.value = [];
+  remoteDialogVisible.value = true;
+  remoteLoading.value = true;
+  try {
+    const res = await fetchRemoteLlmModels(cfg.id);
+    const existing = new Set(res.existing ?? []);
+    remoteRows.value = (res.models ?? []).map((modelId) => ({
+      modelId,
+      existing: existing.has(modelId),
+    }));
+    if (remoteRows.value.length === 0) {
+      MessagePlugin.warning("未获取到任何模型，可改用「添加模型」手动填写 ID");
+    }
+  } catch {
+    remoteDialogVisible.value = false;
+  } finally {
+    remoteLoading.value = false;
+  }
+}
+
+function onRemoteSelectChange(selected: (string | number)[]) {
+  remoteSelected.value = selected.map(String);
+}
+
+function toggleSelectAll() {
+  const ids = filteredRemoteRows.value.map((r) => r.modelId);
+  const allSelected = ids.every((id) => remoteSelected.value.includes(id));
+  remoteSelected.value = allSelected
+    ? remoteSelected.value.filter((id) => !ids.includes(id))
+    : [...new Set([...remoteSelected.value, ...ids])];
+}
+
+async function onAddSelectedModels() {
+  if (!remoteConfigId.value) return;
+  if (remoteSelected.value.length === 0) {
+    MessagePlugin.warning("请先勾选要添加的模型");
+    return;
+  }
+  remoteSaving.value = true;
+  try {
+    await addLlmModels(remoteConfigId.value, {
+      modelIds: remoteSelected.value,
+      capabilities: ["CHAT", "STREAM"],
+    });
+    MessagePlugin.success(`已添加 ${remoteSelected.value.length} 个模型`);
+    remoteDialogVisible.value = false;
+    await fetchConfigs();
+  } catch {
+    /* 错误提示由拦截器处理 */
+  } finally {
+    remoteSaving.value = false;
+  }
+}
+
 // ===================== 数据加载 =====================
 async function fetchConfigs() {
   loading.value = true;
@@ -191,12 +317,17 @@ async function onSubmit() {
   saving.value = true;
   try {
     if (editingId.value) {
+      const withModel = !!form.modelId.trim();
       await updateLlmConfig(editingId.value, {
         name: form.name,
         baseUrl: form.baseUrl || undefined,
         apiKey: form.apiKey || undefined,
+        // 填了 modelId 就只添加 / 更新这一个模型
+        modelId: withModel ? form.modelId.trim() : undefined,
+        displayName: withModel ? form.displayName.trim() || undefined : undefined,
+        capabilities: withModel ? form.capabilities : undefined,
       });
-      MessagePlugin.success("已更新配置");
+      MessagePlugin.success(withModel ? "已更新配置并添加模型" : "已更新配置");
     } else {
       await createLlmConfig({
         name: form.name,
@@ -229,14 +360,18 @@ async function onTestSaved(cfg: LlmProviderConfig) {
   }
 }
 
-async function onFetchModels(cfg: LlmProviderConfig) {
-  try {
-    await fetchLlmModels(cfg.id);
-    MessagePlugin.success("已刷新模型列表");
-    await fetchConfigs();
-  } catch {
-    /* ignore */
-  }
+function onDeleteModel(model: LlmModel) {
+  const dialog = DialogPlugin.confirm({
+    header: "删除模型",
+    body: `确定删除模型「${model.displayName || model.modelId}」？`,
+    confirmBtn: { content: "删除", theme: "danger" },
+    onConfirm: async () => {
+      await removeLlmModel(model.id);
+      MessagePlugin.success("已删除模型");
+      dialog.destroy();
+      await fetchConfigs();
+    },
+  });
 }
 
 function onDelete(cfg: LlmProviderConfig) {
@@ -279,7 +414,7 @@ const modelsColumns = [
   { colKey: "capabilities", title: "能力", minWidth: 160 },
   { colKey: "isDefault", title: "默认", width: 80 },
   { colKey: "enabled", title: "启用", width: 90 },
-  { colKey: "actions", title: "操作", width: 160, align: "right" as const },
+  { colKey: "actions", title: "操作", width: 220, align: "right" as const },
 ];
 
 onMounted(fetchConfigs);
@@ -340,6 +475,13 @@ onMounted(fetchConfigs);
                 :disabled="cfg.status === 'DISABLED'"
                 @click="onFetchModels(cfg)"
                 >获取模型</t-button
+              >
+              <t-button
+                size="small"
+                variant="outline"
+                theme="primary"
+                @click="openAddModel(cfg)"
+                >手动添加模型</t-button
               >
               <t-button size="small" variant="outline" @click="openEdit(cfg)"
                 >编辑</t-button
@@ -427,10 +569,17 @@ onMounted(fetchConfigs);
                   @click="openEditModel(row)"
                   >编辑</t-button
                 >
+                <t-button
+                  size="small"
+                  variant="text"
+                  theme="danger"
+                  @click="onDeleteModel(row)"
+                  >删除</t-button
+                >
               </template>
             </t-table>
             <p v-else class="models-empty">
-              暂无模型，点「获取模型」自动拉取，或编辑配置时手动指定 modelId。
+              暂无模型，可点「添加模型」手动填写模型 ID，或点「获取模型」从远端勾选。
             </p>
           </div>
         </t-card>
@@ -491,7 +640,7 @@ onMounted(fetchConfigs);
 
         <t-form-item
           label="模型 ID"
-          tips="模型标识符，与 Base URL 是两回事。若「获取模型」拉不到列表，可在这里手动填写，例如 deepseek-chat / gpt-4o-mini / qwen2.5:7b。保存后在模型列表中也能设为默认。"
+          tips="模型标识符，与 Base URL 是两回事。填写后只会添加这一个模型，不会自动拉取全部；留空则保存后可在卡片上点「获取模型」勾选添加。"
         >
           <t-input
             v-model="form.modelId"
@@ -559,6 +708,102 @@ onMounted(fetchConfigs);
         </t-form-item>
       </t-form>
     </t-dialog>
+
+    <!-- 手动添加单个模型 -->
+    <t-dialog
+      v-model:visible="addModelDialogVisible"
+      :header="
+        addModelConfigName ? `添加模型（${addModelConfigName}）` : '添加模型'
+      "
+      :confirm-btn="{ content: '添加', theme: 'primary', loading: addModelSaving }"
+      cancel-btn="取消"
+      width="480px"
+      @confirm="onAddModelSubmit"
+    >
+      <t-form layout="vertical" label-align="top">
+        <t-form-item
+          label="模型 ID"
+          required-mark
+          tips="只添加你填写的这一个模型，不会自动拉取全部。"
+        >
+          <t-input
+            v-model="addModelForm.modelId"
+            placeholder="例如 deepseek-chat / gpt-4o-mini / qwen2.5:7b"
+            @enter="onAddModelSubmit"
+          />
+        </t-form-item>
+        <t-form-item label="显示名称">
+          <t-input
+            v-model="addModelForm.displayName"
+            placeholder="留空则使用模型 ID"
+          />
+        </t-form-item>
+        <t-form-item label="模型能力">
+          <t-checkbox-group
+            v-model="addModelForm.capabilities"
+            :options="capabilityOptions"
+          />
+        </t-form-item>
+      </t-form>
+    </t-dialog>
+
+    <!-- 获取模型：表格勾选后添加 -->
+    <t-dialog
+      v-model:visible="remoteDialogVisible"
+      :header="
+        remoteConfigName ? `获取模型（${remoteConfigName}）` : '获取模型'
+      "
+      :confirm-btn="{
+        content: `添加选中${remoteSelected.length ? `（${remoteSelected.length}）` : ''}`,
+        theme: 'primary',
+        loading: remoteSaving,
+      }"
+      cancel-btn="取消"
+      width="720px"
+      @confirm="onAddSelectedModels"
+    >
+      <div class="remote-toolbar">
+        <t-input
+          v-model="remoteKeyword"
+          placeholder="搜索模型 ID"
+          clearable
+          class="remote-search"
+        >
+          <template #prefix-icon><t-icon name="search" /></template>
+        </t-input>
+        <t-button
+          variant="outline"
+          :disabled="!filteredRemoteRows.length"
+          @click="toggleSelectAll"
+          >全选 / 取消</t-button
+        >
+        <span class="remote-count"
+          >共 {{ filteredRemoteRows.length }} 个，已选
+          {{ remoteSelected.length }} 个</span
+        >
+      </div>
+
+      <t-table
+        :data="filteredRemoteRows"
+        :columns="remoteColumns"
+        row-key="modelId"
+        size="small"
+        hover
+        :loading="remoteLoading"
+        :selected-row-keys="remoteSelected"
+        select-on-row-click
+        max-height="380px"
+        empty="未获取到模型"
+        @select-change="onRemoteSelectChange"
+      >
+        <template #status="{ row }">
+          <t-tag v-if="row.existing" size="small" theme="success" variant="light"
+            >已添加</t-tag
+          >
+          <span v-else class="muted">—</span>
+        </template>
+      </t-table>
+    </t-dialog>
   </div>
 </template>
 
@@ -600,6 +845,10 @@ onMounted(fetchConfigs);
     padding: @space-10 @space-4;
     color: @color-text-tertiary;
     text-align: center;
+  }
+
+  .muted {
+    color: @color-text-tertiary;
   }
 
   .config-list {
@@ -700,6 +949,23 @@ onMounted(fetchConfigs);
     .footer-right {
       display: flex;
       gap: @space-2;
+    }
+  }
+
+  .remote-toolbar {
+    display: flex;
+    align-items: center;
+    gap: @space-2;
+    margin-bottom: @space-3;
+
+    .remote-search {
+      width: 240px;
+    }
+
+    .remote-count {
+      margin-left: auto;
+      font-size: @font-sm;
+      color: @color-text-tertiary;
     }
   }
 }

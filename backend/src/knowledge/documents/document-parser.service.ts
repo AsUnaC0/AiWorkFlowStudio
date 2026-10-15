@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { extname } from 'node:path';
+import { sanitizeText } from '../../common/text.util';
 import { DocxParser } from './parsers/docx.parser';
 import { MarkdownParser } from './parsers/markdown.parser';
 import { PdfParser } from './parsers/pdf.parser';
@@ -36,6 +37,7 @@ export class DocumentParserService {
     if (!parser) {
       throw new Error(`No parser for extension: .${ext}`);
     }
-    return parser.parse(filePath);
+    // 统一清洗：PDF 等解析结果可能含 NUL（0x00）等 Postgres 无法存储的字符
+    return sanitizeText(await parser.parse(filePath));
   }
 }

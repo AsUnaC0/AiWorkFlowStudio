@@ -150,6 +150,43 @@ export class DocumentsController {
   }
 
   // ===========================================================================
+  // 重新处理（失败后重试，无需重新上传文件）
+  // ===========================================================================
+
+  @Post('documents/:id/reprocess')
+  async reprocess(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.documentService.assertDocumentOwner(user.id, id);
+    const doc = await this.documentService.findOne(id);
+
+    await this.documentService.updateStatus(id, 'UPLOADED');
+
+    const job = await this.documentQueue.add(
+      'process-document',
+      {
+        documentId: doc.id,
+        knowledgeBaseId: doc.knowledgeBaseId,
+        storagePath: doc.storagePath,
+      },
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 3000 },
+        removeOnComplete: 100,
+        removeOnFail: 500,
+      },
+    );
+
+    return {
+      documentId: doc.id,
+      jobId: job.id,
+      status: 'UPLOADED',
+      message: '已重新入队，正在后台处理',
+    };
+  }
+
+  // ===========================================================================
   // 删除
   // ===========================================================================
 

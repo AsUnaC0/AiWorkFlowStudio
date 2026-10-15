@@ -62,6 +62,25 @@ export class CreateLlmConfigDto {
   capabilities?: ModelCapability[];
 }
 
+/** 向已有配置添加指定模型（用户勾选 / 手动填写的 modelId，不再全量拉取） */
+export class AddLlmModelsDto {
+  @IsArray()
+  @IsString({ each: true })
+  @MaxLength(200, { each: true })
+  modelIds!: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsEnum(MODEL_CAPABILITIES, { each: true })
+  capabilities?: ModelCapability[];
+
+  /** 仅添加单个模型时的显示名；留空则使用模型 ID */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  displayName?: string;
+}
+
 export class UpdateLlmConfigDto {
   @IsOptional()
   @IsString()
@@ -82,6 +101,22 @@ export class UpdateLlmConfigDto {
   @IsOptional()
   @IsBoolean()
   disabled?: boolean;
+
+  /** 编辑配置时顺带添加 / 更新一个指定模型（只添加用户填写的这个） */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  modelId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  displayName?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsEnum(MODEL_CAPABILITIES, { each: true })
+  capabilities?: ModelCapability[];
 }
 
 export class UpdateLlmModelDto {

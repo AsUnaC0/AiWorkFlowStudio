@@ -51,6 +51,22 @@ export interface UpdateLlmConfigRequest {
   baseUrl?: string;
   apiKey?: string;
   disabled?: boolean;
+  /** 编辑时顺带添加 / 更新的单个模型（只添加填写的这个） */
+  modelId?: string;
+  displayName?: string;
+  capabilities?: ModelCapability[];
+}
+
+/** 向已有配置添加指定模型（不再全量拉取） */
+export interface AddLlmModelsRequest {
+  modelIds: string[];
+  capabilities?: ModelCapability[];
+}
+
+/** 远端模型列表（只拉取不落地）：models 为远端全部，existing 为已入库的 */
+export interface RemoteModelsResult {
+  models: string[];
+  existing: string[];
 }
 
 export interface UpdateLlmModelRequest {

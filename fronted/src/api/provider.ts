@@ -1,9 +1,11 @@
 import { request } from "@/utils/request";
 import type {
+  AddLlmModelsRequest,
   CreateLlmConfigRequest,
   LlmModel,
   LlmProviderConfig,
   ModelCapability,
+  RemoteModelsResult,
   TestLlmConfigRequest,
   TestLlmConfigResult,
   UpdateLlmConfigRequest,
@@ -39,9 +41,27 @@ export const testSavedLlmConfig = (
   id: string,
 ): Promise<TestLlmConfigResult> => request.post(`/llm-configs/${id}/test`);
 
-/** 拉取某配置下的模型列表并落地 */
+/** 拉取某配置下的模型列表并全部落地（全量，一般不再使用） */
 export const fetchLlmModels = (id: string): Promise<LlmModel[]> =>
   request.get(`/llm-configs/${id}/models`);
+
+/** 只拉取远端模型列表，不落地（供弹窗勾选） */
+export const fetchRemoteLlmModels = (
+  id: string,
+): Promise<RemoteModelsResult> =>
+  request.get(`/llm-configs/${id}/models/remote`);
+
+/** 只添加用户指定的模型（幂等） */
+export const addLlmModels = (
+  id: string,
+  data: AddLlmModelsRequest,
+): Promise<LlmModel[]> => request.post(`/llm-configs/${id}/models`, data);
+
+/** 删除单个模型 */
+export const removeLlmModel = (
+  id: string,
+): Promise<{ id: string; deleted: boolean }> =>
+  request.delete(`/llm-configs/models/${id}`);
 
 /**
  * 当前用户全部可用（启用）模型 —— 供聊天 / 工作流 / 知识库选择器使用。

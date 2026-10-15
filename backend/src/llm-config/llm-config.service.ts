@@ -14,6 +14,7 @@ import {
 } from '../ai/providers/provider.factory';
 import type { AiProvider } from '../ai/ai-provider.interface';
 import type {
+  AddLlmModelsDto,
   CreateLlmConfigDto,
   ModelCapability,
   TestLlmConfigDto,
@@ -151,12 +152,26 @@ export class LlmConfigService {
       data.status = dto.disabled ? 'DISABLED' : 'UNKNOWN';
     }
 
-    const updated = await this.prisma.llmProviderConfig.update({
+    await this.prisma.llmProviderConfig.update({
       where: { id },
       data,
       select: CONFIG_SELECT,
     });
-    return this.toConfigView(updated);
+
+    // 编辑配置时若填写了 modelId，只添加 / 更新这一个模型（不做全量拉取）
+    if (dto.modelId?.trim()) {
+      await this.upsertModel(id, existing.provider, dto.modelId.trim(), {
+        displayName: dto.displayName || undefined,
+        capabilities: dto.capabilities,
+      });
+    }
+
+    return this.toConfigView(
+      await this.prisma.llmProviderConfig.findUniqueOrThrow({
+        where: { id },
+        select: CONFIG_SELECT,
+      }),
+    );
   }
 
   async remove(userId: string, id: string) {
@@ -263,17 +278,7 @@ export class LlmConfigService {
     }
 
     for (const modelId of remoteModels) {
-      await this.prisma.llmModel.upsert({
-        where: { configId_modelId: { configId: id, modelId } },
-        create: {
-          configId: id,
-          provider: config.provider,
-          modelId,
-          displayName: modelId,
-          capabilities: ['CHAT', 'STREAM'],
-        },
-        update: { provider: config.provider },
-      });
+      await this.upsertModel(id, config.provider, modelId);
     }
 
     await this.prisma.llmProviderConfig.update({
@@ -281,11 +286,95 @@ export class LlmConfigService {
       data: { status: 'CONNECTED', lastError: null },
     });
 
-    return this.prisma.llmModel.findMany({
-      where: { configId: id },
-      select: MODEL_SELECT,
-      orderBy: { createdAt: 'asc' },
+    return this.listConfigModels(id);
+  }
+
+  /**
+   * 只拉取远端模型列表（**不落地**），供前端弹窗勾选后按需添加。
+   * 返回远端模型 id 列表 + 已存在的模型 id（前端用于标记「已添加」）。
+   */
+  async listRemoteModels(userId: string, id: string) {
+    const config = await this.prisma.llmProviderConfig.findUnique({
+      where: { id },
+      select: CONFIG_SELECT,
     });
+    if (!config) throw new NotFoundException('配置不存在');
+    this.assertOwner(config, userId);
+
+    const provider = this.buildProviderFromConfig(config);
+    let remoteModels: string[] = [];
+    try {
+      remoteModels = (await provider.listModels?.()) ?? [];
+    } catch (err) {
+      await this.prisma.llmProviderConfig.update({
+        where: { id },
+        data: {
+          status: 'ERROR',
+          lastError: err instanceof Error ? err.message : String(err),
+        },
+      });
+      throw new BadRequestException(
+        `获取模型列表失败：${err instanceof Error ? err.message : err}`,
+      );
+    }
+
+    await this.prisma.llmProviderConfig.update({
+      where: { id },
+      data: { status: 'CONNECTED', lastError: null },
+    });
+
+    const existing = await this.prisma.llmModel.findMany({
+      where: { configId: id },
+      select: { modelId: true },
+    });
+
+    return {
+      models: remoteModels,
+      existing: existing.map((m) => m.modelId),
+    };
+  }
+
+  /** 只添加用户指定的模型（幂等 upsert），返回该配置下全部模型 */
+  async addModels(userId: string, id: string, dto: AddLlmModelsDto) {
+    const config = await this.prisma.llmProviderConfig.findUnique({
+      where: { id },
+      select: CONFIG_SELECT,
+    });
+    if (!config) throw new NotFoundException('配置不存在');
+    this.assertOwner(config, userId);
+
+    const modelIds = [
+      ...new Set(
+        (dto.modelIds ?? [])
+          .map((m) => (typeof m === 'string' ? m.trim() : ''))
+          .filter(Boolean),
+      ),
+    ];
+    if (modelIds.length === 0) {
+      throw new BadRequestException('请至少选择一个模型');
+    }
+
+    for (const modelId of modelIds) {
+      await this.upsertModel(id, config.provider, modelId, {
+        capabilities: dto.capabilities,
+        displayName: modelIds.length === 1 ? dto.displayName : undefined,
+      });
+    }
+
+    return this.listConfigModels(id);
+  }
+
+  /** 删除单个模型（不影响配置本身） */
+  async removeModel(userId: string, modelId: string) {
+    const model = await this.prisma.llmModel.findUnique({
+      where: { id: modelId },
+      select: { id: true, configId: true, isDefault: true },
+    });
+    if (!model) throw new NotFoundException('模型不存在');
+    await this.assertModelOwner(model.configId, userId);
+
+    await this.prisma.llmModel.delete({ where: { id: modelId } });
+    return { id: modelId, deleted: true, wasDefault: model.isDefault };
   }
 
   // ===========================================================================
@@ -467,6 +556,39 @@ export class LlmConfigService {
   // ===========================================================================
   // 内部工具
   // ===========================================================================
+
+  /** 幂等写入单条模型记录；已存在时只补 provider / 可选字段，不覆盖用户改过的显示名 */
+  private async upsertModel(
+    configId: string,
+    provider: unknown,
+    modelId: string,
+    opts?: { displayName?: string; capabilities?: ModelCapability[] },
+  ) {
+    return this.prisma.llmModel.upsert({
+      where: { configId_modelId: { configId, modelId } },
+      create: {
+        configId,
+        provider: provider as string,
+        modelId,
+        displayName: opts?.displayName || modelId,
+        capabilities: opts?.capabilities ?? ['CHAT', 'STREAM'],
+      },
+      update: {
+        provider: provider as string,
+        ...(opts?.displayName ? { displayName: opts.displayName } : {}),
+        ...(opts?.capabilities ? { capabilities: opts.capabilities } : {}),
+      },
+    });
+  }
+
+  /** 某配置下的全部模型 */
+  private listConfigModels(configId: string) {
+    return this.prisma.llmModel.findMany({
+      where: { configId },
+      select: MODEL_SELECT,
+      orderBy: { createdAt: 'asc' },
+    });
+  }
 
   private resolveBaseUrl(
     provider: LlmProviderType,

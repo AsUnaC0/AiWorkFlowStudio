@@ -7,6 +7,7 @@ import { EmbeddingService } from '../../knowledge/embedding/embedding.service';
 import { VectorStoreService } from '../../knowledge/vector/vector-store.service';
 import { StorageService } from '../../storage/storage.service';
 import { unlink } from 'node:fs/promises';
+import { hasTextContent } from '../../common/text.util';
 
 /** document-processing Queue 的 Job 数据结构 */
 export interface ProcessDocumentJobData {
@@ -78,6 +79,14 @@ export class DocumentProcessor extends WorkerHost {
       }
 
       const text = await this.documentParserService.parse(localPath);
+
+      // 扫描件 / 图片型 PDF 没有文本层，解析结果为空 —— 提前给出可读的失败原因，
+      // 而不是静默标记 COMPLETED 让用户误以为向量化成功。
+      if (!hasTextContent(text)) {
+        throw new Error(
+          '未能从该文件中提取到有效文本内容（可能是扫描件或图片型 PDF，需先做 OCR）',
+        );
+      }
 
       await job.updateProgress(30);
 

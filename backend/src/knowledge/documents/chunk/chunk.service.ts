@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { sanitizeText } from '../../../common/text.util';
 
 @Injectable()
 export class ChunkService {
@@ -12,12 +13,17 @@ export class ChunkService {
   constructor(private readonly prisma: PrismaService) {}
 
   async split(text: string) {
-    const chunks = await this.splitter.splitText(text);
+    // 先整体清洗（去 NUL 等非法字符），再切分；切分后逐块再清洗一次并丢弃空块，
+    // 避免「整块都是 0x00」的碎片进入数据库和 embedding。
+    const chunks = await this.splitter.splitText(sanitizeText(text));
 
-    return chunks.map((content, index) => ({
-      content,
-      chunkIndex: index,
-    }));
+    return chunks
+      .map((content) => sanitizeText(content).trim())
+      .filter((content) => content.length > 0)
+      .map((content, index) => ({
+        content,
+        chunkIndex: index,
+      }));
   }
 
   /**
@@ -30,11 +36,15 @@ export class ChunkService {
   ) {
     if (chunks.length === 0) return [];
 
-    const data = chunks.map((c) => ({
-      documentId,
-      content: c.content,
-      chunkIndex: c.chunkIndex,
-    }));
+    // 兜底清洗：即使调用方没走 split()，也不会把非法字符写进 Postgres
+    const data = chunks
+      .map((c) => ({ ...c, content: sanitizeText(c.content) }))
+      .filter((c) => c.content.trim().length > 0)
+      .map((c, index) => ({
+        documentId,
+        content: c.content,
+        chunkIndex: c.chunkIndex ?? index,
+      }));
 
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.documentChunk.createMany({

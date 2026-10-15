@@ -15,6 +15,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { JwtUser } from '../auth/strategies/jwt.strategy';
 import { LlmConfigService } from './llm-config.service';
 import {
+  AddLlmModelsDto,
   CreateLlmConfigDto,
   TestLlmConfigDto,
   UpdateLlmConfigDto,
@@ -67,6 +68,15 @@ export class LlmConfigController {
     return this.llmConfigService.updateModel(user.id, id, dto);
   }
 
+  /** DELETE /llm-configs/models/:id —— 删除单个模型 */
+  @Delete('models/:id')
+  removeModel(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.llmConfigService.removeModel(user.id, id);
+  }
+
   /** PATCH /llm-configs/models/:id/default —— 设为默认模型 */
   @Patch('models/:id/default')
   setDefaultModel(
@@ -113,12 +123,31 @@ export class LlmConfigController {
     return this.llmConfigService.testSaved(user.id, id);
   }
 
-  /** GET /llm-configs/:id/models —— 拉取模型列表并落地 */
+  /** GET /llm-configs/:id/models —— 拉取模型列表并落地（全量，兼容旧行为） */
   @Get(':id/models')
   fetchModels(
     @CurrentUser() user: JwtUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.llmConfigService.fetchModels(user.id, id);
+  }
+
+  /** GET /llm-configs/:id/models/remote —— 只拉取远端模型，不落地（供前端勾选） */
+  @Get(':id/models/remote')
+  listRemoteModels(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.llmConfigService.listRemoteModels(user.id, id);
+  }
+
+  /** POST /llm-configs/:id/models —— 只添加指定的模型（幂等） */
+  @Post(':id/models')
+  addModels(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AddLlmModelsDto,
+  ) {
+    return this.llmConfigService.addModels(user.id, id, dto);
   }
 }
