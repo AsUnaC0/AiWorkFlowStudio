@@ -62,14 +62,17 @@ const detailTab = ref<"overview" | "nodes" | "logs" | "models">("overview");
 // ===========================================================================
 // ECharts 实例管理
 // ===========================================================================
-const chartRefs = {
-  trend: ref<HTMLDivElement>(),
-  status: ref<HTMLDivElement>(),
-  node: ref<HTMLDivElement>(),
-  knowledge: ref<HTMLDivElement>(),
-  queue: ref<HTMLDivElement>(),
-  modelToken: ref<HTMLDivElement>(),
-};
+// ⚠️ 图表容器必须用「顶层 ref + ref="xxx"」，不能写成嵌套对象（如 ref="chartRefs.trend"）。
+// Vue 的 setRef 处理字符串 ref 时是 `refs[ref] = el; if (hasOwn(setupState, ref)) setupState[ref] = el`，
+// 而 setupState 里只有 chartRefs 这个键、没有 "chartRefs.trend" 这个键，于是元素被存进组件内部
+// refs["chartRefs.trend"]，chartRefs.trend.value 永远是 undefined → 所有图表容器留空。
+const trendChartEl = ref<HTMLDivElement>();
+const statusChartEl = ref<HTMLDivElement>();
+const nodeChartEl = ref<HTMLDivElement>();
+const knowledgeChartEl = ref<HTMLDivElement>();
+const queueChartEl = ref<HTMLDivElement>();
+const modelTokenChartEl = ref<HTMLDivElement>();
+
 const charts: Record<string, echarts.ECharts | null> = {
   trend: null,
   status: null,
@@ -125,13 +128,17 @@ const loadAll = async () => {
     await Promise.allSettled([loadModelUsage(), loadRuns()]);
 
     lastUpdated.value = new Date();
-    await nextTick();
-    renderAllCharts();
   } catch {
     errorMessage.value = "数据加载失败，请稍后重试";
   } finally {
     loading.value = false;
   }
+
+  // ⚠️ 顺序不能改：所有图表容器都在 `v-else`（loading 为 false 才渲染）的分支里，
+  // 必须等 loading 关闭、DOM 真正挂载之后再初始化 ECharts。
+  // 之前这里是在 finally 之前调用的，此时容器还不存在 → 6 个图表全部空白。
+  await nextTick();
+  renderAllCharts();
 };
 
 const loadModelUsage = async () => {
@@ -177,6 +184,12 @@ const handleRunsFilterChange = async () => {
 
 const handleRunsPageChange = async (page: number) => {
   runsPage.value = page;
+  await loadRuns();
+};
+
+const handleRunsPageSizeChange = async (size: number) => {
+  runsPageSize.value = size;
+  runsPage.value = 1;
   await loadRuns();
 };
 
@@ -233,9 +246,9 @@ const handleResize = () => {
 
 // ---- 1. 工作流执行趋势（折线 + 面积）----
 const renderTrendChart = () => {
-  if (!chartRefs.trend.value || trend.value.length === 0) return;
+  if (!trendChartEl.value || trend.value.length === 0) return;
   charts.trend?.dispose();
-  charts.trend = echarts.init(chartRefs.trend.value);
+  charts.trend = echarts.init(trendChartEl.value);
 
   const dates = trend.value.map((t) => t.date.slice(5));
   charts.trend.setOption({
@@ -302,9 +315,9 @@ const renderTrendChart = () => {
 
 // ---- 2. 运行结果分布（环形图）----
 const renderStatusChart = () => {
-  if (!chartRefs.status.value || !statusMap.value) return;
+  if (!statusChartEl.value || !statusMap.value) return;
   charts.status?.dispose();
-  charts.status = echarts.init(chartRefs.status.value);
+  charts.status = echarts.init(statusChartEl.value);
 
   const statusOrder: Array<[string, string, string]> = [
     ["COMPLETED", "已完成", "#2BA471"],
@@ -351,9 +364,9 @@ const renderStatusChart = () => {
 
 // ---- 3. 节点耗时排行（横向柱状图）----
 const renderNodeChart = () => {
-  if (!chartRefs.node.value || nodePerformance.value.length === 0) return;
+  if (!nodeChartEl.value || nodePerformance.value.length === 0) return;
   charts.node?.dispose();
-  charts.node = echarts.init(chartRefs.node.value);
+  charts.node = echarts.init(nodeChartEl.value);
 
   const sorted = [...nodePerformance.value].sort((a, b) => b.avgDurationMs - a.avgDurationMs);
   const types = sorted.map((n) => `${n.nodeType} (失败${n.failRate}%)`).reverse();
@@ -394,9 +407,9 @@ const renderNodeChart = () => {
 
 // ---- 4. 知识库处理状态（环形图）----
 const renderKnowledgeChart = () => {
-  if (!chartRefs.knowledge.value || !knowledgeStatus.value) return;
+  if (!knowledgeChartEl.value || !knowledgeStatus.value) return;
   charts.knowledge?.dispose();
-  charts.knowledge = echarts.init(chartRefs.knowledge.value);
+  charts.knowledge = echarts.init(knowledgeChartEl.value);
 
   const s = knowledgeStatus.value;
   const statusList: Array<[string, number, string]> = [
@@ -439,9 +452,9 @@ const renderKnowledgeChart = () => {
 
 // ---- 5. 队列状态（柱状图）----
 const renderQueueChart = () => {
-  if (!chartRefs.queue.value || !queueOverview.value) return;
+  if (!queueChartEl.value || !queueOverview.value) return;
   charts.queue?.dispose();
-  charts.queue = echarts.init(chartRefs.queue.value);
+  charts.queue = echarts.init(queueChartEl.value);
 
   const labels = ["等待中", "执行中", "已完成", "失败"];
   const values = [queueOverview.value.waiting, queueOverview.value.active, queueOverview.value.completed, queueOverview.value.failed];
@@ -477,18 +490,32 @@ const renderQueueChart = () => {
 
 // ---- 6. 模型 Token 消耗（按模型横向柱状图）----
 const renderModelTokenChart = () => {
-  if (!chartRefs.modelToken.value || !modelUsage.value || modelUsage.value.models.length === 0) return;
+  if (!modelTokenChartEl.value || !modelUsage.value || modelUsage.value.models.length === 0) return;
   charts.modelToken?.dispose();
-  charts.modelToken = echarts.init(chartRefs.modelToken.value);
+  charts.modelToken = echarts.init(modelTokenChartEl.value);
 
+  // 排序：Token 优先；Token 相同（流式调用拿不到 usage 时为 0）时用调用次数兜底，
+  // 避免「有调用但 0 Token」的模型被排到最后看不见。
   const sorted = [...modelUsage.value.models]
-    .sort((a, b) => b.totalTokens - a.totalTokens)
-    .slice(0, 8);
+    .sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls)
+    .slice(0, 10);
   const models = sorted.map((m) => m.model).reverse();
   const tokens = sorted.map((m) => m.totalTokens).reverse();
+  const rows = sorted.slice().reverse();
 
   charts.modelToken.setOption({
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      formatter: (params: unknown) => {
+        const first = (Array.isArray(params) ? params[0] : params) as
+          | { dataIndex?: number }
+          | undefined;
+        const row = rows[first?.dataIndex ?? 0];
+        if (!row) return "";
+        return `${row.model}<br/>Token：${formatNumber(row.totalTokens)}<br/>调用：${row.calls} 次<br/>厂商：${row.provider}`;
+      },
+    },
     grid: { top: 12, right: 44, bottom: 8, left: 110 },
     xAxis: {
       type: "value",
@@ -644,8 +671,6 @@ const runModelCallsColumns: TableCol[] = [
 const failedRuns = computed(() => recentActivities.value?.workflowRuns.filter((r) => r.status === "FAILED") ?? []);
 const failedDocs = computed(() => recentActivities.value?.documents.filter((d) => d.status === "FAILED") ?? []);
 
-const runTotalPages = computed(() => Math.max(1, Math.ceil(runsTotal.value / runsPageSize.value)));
-
 // ===========================================================================
 // 生命周期
 // ===========================================================================
@@ -789,14 +814,14 @@ onBeforeUnmount(() => {
             <h3 class="chart-title">工作流执行趋势</h3>
             <span class="chart-desc">近 {{ overview?.periodDays ?? 7 }} 天执行量与成功量</span>
           </div>
-          <div ref="chartRefs.trend" class="chart-body" />
+          <div ref="trendChartEl" class="chart-body" />
         </div>
         <div class="chart-card">
           <div class="chart-header">
             <h3 class="chart-title">运行结果分布</h3>
             <span class="chart-desc">近 {{ overview?.periodDays ?? 7 }} 天</span>
           </div>
-          <div ref="chartRefs.status" class="chart-body" />
+          <div ref="statusChartEl" class="chart-body" />
         </div>
       </section>
 
@@ -807,21 +832,21 @@ onBeforeUnmount(() => {
             <h3 class="chart-title">节点平均耗时</h3>
             <span class="chart-desc">TOP {{ nodePerformance.length }}（含失败率）</span>
           </div>
-          <div ref="chartRefs.node" class="chart-body chart-body-sm" />
+          <div ref="nodeChartEl" class="chart-body chart-body-sm" />
         </div>
         <div class="chart-card">
           <div class="chart-header">
             <h3 class="chart-title">文档处理状态</h3>
             <span class="chart-desc">完成率 {{ knowledgeStatus?.completionRate ?? 0 }}%</span>
           </div>
-          <div ref="chartRefs.knowledge" class="chart-body" />
+          <div ref="knowledgeChartEl" class="chart-body" />
         </div>
         <div class="chart-card">
           <div class="chart-header">
             <h3 class="chart-title">异步任务队列</h3>
             <span class="chart-desc">最近 24 小时</span>
           </div>
-          <div ref="chartRefs.queue" class="chart-body" />
+          <div ref="queueChartEl" class="chart-body" />
         </div>
       </section>
 
@@ -858,9 +883,9 @@ onBeforeUnmount(() => {
           <div class="chart-card model-chart">
             <div class="chart-header">
               <h3 class="chart-title">各模型 Token 消耗</h3>
-              <span class="chart-desc">TOP 8</span>
+              <span class="chart-desc">TOP 10（含调用次数）</span>
             </div>
-            <div ref="chartRefs.modelToken" class="chart-body chart-body-sm" />
+            <div ref="modelTokenChartEl" class="chart-body chart-body-sm" />
           </div>
           <div class="chart-card model-table">
             <div class="chart-header">
@@ -923,11 +948,7 @@ onBeforeUnmount(() => {
           showPageSize: true,
           pageSizeOptions: [10, 20, 50],
           onCurrentChange: handleRunsPageChange,
-          onPageSizeChange: (size: number) => {
-            runsPageSize.value = size;
-            runsPage.value = 1;
-            loadRuns();
-          },
+          onPageSizeChange: handleRunsPageSizeChange,
         }">
           <template #workflowName="{ row }"><span class="run-name">{{ row.workflowName }}</span></template>
           <template #status="{ row }">

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -86,6 +87,12 @@ export class WorkflowsController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.workflowsService.restore(user.id, id);
+  }
+
+  /** 永久删除工作流（级联删除版本与运行记录，并清理 Agent 上的绑定） */
+  @Delete('workflows/:id')
+  remove(@CurrentUser() user: JwtUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.workflowsService.remove(user.id, id);
   }
 
   /** 入队运行工作流 → 立即返回 runId，后台 BullMQ 执行 */

@@ -112,6 +112,8 @@ export class KnowledgeTool {
       query,
       topK,
       mode: 'hybrid',
+      // 透传遥测：让查询向量化用的 Embedding 模型也计入模型调用统计
+      telemetry: context.telemetry,
     });
 
     if (results.length === 0) {

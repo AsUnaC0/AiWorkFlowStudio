@@ -92,6 +92,8 @@ export class RAGNodeExecutor implements NodeExecutor {
       scoreThreshold,
       mode,
       embeddingModel,
+      // 透传遥测，让查询向量化用的 Embedding 模型计入模型调用统计
+      telemetry: context.telemetry,
     });
 
     console.log(

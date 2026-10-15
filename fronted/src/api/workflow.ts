@@ -26,6 +26,13 @@ export const restoreWorkflow = (workflowId: string): Promise<Workflow> => {
   return request.post(`/workflows/${workflowId}/restore`);
 };
 
+/** 永久删除工作流（连同版本与运行记录一起删除，不可恢复） */
+export const deleteWorkflow = (
+  workflowId: string,
+): Promise<{ id: string; name: string; deleted: boolean }> => {
+  return request.delete(`/workflows/${workflowId}`);
+};
+
 export interface RunWorkflowRequest {
   workflow: WorkflowDefinition;
   input: unknown;

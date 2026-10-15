@@ -17,6 +17,8 @@ export interface SearchOptions {
   includeDocument?: boolean;
   /** Embedding 模型名；不传则使用知识库绑定的 embeddingModel */
   embeddingModel?: string;
+  /** 监控遥测上下文：透传给查询向量化，用于把 Embedding 调用写入 ModelCallLog */
+  telemetry?: import('../../ai/ai-provider.interface').ModelCallTelemetry;
 }
 
 /** 向量检索选项 */
@@ -43,6 +45,8 @@ export interface HybridSearchOptions {
   rrfK?: number;
   /** Embedding 模型名；不传则使用知识库绑定的 embeddingModel */
   embeddingModel?: string;
+  /** 监控遥测上下文：透传给查询向量化，用于把 Embedding 调用写入 ModelCallLog */
+  telemetry?: import('../../ai/ai-provider.interface').ModelCallTelemetry;
 }
 
 /** 单条检索结果 */

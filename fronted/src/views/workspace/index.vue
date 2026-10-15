@@ -8,6 +8,8 @@ import {
   publishWorkflow,
   archiveWorkflow,
   restoreWorkflow,
+  deleteWorkflow,
+  updateWorkflow,
 } from "@/api/workflow";
 import {
   getWorkspaceMembers,
@@ -327,6 +329,81 @@ const handleRestore = async (wf: Workflow) => {
   }
 };
 
+// ========== 重命名工作流 ==========
+const wfRenameDialogVisible = ref(false);
+const wfRenaming = ref(false);
+const wfRenameInput = ref("");
+const wfRenameError = ref("");
+const targetRenameWf = ref<{ id: string; name: string } | null>(null);
+
+const openWfRenameDialog = (wf: Workflow) => {
+  targetRenameWf.value = { id: wf.id, name: wf.name };
+  wfRenameInput.value = wf.name;
+  wfRenameError.value = "";
+  wfRenameDialogVisible.value = true;
+};
+
+const handleRenameWorkflow = async () => {
+  if (!targetRenameWf.value) return;
+
+  const name = wfRenameInput.value.trim();
+  if (!name) {
+    wfRenameError.value = "请输入工作流名称";
+    return;
+  }
+  if (name === targetRenameWf.value.name) {
+    wfRenameDialogVisible.value = false;
+    return;
+  }
+
+  const targetId = targetRenameWf.value.id;
+  wfRenaming.value = true;
+  wfRenameError.value = "";
+  try {
+    // 只传 name：后端不会新建 WorkflowVersion，已发布状态也不会被标成「有未发布改动」
+    const updated = await updateWorkflow(targetId, { name });
+    // shallowRef：整体替换数组才能触发视图更新
+    workflows.value = workflows.value.map((wf) =>
+      wf.id === targetId ? { ...wf, ...updated } : wf,
+    );
+    wfRenameDialogVisible.value = false;
+    targetRenameWf.value = null;
+    MessagePlugin.success("工作流已重命名");
+  } catch (e: any) {
+    wfRenameError.value = e?.response?.data?.message || "重命名失败，请稍后重试";
+  } finally {
+    wfRenaming.value = false;
+  }
+};
+
+// ========== 删除工作流 ==========
+const wfDeleteConfirmVisible = ref(false);
+const wfDeleting = ref(false);
+const targetDeleteWf = ref<{ id: string; name: string } | null>(null);
+
+const openWfDeleteConfirm = (wf: Workflow) => {
+  targetDeleteWf.value = { id: wf.id, name: wf.name };
+  wfDeleteConfirmVisible.value = true;
+};
+
+const handleDeleteWorkflow = async () => {
+  if (!targetDeleteWf.value) return;
+  const targetId = targetDeleteWf.value.id;
+  wfDeleting.value = true;
+  try {
+    await deleteWorkflow(targetId);
+    // shallowRef：整体替换数组才能触发视图更新
+    workflows.value = workflows.value.filter((wf) => wf.id !== targetId);
+    wfDeleteConfirmVisible.value = false;
+    targetDeleteWf.value = null;
+    MessagePlugin.success("工作流已删除");
+  } catch (e: any) {
+    MessagePlugin.error(e?.response?.data?.message || "删除失败，请稍后重试");
+  } finally {
+    wfDeleting.value = false;
+  }
+};
+
 // 监听
 watch(workspaceId, (id) => {
   if (id) {
@@ -517,8 +594,14 @@ onBeforeUnmount(() => {
                   恢复
                 </t-button>
 
+                <button class="wf-rename-btn" @click.stop="openWfRenameDialog(wf)" title="重命名工作流">
+                  <t-icon name="edit" />
+                </button>
                 <button class="run-btn" @click.stop="openWorkflow(wf)" title="编辑工作流">
                   <t-icon name="edit-1" />
+                </button>
+                <button class="wf-delete-btn" @click.stop="openWfDeleteConfirm(wf)" title="删除工作流">
+                  <t-icon name="delete" />
                 </button>
                 <t-icon name="chevron-right" class="row-arrow" />
               </div>
@@ -548,6 +631,31 @@ onBeforeUnmount(() => {
           </t-form-item>
           <t-alert v-if="wfCreateError" theme="error" :message="wfCreateError" class="form-alert" />
         </t-form>
+      </t-dialog>
+
+      <!-- 重命名工作流对话框 -->
+      <t-dialog v-model:visible="wfRenameDialogVisible" header="重命名工作流"
+        :confirm-btn="{ content: '保存', theme: 'primary', loading: wfRenaming }" :cancel-btn="{ content: '取消' }"
+        width="420px" :close-on-overlay-click="true" @confirm="handleRenameWorkflow">
+        <!-- TDesign 的 Form 默认已 preventSubmitDefault，这里不要再加 .prevent：
+             组件 submit 事件抛出的是 { validateResult, firstError, e } 对象，
+             带 .prevent 修饰符会因对象上没有 preventDefault 而报错 -->
+        <t-form layout="vertical" label-align="top" @submit="handleRenameWorkflow">
+          <t-form-item label="Workflow Name">
+            <t-input v-model="wfRenameInput" placeholder="Customer Support AI" :maxlength="100" @enter="handleRenameWorkflow" />
+          </t-form-item>
+          <t-alert v-if="wfRenameError" theme="error" :message="wfRenameError" class="form-alert" />
+        </t-form>
+      </t-dialog>
+
+      <!-- 删除工作流确认对话框 -->
+      <t-dialog v-model:visible="wfDeleteConfirmVisible" header="删除工作流"
+        :confirm-btn="{ content: '确认删除', loading: wfDeleting, theme: 'danger' }" :cancel-btn="{ content: '取消' }"
+        :close-on-overlay-click="true" @confirm="handleDeleteWorkflow">
+        <p class="delete-warning">
+          确定要删除工作流 <strong>{{ targetDeleteWf?.name }}</strong> 吗？
+        </p>
+        <p class="delete-sub">该操作无法撤销，工作流的所有版本与历史运行记录都将被永久删除。</p>
       </t-dialog>
 
       <!-- 邀请好友对话框：只需要一个「关闭」，用自带的取消按钮 -->
@@ -752,6 +860,10 @@ onBeforeUnmount(() => {
       opacity: 1;
     }
 
+    .wf-delete-btn {
+      opacity: 1;
+    }
+
     .row-arrow {
       opacity: 1;
       transform: translateX(2px);
@@ -887,12 +999,55 @@ onBeforeUnmount(() => {
       align-items: center;
       justify-content: center;
       font-size: 14px;
-      opacity: 0;
-      transform: scale(0.9);
+      /* 常驻可见：藏在 hover 后面时用户根本发现不了行内还有操作 */
+      opacity: 1;
       transition: all 180ms @ease-standard;
 
       &:hover {
         background: @primary-hover;
+        color: @primary;
+      }
+    }
+
+    .wf-rename-btn {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: transparent;
+      color: @color-text-tertiary;
+      border-radius: @radius-md;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      opacity: 1;
+      transition: all 180ms @ease-standard;
+
+      &:hover {
+        background: @primary-light;
+        color: @primary;
+      }
+    }
+
+    .wf-delete-btn {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: transparent;
+      color: @color-text-tertiary;
+      border-radius: @radius-md;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      opacity: 1;
+      transition: all 180ms @ease-standard;
+
+      &:hover {
+        background: lighten(@color-error, 42%);
+        color: @color-error;
       }
     }
   }

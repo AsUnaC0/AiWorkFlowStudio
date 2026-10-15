@@ -35,7 +35,11 @@ export interface CreateWorkflowRequest {
 }
 
 export interface UpdateWorkflowRequest {
-  definition: WorkflowDefinition;
+  /**
+   * 画布内容。可选 —— 不传则只更新 name / description，
+   * 不会产生新的 WorkflowVersion（列表页重命名走这条路）。
+   */
+  definition?: WorkflowDefinition;
   name?: string;
   description?: string;
 } // 节点属性配置接口，匹配文档 4.3 章节定义

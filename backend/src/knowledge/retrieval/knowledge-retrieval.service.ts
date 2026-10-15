@@ -48,6 +48,7 @@ export class KnowledgeRetrievalService {
             options.query,
             options.embeddingModel,
             options.knowledgeBaseIds,
+            options.telemetry,
           ),
           topK: options.topK,
           scoreThreshold: options.scoreThreshold,
@@ -68,6 +69,7 @@ export class KnowledgeRetrievalService {
           topK: options.topK,
           rrfK: undefined,
           embeddingModel: options.embeddingModel,
+          telemetry: options.telemetry,
         });
     }
   }
@@ -121,6 +123,7 @@ export class KnowledgeRetrievalService {
       topK = 5,
       rrfK = 60,
       embeddingModel,
+      telemetry,
     } = options;
 
     if (knowledgeBaseIds.length === 0 || !query.trim()) return [];
@@ -129,6 +132,7 @@ export class KnowledgeRetrievalService {
       query,
       embeddingModel,
       knowledgeBaseIds,
+      telemetry,
     );
 
     // 并发跑两路（多取一些给 RRF 融合）
@@ -180,12 +184,14 @@ export class KnowledgeRetrievalService {
     query: string,
     model: string | undefined,
     knowledgeBaseIds: string[],
+    telemetry?: import('../../ai/ai-provider.interface').ModelCallTelemetry,
   ): Promise<number[]> {
     const resolved = await this.resolveEmbedding(model, knowledgeBaseIds);
     const [vector] = await this.embeddingService.embedBatch(
       [query],
       resolved.model,
       resolved.llmModelId,
+      telemetry,
     );
     return vector;
   }

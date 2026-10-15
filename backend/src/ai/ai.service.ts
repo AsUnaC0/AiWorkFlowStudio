@@ -203,6 +203,14 @@ export class AIService {
       status: string;
       errorCode?: string;
       errorMessage?: string;
+      /**
+       * 实际调用的 Provider 名称（ollama / openai / deepseek / openai-compatible）。
+       *
+       * 必须由调用方传入 —— 因为调用方可能拿到的是「按用户配置动态构造」的 Provider
+       * （见 LlmConfigService.resolveModelRuntime），与 AIService 注入的默认 Provider 不同。
+       * 不传时回退到默认 Provider（保持旧行为，仅适用于确实走默认 Provider 的调用）。
+       */
+      provider?: string;
     },
   ): Promise<void> {
     if (!telemetry?.workspaceId) return; // 无归属上下文的调用不记录
@@ -214,7 +222,7 @@ export class AIService {
           runId: telemetry.runId,
           nodeRunId: telemetry.nodeRunId,
           agentId: telemetry.agentId,
-          provider: this.provider.name,
+          provider: meta.provider ?? this.provider.name,
           model: meta.model,
           callType: meta.callType,
           promptTokens: meta.promptTokens ?? 0,

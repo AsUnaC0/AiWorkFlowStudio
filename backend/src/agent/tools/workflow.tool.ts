@@ -112,6 +112,12 @@ export class WorkflowTool {
     const result = await this.engine.run(
       workflow.publishedVersion.definition,
       input,
+      // 带上 workspaceId，让工作流内部 LLM 节点的调用也能归属到空间
+      // （否则 Agent 通过工具跑工作流时，模型调用不会出现在仪表盘统计里）
+      {
+        workflowId: workflow.id,
+        workspaceId: context.telemetry?.workspaceId,
+      },
     );
 
     // 工作流输出 = context.previousOutput（Output 节点的产物）

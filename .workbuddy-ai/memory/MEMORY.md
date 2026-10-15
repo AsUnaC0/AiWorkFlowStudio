@@ -33,6 +33,24 @@
 - 模块依赖方向：`AgentModule → AssistantModule → PlatformToolsModule`（单向）。
   `create_agent` 工具直接用 Prisma 就是为了避免反向依赖，其默认值需与 `AgentService.create` 手工同步。
 
+### 模型调用监控（ModelCallLog / Dashboard）
+- 所有模型调用记录的唯一写入口是 `AIService.recordModelCall(telemetry, meta)`；
+  **要求 `telemetry.workspaceId` 非空**（表字段 NOT NULL），无归属上下文的调用一律不记录。
+- `meta.provider` 必须由调用方显式传入**实际** Provider 名。不要依赖默认值 ——
+  `AIService` 注入的是全局 Ollama，而 Agent / LLM 节点用的是 `LlmConfigService.resolveModelRuntime()`
+  动态构造的 Provider，不传就会把云端模型错误归属成 `ollama`。
+- 调用点（新增 Provider 调用时必须同步补记录，否则仪表盘会漏）：
+  工作流 `llm.executor`（chat / streamChat / chatWithTools 三路）、
+  `AgentService.runStream`（5a 纯流式、5b chatWithTools、5b 重流式）、
+  `EmbeddingService.embedBatch`（EMBEDDING）。
+- `AgentToolContext.telemetry` 会把归属继续往下传：Agent 通过工具跑工作流（`workflow.tool.ts` → `engine.run`
+  的 `workspaceId`）、知识库检索（`knowledge.tool.ts` → `search` 的 `telemetry`）都依赖它，
+  新增「会间接发起模型调用」的工具时别忘了透传。
+- `AgentService` 用 `resolveTelemetryWorkspaceId()` 解析归属空间，回退链：
+  平台助理校验空间 → 平台助理首个可访问空间 → `agent.workspaceId` → 前端传入 → 用户首个可见空间。
+- 流式调用拿不到 `usage`，Token 记为 0 但调用次数正常；Dashboard 的模型图按 Token 排序时
+  要用 `calls` 兜底，否则「有调用没 Token」的模型会被挤到看不见。
+
 ### 数据库迁移
 - **不要用 `prisma migrate dev`**（会把 pgvector 的 IVFFlat 索引当多余对象删掉）。
   流程：手写 `prisma/migrations/<timestamp>_xxx/migration.sql` → `npx prisma migrate deploy` → `npx prisma generate`。

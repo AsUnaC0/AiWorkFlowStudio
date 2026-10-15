@@ -31,8 +31,6 @@ declare module 'vue' {
     TDialog: typeof import('tdesign-vue-next')['Dialog']
     TDrawer: typeof import('tdesign-vue-next')['Drawer']
     TDropdown: typeof import('tdesign-vue-next')['Dropdown']
-    TDropdownItem: typeof import('tdesign-vue-next')['DropdownItem']
-    TDropdownMenu: typeof import('tdesign-vue-next')['DropdownMenu']
     TEmpty: typeof import('tdesign-vue-next')['Empty']
     TForm: typeof import('tdesign-vue-next')['Form']
     TFormItem: typeof import('tdesign-vue-next')['FormItem']

@@ -16,7 +16,14 @@ function getTimeRange(days: number): TimeRange {
 }
 
 function getDateLabel(date: Date): string {
-  return date.toISOString().slice(0, 10); // YYYY-MM-DD
+  // ⚠️ 必须用「本地时区」的日期，不能用 toISOString().slice(0,10)（那是 UTC 日期）。
+  // getTimeRange 的 start 是本地 00:00，在 GMT+8 下对应 UTC 前一天 16:00，
+  // 若按 UTC 打标签，桶的标签会比真实日期早一天，导致「今天」这个桶不存在，
+  // 当天的运行记录全部被 getWorkflowTrend 的 `if (!dayData) continue` 丢掉。
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 // ===========================================================================

@@ -1,4 +1,7 @@
-import type { ToolDefinition } from '../../ai/ai-provider.interface';
+import type {
+  ModelCallTelemetry,
+  ToolDefinition,
+} from '../../ai/ai-provider.interface';
 
 /**
  * Agent Tool 统一接口。
@@ -45,4 +48,10 @@ export interface ToolContext {
    * generate_file 工具会把结果 push 进来，AgentService 据此推送 SSE 事件并回填 messageId。
    */
   files?: GeneratedFileRef[];
+  /**
+   * 模型调用遥测上下文（由 AgentService 注入）。
+   * 工具内部若又发起了模型调用（如工作流 LLM 节点、知识库查询向量化），
+   * 应把它继续往下传，否则这些调用不会出现在仪表盘的模型统计里。
+   */
+  telemetry?: ModelCallTelemetry;
 }

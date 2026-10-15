@@ -89,6 +89,7 @@ export class LLMNodeExecutor {
       const result = await provider.chat(messages, options);
       await this.logCall(telemetry, {
         model: result.model || options.model,
+        provider: provider.name,
         callType: 'CHAT',
         promptTokens: result.usage?.promptTokens ?? 0,
         completionTokens: result.usage?.completionTokens ?? 0,
@@ -100,6 +101,7 @@ export class LLMNodeExecutor {
     } catch (e) {
       await this.logCall(telemetry, {
         model: options.model,
+        provider: provider.name,
         callType: 'CHAT',
         latencyMs: Date.now() - start,
         status: 'FAILED',
@@ -129,6 +131,7 @@ export class LLMNodeExecutor {
       failed = true;
       await this.logCall(telemetry, {
         model: options.model,
+        provider: provider.name,
         callType: 'CHAT',
         latencyMs: Date.now() - start,
         status: 'FAILED',
@@ -140,6 +143,7 @@ export class LLMNodeExecutor {
       if (!failed) {
         await this.logCall(telemetry, {
           model: options.model,
+          provider: provider.name,
           callType: 'CHAT',
           latencyMs: Date.now() - start,
           status: 'SUCCESS',
@@ -173,6 +177,7 @@ export class LLMNodeExecutor {
       } catch (e) {
         await this.logCall(telemetry, {
           model: options.model,
+          provider: provider.name,
           callType: 'CHAT',
           latencyMs: Date.now() - start,
           status: 'FAILED',
@@ -183,6 +188,7 @@ export class LLMNodeExecutor {
       }
       await this.logCall(telemetry, {
         model: result.model || options.model,
+        provider: provider.name,
         callType: 'CHAT',
         promptTokens: result.usage?.promptTokens ?? 0,
         completionTokens: result.usage?.completionTokens ?? 0,
@@ -257,6 +263,8 @@ export class LLMNodeExecutor {
       status: string;
       errorCode?: string;
       errorMessage?: string;
+      /** 实际使用的 Provider 名（自定义模型时不是默认 Ollama） */
+      provider?: string;
     },
   ): Promise<void> {
     await this.aiService.recordModelCall(telemetry, meta);
@@ -324,6 +332,8 @@ export class LLMNodeExecutor {
         scoreThreshold: config.similarityThreshold ?? 0.7,
         mode: config.searchMode ?? 'hybrid',
         embeddingModel: config.embeddingModel,
+        // 把遥测透传下去，让「查询向量化」用的 Embedding 模型也被计入模型调用统计
+        telemetry: context.telemetry,
       });
 
       const ragContext =

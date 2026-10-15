@@ -96,11 +96,37 @@ export class DocumentProcessor extends WorkerHost {
       // 5. 查询知识库 embedding 配置（本地模型名 + 可选的自定义 Embedding 模型 id）
       const kb = await this.prisma.knowledgeBase.findUnique({
         where: { id: knowledgeBaseId },
-        select: { embeddingModel: true, embeddingLlmModelId: true },
+        select: {
+          ownerId: true,
+          embeddingModel: true,
+          embeddingLlmModelId: true,
+          // 用于把本次向量化归属到工作空间（写入 ModelCallLog，供仪表盘统计）
+          workspaces: { select: { workspaceId: true }, take: 1 },
+        },
       });
       if (!kb) {
         throw new Error('知识库不存在');
       }
+
+      // 向量化遥测：优先用知识库关联的第一个工作空间，否则回退知识库 owner 的可见空间。
+      // 没有归属就不写记录（与「无归属上下文的调用不记录」的约定一致）。
+      const telemetryWorkspaceId =
+        kb.workspaces[0]?.workspaceId ??
+        (
+          await this.prisma.workspace.findFirst({
+            where: {
+              OR: [
+                { ownerId: kb.ownerId },
+                { members: { some: { userId: kb.ownerId } } },
+              ],
+            },
+            orderBy: { createdAt: 'asc' },
+            select: { id: true },
+          })
+        )?.id;
+      const telemetry = telemetryWorkspaceId
+        ? { workspaceId: telemetryWorkspaceId }
+        : undefined;
 
       // 6. 批量向量化（优先用户所选 Embedding 模型，否则回退本地 Ollama）
       if (storedChunks.length > 0) {
@@ -108,6 +134,7 @@ export class DocumentProcessor extends WorkerHost {
           storedChunks.map((c) => c.content),
           kb.embeddingModel,
           kb.embeddingLlmModelId,
+          telemetry,
         );
 
         // 维度校验：pgvector 列为 vector(768)，维度不符会导致写入失败，

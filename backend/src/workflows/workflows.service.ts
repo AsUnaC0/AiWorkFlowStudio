@@ -115,20 +115,30 @@ export class WorkflowsService {
       throw new NotFoundException('Workflow not found');
     }
 
-    const latestVersion = await this.prisma.workflowVersion.findFirst({
-      where: { workflowId: id },
-      orderBy: { version: 'desc' },
-      select: { version: true },
-    });
+    // definition 可选：只有传了画布内容才需要新版本（列表页重命名就不传）
+    const shouldCreateVersion = dto.definition !== undefined;
+
+    const latestVersion = shouldCreateVersion
+      ? await this.prisma.workflowVersion.findFirst({
+          where: { workflowId: id },
+          orderBy: { version: 'desc' },
+          select: { version: true },
+        })
+      : null;
 
     return this.prisma.$transaction(async (transaction) => {
-      const version = await transaction.workflowVersion.create({
-        data: {
-          workflowId: id,
-          version: (latestVersion?.version ?? 0) + 1,
-          definition: dto.definition as Prisma.InputJsonValue,
-        },
-      });
+      let currentVersionId: string | undefined;
+
+      if (shouldCreateVersion) {
+        const version = await transaction.workflowVersion.create({
+          data: {
+            workflowId: id,
+            version: (latestVersion?.version ?? 0) + 1,
+            definition: dto.definition as Prisma.InputJsonValue,
+          },
+        });
+        currentVersionId = version.id;
+      }
 
       return transaction.workflow.update({
         where: { id },
@@ -137,7 +147,7 @@ export class WorkflowsService {
           ...(dto.description !== undefined
             ? { description: dto.description }
             : {}),
-          currentVersionId: version.id,
+          ...(currentVersionId ? { currentVersionId } : {}),
         },
         select: workflowSelection,
       });
@@ -274,6 +284,48 @@ export class WorkflowsService {
       data: { status: 'DRAFT' },
       select: workflowSelection,
     });
+  }
+
+  /**
+   * 永久删除工作流：
+   *  - 级联删除该工作流的全部 WorkflowVersion / WorkflowRun / WorkflowNodeRun
+   *    （依赖 schema 里的 onDelete: Cascade，DB 层外键已带 ON DELETE CASCADE）
+   *  - 顺带把各 Agent 绑定列表（Agent.workflowIds）里的这个 id 摘掉，
+   *    否则 Agent 配置里会残留一个指向已删除工作流的死 id
+   *  - 状态机不设限：DRAFT / PUBLISHED / ARCHIVED 都可删除（删除即永久移除，
+   *    若只想让 Agent 停止调用，应该用归档而不是删除）
+   *
+   * 注意：ModelCallLog.workflowId 是普通标量字段（无外键关系），
+   * 历史调用记录会被保留下来用于统计，不会随工作流一起消失。
+   */
+  async remove(userId: string, id: string) {
+    const workflow = await this.prisma.workflow.findFirst({
+      where: { id, workspace: { members: { some: { userId } } } },
+      select: { id: true, name: true },
+    });
+
+    if (!workflow) {
+      throw new NotFoundException('Workflow not found');
+    }
+
+    await this.prisma.$transaction(async (transaction) => {
+      // 1. 摘掉 Agent 上对该工作流的绑定（数组字段，无外键，需手动清理）
+      const boundAgents = await transaction.agent.findMany({
+        where: { workflowIds: { has: id } },
+        select: { id: true, workflowIds: true },
+      });
+      for (const agent of boundAgents) {
+        await transaction.agent.update({
+          where: { id: agent.id },
+          data: { workflowIds: agent.workflowIds.filter((wid) => wid !== id) },
+        });
+      }
+
+      // 2. 删除工作流本体（versions / runs / nodeRuns 由外键级联删除）
+      await transaction.workflow.delete({ where: { id } });
+    });
+
+    return { id: workflow.id, name: workflow.name, deleted: true };
   }
 
   // ===========================================================================

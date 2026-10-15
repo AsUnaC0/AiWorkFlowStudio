@@ -11,9 +11,11 @@ import type {
   AiProvider,
   ChatMessage,
   ChatImage,
+  ModelCallTelemetry,
   ToolDefinition,
 } from '../ai/ai-provider.interface';
 import { parseToolArguments } from '../ai/tool-args.util';
+import { toErrorCode } from '../common/error-code.util';
 import { LlmConfigService } from '../llm-config/llm-config.service';
 import { McpService } from '../mcp/mcp.service';
 import { McpToolService, type McpToolBinding } from '../mcp/mcp-tool.service';
@@ -477,6 +479,27 @@ export class AgentService {
       );
     }
 
+    // 2.2 模型调用遥测上下文 —— Agent 聊天链路不经过 AIService，需要自己归属调用记录，
+    //     否则仪表盘的「AI 模型调用监控」只能看到工作流 LLM 节点的调用，
+    //     而用户日常用自定义模型（DeepSeek / OpenAI 等）聊天时一条记录都不会产生。
+    //
+    //     workspaceId 取值优先级：
+    //       1. 平台助理已校验过的当前空间
+    //       2. 平台助理可访问的第一个空间（多空间且未选择时兜底，保证统计不丢）
+    //       3. Agent 自身所属空间（普通 Agent）
+    //       4. 前端传入的 workspaceId（仅作意图，最后才用）
+    //       5. 用户最早创建的可见空间（纯个人对话兜底）
+    const telemetryWorkspaceId = await this.resolveTelemetryWorkspaceId(
+      userId,
+      assistantContext?.currentWorkspaceId ??
+        assistantContext?.workspaces[0]?.id ??
+        agent.workspaceId ??
+        options.workspaceId,
+    );
+    const telemetry: ModelCallTelemetry | undefined = telemetryWorkspaceId
+      ? { workspaceId: telemetryWorkspaceId, agentId: agent.id }
+      : undefined;
+
     // 3. 处理附件：校验归属与解析状态，组装上下文（图片走视觉通道）
     let currentUserImages: ChatImage[] | undefined;
     let currentUserContent = options.input;
@@ -633,12 +656,29 @@ export class AgentService {
       allTrailSteps.push({ type: 'thinking', message: '思考中...' });
 
       let fullContent = '';
-      for await (const token of chatBackend.streamChat(
-        currentMessages,
-        chatOptions,
-      )) {
-        fullContent += token;
-        yield { type: 'message', content: fullContent };
+      const streamStart = Date.now();
+      try {
+        for await (const token of chatBackend.streamChat(
+          currentMessages,
+          chatOptions,
+        )) {
+          fullContent += token;
+          yield { type: 'message', content: fullContent };
+        }
+        await this.recordAgentCall(telemetry, chatBackend, {
+          model: chatModel,
+          latencyMs: Date.now() - streamStart,
+          status: 'SUCCESS',
+        });
+      } catch (e) {
+        await this.recordAgentCall(telemetry, chatBackend, {
+          model: chatModel,
+          latencyMs: Date.now() - streamStart,
+          status: 'FAILED',
+          errorCode: toErrorCode(e),
+          errorMessage: e instanceof Error ? e.message : String(e),
+        });
+        throw e;
       }
 
       if (options.sessionId && fullContent) {
@@ -660,11 +700,32 @@ export class AgentService {
         message: `思考中... (第 ${i + 1} 轮)`,
       });
 
-      const result = await chatBackend.chatWithTools(
-        currentMessages,
-        chatOptions,
-        tools,
-      );
+      const llmStart = Date.now();
+      let result;
+      try {
+        result = await chatBackend.chatWithTools(
+          currentMessages,
+          chatOptions,
+          tools,
+        );
+      } catch (e) {
+        await this.recordAgentCall(telemetry, chatBackend, {
+          model: chatModel,
+          latencyMs: Date.now() - llmStart,
+          status: 'FAILED',
+          errorCode: toErrorCode(e),
+          errorMessage: e instanceof Error ? e.message : String(e),
+        });
+        throw e;
+      }
+      await this.recordAgentCall(telemetry, chatBackend, {
+        model: result.model || chatModel,
+        promptTokens: result.usage?.promptTokens ?? 0,
+        completionTokens: result.usage?.completionTokens ?? 0,
+        totalTokens: result.usage?.totalTokens ?? 0,
+        latencyMs: Date.now() - llmStart,
+        status: 'SUCCESS',
+      });
 
       // LLM 直接回答 —— 用 streamChat 做最终流式输出
       if (result.toolCalls.length === 0) {
@@ -678,12 +739,29 @@ export class AgentService {
         // 用 streamChat 重新流式输出，用户能看到真正的打字机效果
         // 把最终 content 逐步累积 yield 给前端
         let streamedContent = '';
-        for await (const token of chatBackend.streamChat(
-          currentMessages,
-          chatOptions,
-        )) {
-          streamedContent += token;
-          yield { type: 'message', content: streamedContent };
+        const restreamStart = Date.now();
+        try {
+          for await (const token of chatBackend.streamChat(
+            currentMessages,
+            chatOptions,
+          )) {
+            streamedContent += token;
+            yield { type: 'message', content: streamedContent };
+          }
+          await this.recordAgentCall(telemetry, chatBackend, {
+            model: chatModel,
+            latencyMs: Date.now() - restreamStart,
+            status: 'SUCCESS',
+          });
+        } catch (e) {
+          await this.recordAgentCall(telemetry, chatBackend, {
+            model: chatModel,
+            latencyMs: Date.now() - restreamStart,
+            status: 'FAILED',
+            errorCode: toErrorCode(e),
+            errorMessage: e instanceof Error ? e.message : String(e),
+          });
+          throw e;
         }
 
         const finalContent = streamedContent || result.content;
@@ -756,6 +834,9 @@ export class AgentService {
                   sessionId: options.sessionId,
                   files: runFiles,
                   knowledgeBaseIds: agent.knowledgeBaseIds,
+                  // 工具内部可能再次发起模型调用（工作流 LLM 节点 / 知识库向量化），
+                  // 把遥测传下去才能被计入模型调用统计
+                  telemetry,
                 },
               );
             }
@@ -820,6 +901,53 @@ export class AgentService {
         runFiles,
       );
     }
+  }
+
+  /**
+   * 解析本次 Agent 对话的遥测归属工作空间。
+   * 显式值（平台助理校验结果 / Agent 所属空间）优先，都没有时才查询用户最早创建的可见空间，
+   * 避免「多工作空间且未选择」或「Agent 未绑定空间」时统计记录直接丢失。
+   */
+  private async resolveTelemetryWorkspaceId(
+    userId: string,
+    explicit?: string | null,
+  ): Promise<string | undefined> {
+    if (explicit) return explicit;
+    const workspace = await this.prisma.workspace.findFirst({
+      where: {
+        OR: [{ ownerId: userId }, { members: { some: { userId } } }],
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    return workspace?.id;
+  }
+
+  /**
+   * 记录 Agent 聊天链路的模型调用。
+   * 这里之所以不直接走 AIService 的 chat/streamChat —— 因为 Agent 用的是
+   * 「按用户配置动态构造」的 Provider（chatBackend），必须显式把它的 name 带上，
+   * 否则记录会被错误归属到默认的本地 Ollama。
+   */
+  private async recordAgentCall(
+    telemetry: ModelCallTelemetry | undefined,
+    backend: AiProvider,
+    meta: {
+      model: string;
+      promptTokens?: number;
+      completionTokens?: number;
+      totalTokens?: number;
+      latencyMs?: number;
+      status: 'SUCCESS' | 'FAILED';
+      errorCode?: string;
+      errorMessage?: string;
+    },
+  ): Promise<void> {
+    await this.aiService.recordModelCall(telemetry, {
+      ...meta,
+      callType: 'CHAT',
+      provider: backend.name,
+    });
   }
 
   /**
