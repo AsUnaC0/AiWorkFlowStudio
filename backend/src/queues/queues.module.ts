@@ -5,6 +5,7 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { WorkflowsModule } from '../workflows/workflows.module';
 import { DocumentProcessor } from './document-processing/document.processor';
 import { WorkflowProcessor } from './workflow-execution/workflow.processor';
+import { ReEmbeddingProcessor } from './re-embedding/re-embedding.processor';
 
 /**
  * 统一的异步任务模块 —— 聚合所有 BullMQ Processor
@@ -19,6 +20,6 @@ import { WorkflowProcessor } from './workflow-execution/workflow.processor';
  */
 @Module({
   imports: [PrismaModule, StorageModule, KnowledgeModule, WorkflowsModule],
-  providers: [DocumentProcessor, WorkflowProcessor],
+  providers: [DocumentProcessor, WorkflowProcessor, ReEmbeddingProcessor],
 })
 export class QueuesModule {}

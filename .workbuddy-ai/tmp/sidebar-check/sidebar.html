@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="file:///C:/Users/meibus/Desktop/AI WorkFlow Studio/fronted/node_modules/tdesign-vue-next/es/style/index.css">
+<link rel="stylesheet" href="./sidebar.css">
+<style>body{margin:0;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{display:flex;gap:0;height:560px}
+  .box{outline:1px dashed #d0d0d8;outline-offset:-1px;height:560px;position:relative}
+  .cap{font:11px system-ui;color:#999;padding:4px 8px}
+  /* 仅用于截图核对：模拟 hover，把删除按钮强制显形 */
+  .force-delete .agent-delete{opacity:1!important;pointer-events:auto!important}
+</style></head>
+<body>
+<div style="display:flex">
+  <div><div class="cap">展开态 (260px)</div><div class="box" style="width:260px">
+<div class="chat-page" id="exp" data-v-test>
+  <aside class="agent-sidebar" data-v-test>
+    <div class="t-default-menu t-menu--light " style="height:100%;width:260px">
+      <div class="t-default-menu__inner">
+        <div class="t-menu__logo">
+          <button class="sidebar-toggle" data-v-test>‹</button>
+        </div>
+        <ul class="t-menu t-menu--scroll">
+          <div class="t-menu-group">
+            <div class="t-menu-group__title">
+              <div class="section-header" data-v-test>
+                <span>我的 Agent</span>
+                <button class="t-button t-button--variant-text t-size-s">+</button>
+              </div>
+            </div>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="agent-item active " data-v-test>
+      <div class="agent-avatar custom" data-v-test><i class="t-icon">✦</i></div>
+      <div class="agent-info" data-v-test>
+        <div class="agent-name" data-v-test>
+          <span class="agent-name-text" data-v-test>平台助理</span>
+          <span class="t-tag t-tag--variant-light t-tag--theme-primary t-size-s default-tag" data-v-test>平台助理</span>
+        </div>
+        <div class="agent-desc" data-v-test>平台内置的默认助理</div>
+      </div>
+      <button class="t-button t-button--variant-text t-button--shape-square t-size-s agent-delete" data-v-test>✕</button>
+    </div>
+  </span>
+</li>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="agent-item  force-delete" data-v-test>
+      <div class="agent-avatar general" data-v-test><i class="t-icon">✦</i></div>
+      <div class="agent-info" data-v-test>
+        <div class="agent-name" data-v-test>
+          <span class="agent-name-text" data-v-test>代码助手</span>
+          
+        </div>
+        <div class="agent-desc" data-v-test>general</div>
+      </div>
+      <button class="t-button t-button--variant-text t-button--shape-square t-size-s agent-delete" data-v-test>✕</button>
+    </div>
+  </span>
+</li>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="agent-item  " data-v-test>
+      <div class="agent-avatar knowledge" data-v-test><i class="t-icon">✦</i></div>
+      <div class="agent-info" data-v-test>
+        <div class="agent-name" data-v-test>
+          <span class="agent-name-text" data-v-test>这是一个非常非常长的 Agent 名称用来测试省略号是否正常工作</span>
+          <span class="t-tag t-tag--variant-light t-tag--theme-primary t-size-s default-tag" data-v-test>默认</span>
+        </div>
+        <div class="agent-desc" data-v-test>knowledge</div>
+      </div>
+      <button class="t-button t-button--variant-text t-button--shape-square t-size-s agent-delete" data-v-test>✕</button>
+    </div>
+  </span>
+</li>
+          </div>
+          <div class="t-menu-group">
+            <div class="t-menu-group__title">
+              <div class="section-header" data-v-test>
+                <span>会话</span>
+                <button class="t-button t-button--variant-text t-button--shape-square t-size-s">+</button>
+              </div>
+            </div>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="session-item active" data-v-test>
+      <button class="session-main" data-v-test>
+        <i class="t-icon session-icon" data-v-test>◍</i>
+        <span class="session-title" data-v-test>关于 RAG 检索的讨论</span>
+        <span class="session-time" data-v-test>10/16 12:30</span>
+      </button>
+      <button class="t-button t-button--variant-text t-button--shape-square t-size-s session-delete" data-v-test>✕</button>
+    </div>
+  </span>
+</li>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="session-item " data-v-test>
+      <button class="session-main" data-v-test>
+        <i class="t-icon session-icon" data-v-test>◍</i>
+        <span class="session-title" data-v-test>帮我写一个爬虫</span>
+        <span class="session-time" data-v-test>10/15 09:12</span>
+      </button>
+      <button class="t-button t-button--variant-text t-button--shape-square t-size-s session-delete" data-v-test>✕</button>
+    </div>
+  </span>
+</li>
+          </div>
+        </ul>
+      </div>
+    </div>
+  </aside>
+  <main class="chat-main" data-v-test>
+    <div style="padding:24px;color:#8b8b96;font-size:13px">聊天区域</div>
+  </main>
+</div></div></div>
+  <div><div class="cap">折叠态 (64px)</div><div class="box" style="width:64px">
+<div class="chat-page" id="col" data-v-test>
+  <aside class="agent-sidebar" data-v-test>
+    <div class="t-default-menu t-menu--light t-is-collapsed" style="height:100%;width:64px">
+      <div class="t-default-menu__inner">
+        <div class="t-menu__logo">
+          <button class="sidebar-toggle" data-v-test>›</button>
+        </div>
+        <ul class="t-menu t-menu--scroll">
+          <div class="t-menu-group">
+            <div class="t-menu-group__title">
+              <div class="section-header" data-v-test>
+                <span>我的 Agent</span>
+                <button class="t-button t-button--variant-text t-size-s">+</button>
+              </div>
+            </div>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="agent-item active " data-v-test>
+      <div class="agent-avatar custom" data-v-test><i class="t-icon">✦</i></div>
+      
+    </div>
+  </span>
+</li>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="agent-item  " data-v-test>
+      <div class="agent-avatar general" data-v-test><i class="t-icon">✦</i></div>
+      
+    </div>
+  </span>
+</li>
+            
+<li class="t-menu__item">
+  <span class="t-menu__content">
+    <div class="agent-item  " data-v-test>
+      <div class="agent-avatar knowledge" data-v-test><i class="t-icon">✦</i></div>
+      
+    </div>
+  </span>
+</li>
+          </div>
+          
+        </ul>
+      </div>
+    </div>
+  </aside>
+  <main class="chat-main" data-v-test>
+    <div style="padding:24px;color:#8b8b96;font-size:13px">聊天区域</div>
+  </main>
+</div></div></div>
+</div>
+<pre id="metrics" style="font:12px monospace"></pre>
+<script>
+window.addEventListener('load', function () {
+  var rows = [];
+  function w(el) { return el ? Math.round(el.getBoundingClientRect().width) : 'n/a'; }
+  function h(el) { return el ? Math.round(el.getBoundingClientRect().height) : 'n/a'; }
+  ['exp', 'col'].forEach(function (id) {
+    var root = document.getElementById(id);
+    var item = root.querySelector('.t-menu__item');
+    var content = root.querySelector('.t-menu__item > .t-menu__content');
+    var itemCs = getComputedStyle(item);
+    var contentCs = getComputedStyle(content);
+    var active = root.querySelector('.agent-item.active');
+    rows.push([
+      id,
+      'menu=' + w(root.querySelector('.t-default-menu')),
+      'logoH=' + h(root.querySelector('.t-menu__logo')),
+      'toggleRight=' + Math.round(root.querySelector('.sidebar-toggle').getBoundingClientRect().right),
+      'itemH=' + h(item),
+      'itemPad=' + itemCs.paddingTop + '/' + itemCs.paddingLeft,
+      'itemBg=' + itemCs.backgroundColor,
+      'contentDisplay=' + contentCs.display,
+      'activeBg=' + (active ? getComputedStyle(active).backgroundColor : 'n/a')
+    ].join(' '));
+  });
+  document.getElementById('metrics').textContent = rows.join('\n');
+});
+</script>
+</body></html>

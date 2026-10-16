@@ -182,12 +182,7 @@ onMounted(() => {
       <!-- 知识库列表 -->
       <template v-else-if="knowledgeBases.length > 0">
         <div class="kb-list">
-          <div
-            v-for="kb in knowledgeBases"
-            :key="kb.id"
-            class="kb-row"
-            @click="enterKnowledge(kb)"
-          >
+          <div v-for="kb in knowledgeBases" :key="kb.id" class="kb-row" @click="enterKnowledge(kb)">
             <!-- 图标 -->
             <div class="kb-icon">
               <t-icon name="library" />
@@ -222,12 +217,13 @@ onMounted(() => {
 
             <!-- 右侧操作 + 箭头 -->
             <div class="kb-row-actions">
-              <button class="row-action-btn" type="button" title="Open" @click.stop="enterKnowledge(kb)">
+              <t-button variant="text" shape="square" size="small" title="Open" @click.stop="enterKnowledge(kb)">
                 <t-icon name="view-list" />
-              </button>
-              <button class="row-action-btn row-action-danger" type="button" title="Delete" @click.stop="openDeleteDialog(kb)">
+              </t-button>
+              <t-button theme="danger" variant="text" shape="square" size="small" title="Delete"
+                @click.stop="openDeleteDialog(kb)">
                 <t-icon name="delete" />
-              </button>
+              </t-button>
               <t-icon name="chevron-right" class="row-arrow" />
             </div>
           </div>
@@ -262,17 +258,10 @@ onMounted(() => {
           <t-textarea v-model="createDescription" placeholder="A brief description of this knowledge base"
             :maxlength="1000" :autosize="{ minRows: 2, maxRows: 4 }" />
         </t-form-item>
-        <t-form-item
-          label="Embedding Model"
-          tips="选择你在「模型管理」中标记为「向量嵌入」的模型；选「Ollama 本地」则用 nomic-embed-text。仅用于知识库文档向量化。"
-        >
+        <t-form-item label="Embedding Model"
+          tips="选择你在「模型管理」中标记为「向量嵌入」的模型；选「Ollama 本地」则用 nomic-embed-text。仅用于知识库文档向量化。">
           <t-select v-model="createEmbeddingLlmModelId" placeholder="选择向量模型">
-            <t-option
-              v-for="opt in embeddingModelOptions"
-              :key="opt.value"
-              :value="opt.value"
-              :label="opt.label"
-            />
+            <t-option v-for="opt in embeddingModelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
           </t-select>
         </t-form-item>
         <t-form-item label="Embedding Dimension">
@@ -287,7 +276,8 @@ onMounted(() => {
       :confirm-btn="{ content: 'Delete', theme: 'danger', loading: kbDeleting }" cancel-btn="Cancel" width="420px"
       @confirm="submitDelete">
       <p class="delete-tip">
-        Are you sure you want to delete "{{ deleteTarget?.name }}"? All documents and chunks will be permanently removed.
+        Are you sure you want to delete "{{ deleteTarget?.name }}"? All documents and chunks will be permanently
+        removed.
       </p>
       <t-alert v-if="deleteError" theme="error" :message="deleteError" class="form-alert" />
     </t-dialog>
@@ -296,34 +286,6 @@ onMounted(() => {
 
 <style scoped lang="less">
 @import "../../styles/variables.less";
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: @space-8;
-  animation: fade-slide-up @duration-normal @ease-out;
-
-  .page-header-info {
-    display: flex;
-    flex-direction: column;
-    gap: @space-1;
-  }
-
-  .page-title {
-    font-size: @font-xxl;
-    font-weight: 700;
-    color: @color-text;
-    letter-spacing: -0.01em;
-    margin: 0;
-  }
-
-  .page-subtitle {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    margin: 0;
-  }
-}
 
 /* 列表行 */
 .kb-list {
@@ -458,78 +420,12 @@ onMounted(() => {
     gap: @space-1;
     flex-shrink: 0;
 
-    .row-action-btn {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background: transparent;
-      border-radius: @radius-md;
-      color: @color-text-tertiary;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      transition: all @duration-fast;
-
-      &:hover {
-        background: @color-bg-hover;
-        color: @color-text;
-      }
-
-      &.row-action-danger:hover {
-        background: lighten(@color-error, 42%);
-        color: @color-error;
-      }
-    }
-
     .row-arrow {
       color: @color-text-tertiary;
       opacity: 0;
       transform: translateX(-2px);
       transition: all 180ms @ease-standard;
     }
-  }
-
-  &:hover .row-action-btn {
-    opacity: 1;
-  }
-}
-
-/* 空状态 */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: @space-16 @space-8;
-  text-align: center;
-  animation: fade-slide-up @duration-normal @ease-out;
-
-  .empty-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: @radius-card;
-    background: @color-bg-hover;
-    color: @color-text-tertiary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: @space-5;
-  }
-
-  .empty-title {
-    font-size: @font-lg;
-    font-weight: 600;
-    color: @color-text;
-    margin: 0 0 @space-2;
-  }
-
-  .empty-desc {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    max-width: 360px;
-    margin: 0 0 @space-6;
   }
 }
 </style>

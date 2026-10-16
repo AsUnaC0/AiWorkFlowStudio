@@ -148,27 +148,30 @@ const goDetail = (agentId: string) => {
 </script>
 
 <template>
-  <div class="agents-page">
+  <div class="page-container">
     <!-- 顶部 -->
     <header class="page-header">
       <div class="header-left">
         <h1 class="page-title">Agent 管理</h1>
         <p class="page-subtitle">创建和管理你的 AI Agent，每个 Agent 可以独立配置模型、知识库、工作流和工具。</p>
       </div>
-      <button class="create-btn" @click="openCreateDialog">
-        <t-icon name="add" />
-        <span>创建 Agent</span>
-      </button>
+      <div class="page-header-actions">
+        <t-button theme="primary" @click="openCreateDialog">
+          <template #icon><t-icon name="add" /></template>
+          创建 Agent
+        </t-button>
+      </div>
     </header>
 
     <!-- 统一 Agent 列表 -->
     <div v-if="agents.length === 0 && !loading" class="empty-state">
-      <t-icon name="chat" class="empty-icon" />
-      <p>还没有任何 Agent，先创建一个吧</p>
-      <button class="create-btn large" @click="openCreateDialog">
-        <t-icon name="add" />
+      <div class="empty-icon"><t-icon name="chat" /></div>
+      <p class="empty-title">还没有任何 Agent</p>
+      <p class="empty-desc">先创建一个 Agent 来开始你的 AI 工作流之旅吧</p>
+      <t-button theme="primary" size="large" @click="openCreateDialog">
+        <template #icon><t-icon name="add" /></template>
         创建第一个 Agent
-      </button>
+      </t-button>
     </div>
 
     <div v-else class="agent-grid">
@@ -209,17 +212,18 @@ const goDetail = (agentId: string) => {
         </div>
 
         <div class="card-actions">
-          <button class="action-btn primary" @click="goChat(agent.id)">
-            <t-icon name="chat" />
+          <t-button theme="primary" size="small" @click="goChat(agent.id)">
+            <template #icon><t-icon name="chat" /></template>
             对话
-          </button>
-          <button class="action-btn" @click="goDetail(agent.id)">
-            <t-icon name="setting" />
+          </t-button>
+          <t-button variant="outline" size="small" @click="goDetail(agent.id)">
+            <template #icon><t-icon name="setting" /></template>
             配置
-          </button>
-          <button v-if="!agent.isSystem" class="action-btn danger" @click="handleDelete(agent)">
-            <t-icon name="delete" />
-          </button>
+          </t-button>
+          <t-button v-if="!agent.isSystem" theme="danger" variant="text" size="small" shape="square"
+            @click="handleDelete(agent)">
+            <template #icon><t-icon name="delete" /></template>
+          </t-button>
         </div>
       </div>
     </div>
@@ -231,37 +235,36 @@ const goDetail = (agentId: string) => {
       <div class="create-form">
         <div class="form-item">
           <label>选择类型</label>
-          <div class="template-grid">
-            <button v-for="tpl in AGENT_TEMPLATES" :key="tpl.type" class="template-card"
-              :class="{ active: creating.type === tpl.type }" @click="creating.type = tpl.type">
-              <t-icon :name="tpl.icon" class="tpl-icon" />
-              <div class="tpl-info">
-                <span class="tpl-label">{{ tpl.label }}</span>
-                <span class="tpl-desc">{{ tpl.description }}</span>
+          <t-radio-group v-model="creating.type" variant="default-filled">
+            <t-radio v-for="tpl in AGENT_TEMPLATES" :key="tpl.type" :value="tpl.type">
+              <div class="template-card">
+                <t-icon :name="tpl.icon" class="tpl-icon" />
+                <div class="tpl-info">
+                  <span class="tpl-label">{{ tpl.label }}</span>
+                  <span class="tpl-desc">{{ tpl.description }}</span>
+                </div>
               </div>
-            </button>
-          </div>
+            </t-radio>
+          </t-radio-group>
         </div>
 
         <div class="form-item">
           <label>Agent 名称</label>
-          <input v-model="creating.name" type="text" class="form-input"
-            :placeholder="getTemplate(creating.type)?.defaultName" maxlength="50" />
+          <t-input v-model="creating.name" type="text" :placeholder="getTemplate(creating.type)?.defaultName"
+            maxlength="50" />
         </div>
 
         <div class="form-item">
           <label>描述（可选）</label>
-          <textarea v-model="creating.description" class="form-textarea" placeholder="帮助我分析销售数据并生成结论。" rows="2"
+          <t-textarea v-model="creating.description" placeholder="帮助我分析销售数据并生成结论。" :autosize="{ minRows: 2 }"
             maxlength="200" />
         </div>
 
         <div class="form-item">
           <label>LLM 模型</label>
-          <select v-model="creating.llmModelId" class="form-input">
-            <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
-            </option>
-          </select>
+          <t-select v-model="creating.llmModelId" placeholder="选择模型">
+            <t-option v-for="opt in modelOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+          </t-select>
         </div>
 
       </div>
@@ -272,101 +275,12 @@ const goDetail = (agentId: string) => {
 <style scoped lang="less">
 @import "../../styles/variables.less";
 
-.agents-page {
-  padding: @space-8 @space-12;
-  max-width: 1200px;
-  margin: 0 auto;
+/* ---------- 页面副标题单独放宽 ---------- */
+.page-header .page-subtitle {
+  max-width: 560px;
 }
 
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: @space-8;
-
-  .page-title {
-    font-size: 28px;
-    font-weight: 700;
-    margin: 0 0 @space-2;
-  }
-
-  .page-subtitle {
-    font-size: @font-base;
-    color: @color-text-secondary;
-    margin: 0;
-    max-width: 560px;
-  }
-}
-
-.create-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: @space-2;
-  padding: @space-3 @space-5;
-  background: @primary;
-  color: #fff;
-  border: none;
-  border-radius: @radius-lg;
-  font-size: @font-sm;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all @duration-fast;
-
-  &:hover {
-    background: @primary-hover;
-  }
-
-  &.large {
-    padding: @space-4 @space-6;
-    font-size: @font-base;
-    margin-top: @space-4;
-  }
-}
-
-.section {
-  margin-bottom: @space-10;
-
-  .section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: @space-4;
-
-    .section-title {
-      display: inline-flex;
-      align-items: center;
-      gap: @space-2;
-      font-size: @font-sm;
-      font-weight: 600;
-      color: @color-text-secondary;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-
-    .section-badge {
-      font-size: 11px;
-      color: @color-text-tertiary;
-      padding: 2px 8px;
-      background: @color-bg-hover;
-      border-radius: @radius-pill;
-    }
-
-    .section-action {
-      padding: 4px 8px;
-      border: none;
-      background: transparent;
-      color: @color-text-tertiary;
-      cursor: pointer;
-      border-radius: @radius-md;
-
-      &:hover {
-        background: @color-bg-hover;
-        color: @primary;
-      }
-    }
-  }
-}
-
+/* ---------- Agent 卡片网格 ---------- */
 .agent-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -442,7 +356,7 @@ const goDetail = (agentId: string) => {
   }
 
   .card-title {
-    font-size: @font-base;
+    font-size: @font-md;
     font-weight: 600;
     margin: 0;
     color: @color-text;
@@ -472,7 +386,7 @@ const goDetail = (agentId: string) => {
       padding: 2px 8px;
       background: @color-bg-hover;
       border-radius: @radius-pill;
-      font-size: 11px;
+      font-size: @font-xs;
       color: @color-text-tertiary;
     }
   }
@@ -480,70 +394,13 @@ const goDetail = (agentId: string) => {
   .card-actions {
     display: flex;
     gap: @space-2;
-    padding-top: @space-2;
+    padding-top: @space-3;
     border-top: 1px solid @color-border;
     margin-top: auto;
   }
 }
 
-.action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  background: transparent;
-  border: 1px solid @color-border;
-  border-radius: @radius-md;
-  font-size: 12px;
-  color: @color-text-secondary;
-  cursor: pointer;
-  transition: all @duration-fast;
-
-  &:hover {
-    background: @color-bg-hover;
-    color: @color-text;
-  }
-
-  &.primary {
-    background: @primary;
-    color: #fff;
-    border-color: @primary;
-
-    &:hover {
-      background: @primary-hover;
-    }
-  }
-
-  &.danger {
-    border-color: transparent;
-    color: @color-text-tertiary;
-    padding: 6px 8px;
-
-    &:hover {
-      background: rgba(239, 68, 68, 0.08);
-      color: #ef4444;
-    }
-  }
-}
-
-.empty-state {
-  text-align: center;
-  padding: @space-12;
-  color: @color-text-tertiary;
-
-  .empty-icon {
-    font-size: 48px;
-    margin-bottom: @space-4;
-    display: block;
-  }
-
-  p {
-    font-size: @font-base;
-    margin: 0;
-  }
-}
-
-// Create form
+/* ---------- 创建表单 ---------- */
 .create-form {
   display: flex;
   flex-direction: column;
@@ -562,7 +419,8 @@ const goDetail = (agentId: string) => {
     }
   }
 
-  .template-grid {
+  /* t-radio-group 内的模板卡片 */
+  :deep(.t-radio-group) {
     display: flex;
     flex-direction: column;
     gap: @space-2;
@@ -573,23 +431,9 @@ const goDetail = (agentId: string) => {
     align-items: flex-start;
     gap: @space-3;
     padding: @space-3;
-    border: 1px solid @color-border;
-    border-radius: @radius-lg;
+    border: 1px solid transparent;
+    border-radius: @radius-md;
     background: transparent;
-    cursor: pointer;
-    text-align: left;
-    transition: all @duration-fast;
-
-    &:hover {
-      border-color: @primary;
-      background: @primary-light;
-    }
-
-    &.active {
-      border-color: @primary;
-      background: @primary-light;
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-    }
 
     .tpl-icon {
       font-size: 18px;
@@ -610,35 +454,11 @@ const goDetail = (agentId: string) => {
       }
 
       .tpl-desc {
-        font-size: 12px;
+        font-size: @font-xs;
         color: @color-text-tertiary;
         line-height: 1.4;
       }
     }
-  }
-
-  .form-input,
-  .form-textarea {
-    width: 100%;
-    padding: @space-2 @space-3;
-    border: 1px solid @color-border;
-    border-radius: @radius-md;
-    background: @color-bg-surface;
-    font-size: @font-base;
-    color: @color-text;
-    font-family: inherit;
-    outline: none;
-    transition: all @duration-fast;
-
-    &:focus {
-      border-color: @primary;
-      box-shadow: 0 0 0 3px @primary-glow;
-    }
-  }
-
-  .form-textarea {
-    resize: vertical;
-    min-height: 60px;
   }
 }
 </style>

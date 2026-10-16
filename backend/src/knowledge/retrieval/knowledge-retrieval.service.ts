@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EmbeddingService } from '../embedding/embedding.service';
+import { EmbeddingVersionService } from '../embedding/embedding-version.service';
 import { VectorStoreService } from '../vector/vector-store.service';
 import type {
   SearchOptions,
@@ -27,10 +28,13 @@ import type { VectorHit, KeywordHit } from '../vector/vector-store.service';
  */
 @Injectable()
 export class KnowledgeRetrievalService {
+  private readonly logger = new Logger(KnowledgeRetrievalService.name);
+
   constructor(
     private readonly vectorStoreService: VectorStoreService,
     private readonly embeddingService: EmbeddingService,
     private readonly prisma: PrismaService,
+    private readonly versionService: EmbeddingVersionService,
   ) {}
 
   /**
@@ -41,18 +45,22 @@ export class KnowledgeRetrievalService {
     const mode = options.mode ?? 'hybrid';
 
     switch (mode) {
-      case 'vector':
-        return this.vectorSearch({
-          knowledgeBaseIds: options.knowledgeBaseIds,
-          queryVector: await this.embed(
-            options.query,
-            options.embeddingModel,
-            options.knowledgeBaseIds,
-            options.telemetry,
-          ),
-          topK: options.topK,
-          scoreThreshold: options.scoreThreshold,
-        });
+      case 'vector': {
+        // 查询向量按各知识库激活版本的模型分别生成（保证与库中向量同模型同维度）
+        const topK = options.topK ?? 5;
+        const distanceThreshold =
+          options.scoreThreshold != null ? 1 - options.scoreThreshold : 0.8;
+        const hits = await this.searchForQuery(
+          options.query,
+          options.knowledgeBaseIds,
+          options.embeddingModel,
+          options.telemetry,
+          topK,
+        );
+        return hits
+          .filter((h) => h.distance <= distanceThreshold)
+          .map((h) => this.toSearchResult(h, 1 - h.distance));
+      }
 
       case 'keyword':
         return this.keywordSearch({
@@ -85,6 +93,17 @@ export class KnowledgeRetrievalService {
     // 转换：距离阈值 = 1 - 相似度阈值；未指定时用 VectorStoreService 默认值
     const distanceThreshold = scoreThreshold != null ? 1 - scoreThreshold : 0.8;
 
+    // 已传入查询向量（旧调用方式）：按各知识库激活版本的维度挑选可用的版本表
+    if (queryVector?.length) {
+      const hits = await this.searchAcrossActiveVersions(
+        knowledgeBaseIds,
+        queryVector,
+        topK,
+        distanceThreshold,
+      );
+      return hits.map((h) => this.toSearchResult(h, 1 - h.distance));
+    }
+
     const hits = await this.vectorStoreService.vectorSearch(
       knowledgeBaseIds,
       queryVector,
@@ -94,6 +113,59 @@ export class KnowledgeRetrievalService {
 
     // score 统一为相似度语义（越大越好）：相似度 = 1 - 余弦距离
     return hits.map((h) => this.toSearchResult(h, 1 - h.distance));
+  }
+
+  /**
+   * 按「激活向量版本」检索。
+   *
+   * 不同知识库可能用不同模型 / 维度，因此必须逐个知识库取其激活版本表来查，
+   * 查询向量的维度也要与对应版本一致（由 searchForQuery 保证每个 kb 单独向量化）。
+   */
+  private async searchAcrossActiveVersions(
+    knowledgeBaseIds: string[],
+    queryVector: number[],
+    topK: number,
+    distanceThreshold: number,
+  ): Promise<VectorHit[]> {
+    const versions = await this.prisma.knowledgeBaseEmbeddingVersion.findMany({
+      where: {
+        knowledgeBaseId: { in: knowledgeBaseIds },
+        isActive: true,
+      },
+      select: { id: true, knowledgeBaseId: true, vectorTable: true, dimensions: true },
+    });
+
+    const usable = versions.filter(
+      (v) => v.dimensions === queryVector.length && v.vectorTable,
+    );
+    if (usable.length === 0) return [];
+
+    const perTable = Math.max(topK, Math.ceil(topK / usable.length) + topK);
+    const results = await Promise.all(
+      usable.map((v) =>
+        this.vectorStoreService
+          .vectorSearchInTable(
+            v.vectorTable,
+            [v.knowledgeBaseId],
+            queryVector,
+            perTable,
+            distanceThreshold,
+          )
+          .catch((err) => {
+            this.logger.warn(
+              `向量检索失败（版本 ${v.id}，表 ${v.vectorTable}）：${
+                err instanceof Error ? err.message : err
+              }`,
+            );
+            return [] as VectorHit[];
+          }),
+      ),
+    );
+
+    return results
+      .flat()
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, topK);
   }
 
   /** 关键词 / 全文检索 */
@@ -128,20 +200,14 @@ export class KnowledgeRetrievalService {
 
     if (knowledgeBaseIds.length === 0 || !query.trim()) return [];
 
-    const queryVector = await this.embed(
-      query,
-      embeddingModel,
-      knowledgeBaseIds,
-      telemetry,
-    );
-
     // 并发跑两路（多取一些给 RRF 融合）
     const [vectorResults, keywordResults] = await Promise.all([
-      this.vectorStoreService.vectorSearch(
+      this.searchForQuery(
+        query,
         knowledgeBaseIds,
-        queryVector,
+        embeddingModel,
+        telemetry,
         topK * 4,
-        1.0, // 融合阶段放宽阈值，让 RRF 有更多候选
       ),
       this.vectorStoreService.keywordSearch(knowledgeBaseIds, query, topK * 4),
     ]);
@@ -176,7 +242,90 @@ export class KnowledgeRetrievalService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 生成查询向量。
+   * 按「各知识库激活版本」生成查询向量并检索。
+   *
+   * ⚠️ 关键：查询向量必须与库里存的向量来自同一模型 / 同一维度。
+   * 因此不能拿一个全局模型给所有知识库向量化 —— 逐个知识库用各自激活版本的模型生成。
+   */
+  private async searchForQuery(
+    query: string,
+    knowledgeBaseIds: string[],
+    explicitModel?: string,
+    telemetry?: import('../../ai/ai-provider.interface').ModelCallTelemetry,
+    topK = 20,
+  ): Promise<VectorHit[]> {
+    const versions =
+      await this.prisma.knowledgeBaseEmbeddingVersion.findMany({
+        where: { knowledgeBaseId: { in: knowledgeBaseIds }, isActive: true },
+        select: {
+          id: true,
+          knowledgeBaseId: true,
+          modelId: true,
+          llmModelId: true,
+          dimensions: true,
+          vectorTable: true,
+        },
+      });
+
+    // 兼容回退：尚未建立向量版本时，沿用旧的 DocumentChunk.embedding 列
+    if (versions.length === 0) {
+      const fallbackVector = await this.embed(
+        query,
+        explicitModel,
+        knowledgeBaseIds,
+        telemetry,
+      );
+      return this.vectorStoreService.vectorSearch(
+        knowledgeBaseIds,
+        fallbackVector,
+        topK,
+        1.0,
+      );
+    }
+
+    const buckets = await Promise.all(
+      versions.map(async (v) => {
+        if (!v.vectorTable) return [] as VectorHit[];
+        try {
+          const [vector] = await this.embeddingService.embedBatch(
+            [query],
+            explicitModel ?? v.modelId,
+            explicitModel ? null : v.llmModelId,
+            telemetry,
+          );
+          if (!vector) return [] as VectorHit[];
+          if (vector.length !== v.dimensions) {
+            this.logger.warn(
+              `查询向量维度 ${vector.length} 与版本 ${v.id} 的 ${v.dimensions} 维不一致，已跳过该知识库`,
+            );
+            return [] as VectorHit[];
+          }
+          return await this.vectorStoreService.vectorSearchInTable(
+            v.vectorTable,
+            [v.knowledgeBaseId],
+            vector,
+            topK,
+            1.0,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `查询向量化失败（版本 ${v.id}）：${
+              err instanceof Error ? err.message : err
+            }`,
+          );
+          return [] as VectorHit[];
+        }
+      }),
+    );
+
+    return buckets
+      .flat()
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, topK);
+  }
+
+  /**
+   * 生成查询向量（兼容旧路径：无向量版本时使用）。
    * model 优先用传入的（RAG 节点可指定 embeddingModel）；
    * 否则用知识库绑定的 embeddingModel（LLM 简单模式 / 默认场景）。
    */

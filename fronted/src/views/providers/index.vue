@@ -13,6 +13,7 @@ import {
   removeLlmModel,
   updateLlmModel,
   setDefaultLlmModel,
+  verifyLlmModel,
 } from "@/api/provider";
 import {
   type LlmProviderConfig,
@@ -22,6 +23,7 @@ import {
   type LlmConfigStatus,
   PROVIDER_LABELS,
   CAPABILITY_LABELS,
+  CAPABILITY_TIPS,
 } from "@/types/provider";
 
 const configs = ref<LlmProviderConfig[]>([]);
@@ -37,8 +39,15 @@ const capabilityOptions = computed(() =>
   (Object.keys(CAPABILITY_LABELS) as ModelCapability[]).map((c) => ({
     value: c,
     label: CAPABILITY_LABELS[c],
+    tips: CAPABILITY_TIPS[c],
   })),
 );
+
+const modalityOptions = [
+  { value: "text", label: "文本" },
+  { value: "image", label: "图片" },
+  { value: "audio", label: "音频" },
+];
 
 const statusMeta: Record<LlmConfigStatus, { theme: string; label: string }> = {
   CONNECTED: { theme: "success", label: "已连接" },
@@ -114,12 +123,25 @@ const savingModel = ref(false);
 const modelForm = reactive({
   displayName: "",
   capabilities: [] as ModelCapability[],
+  inputModalities: ["text"] as string[],
+  outputModalities: ["text"] as string[],
+  embeddingDimensions: null as number | null,
+  maxInputTokens: null as number | null,
 });
+
+/** 是否勾选了向量化能力 —— 勾选后才显示「向量维度」 */
+const modelIsEmbedding = computed(() =>
+  modelForm.capabilities.includes("EMBEDDING"),
+);
 
 function openEditModel(m: LlmModel) {
   editingModel.value = m;
   modelForm.displayName = m.displayName || "";
   modelForm.capabilities = [...m.capabilities];
+  modelForm.inputModalities = [...(m.inputModalities ?? ["text"])];
+  modelForm.outputModalities = [...(m.outputModalities ?? ["text"])];
+  modelForm.embeddingDimensions = m.embeddingDimensions ?? null;
+  modelForm.maxInputTokens = m.maxInputTokens ?? null;
   modelDialogVisible.value = true;
 }
 
@@ -130,6 +152,13 @@ async function onSaveModel() {
     await updateLlmModel(editingModel.value.id, {
       displayName: modelForm.displayName || undefined,
       capabilities: modelForm.capabilities,
+      inputModalities: modelForm.inputModalities as never,
+      outputModalities: modelForm.outputModalities as never,
+      // 维度 / token 上限建议用「验证模型」实测写入，这里允许手工修正
+      embeddingDimensions: modelIsEmbedding.value
+        ? modelForm.embeddingDimensions
+        : null,
+      maxInputTokens: modelForm.maxInputTokens,
     });
     MessagePlugin.success("已更新模型");
     modelDialogVisible.value = false;
@@ -138,6 +167,30 @@ async function onSaveModel() {
     /* 错误提示由拦截器处理 */
   } finally {
     savingModel.value = false;
+  }
+}
+
+// ===================== 模型实测验证 =====================
+const verifyingId = ref<string | null>(null);
+
+async function onVerifyModel(model: LlmModel) {
+  verifyingId.value = model.id;
+  try {
+    const res = await verifyLlmModel(model.id);
+    if (res.ok) {
+      MessagePlugin.success(
+        res.dimensions
+          ? `验证通过：实际输出 ${res.dimensions} 维（${res.latencyMs}ms）`
+          : `验证通过（${res.latencyMs}ms）`,
+      );
+    } else {
+      MessagePlugin.error(`验证失败：${res.error || "未知错误"}`);
+    }
+    await fetchConfigs();
+  } catch {
+    /* 错误提示由拦截器处理 */
+  } finally {
+    verifyingId.value = null;
   }
 }
 
@@ -195,7 +248,8 @@ const remoteRows = ref<{ modelId: string; existing: boolean }[]>([]);
 const remoteSelected = ref<string[]>([]);
 
 const remoteColumns = [
-  { colKey: "row-select", type: "multiple", width: 48 },
+  // 已添加的模型（row.existing）禁用勾选框，避免重复添加
+  { colKey: "row-select", type: "multiple", width: 48, disabled: ({ row }: { row: { existing?: boolean } }) => Boolean(row.existing) },
   { colKey: "modelId", title: "模型 ID", minWidth: 240 },
   { colKey: "status", title: "状态", width: 100 },
 ];
@@ -236,8 +290,9 @@ function onRemoteSelectChange(selected: (string | number)[]) {
 }
 
 function toggleSelectAll() {
-  const ids = filteredRemoteRows.value.map((r) => r.modelId);
-  const allSelected = ids.every((id) => remoteSelected.value.includes(id));
+  // 跳过已添加（existing）的行，它们的勾选框已被禁用
+  const ids = filteredRemoteRows.value.filter((r) => !r.existing).map((r) => r.modelId);
+  const allSelected = ids.length > 0 && ids.every((id) => remoteSelected.value.includes(id));
   remoteSelected.value = allSelected
     ? remoteSelected.value.filter((id) => !ids.includes(id))
     : [...new Set([...remoteSelected.value, ...ids])];
@@ -251,11 +306,20 @@ async function onAddSelectedModels() {
   }
   remoteSaving.value = true;
   try {
+    // 防御性过滤：已添加（existing）的模型不应被提交
+    const toAdd = remoteSelected.value.filter((id) => {
+      const row = remoteRows.value.find((r) => r.modelId === id);
+      return row && !row.existing;
+    });
+    if (toAdd.length === 0) {
+      MessagePlugin.warning("请先勾选要添加的模型");
+      return;
+    }
     await addLlmModels(remoteConfigId.value, {
-      modelIds: remoteSelected.value,
+      modelIds: toAdd,
       capabilities: ["CHAT", "STREAM"],
     });
-    MessagePlugin.success(`已添加 ${remoteSelected.value.length} 个模型`);
+    MessagePlugin.success(`已添加 ${toAdd.length} 个模型`);
     remoteDialogVisible.value = false;
     await fetchConfigs();
   } catch {
@@ -411,17 +475,18 @@ async function onToggleEnabled(model: LlmModel, val: boolean) {
 const modelsColumns = [
   { colKey: "modelId", title: "模型 ID", minWidth: 160 },
   { colKey: "displayName", title: "显示名", minWidth: 120 },
-  { colKey: "capabilities", title: "能力", minWidth: 160 },
+  { colKey: "capabilities", title: "能力", minWidth: 200 },
+  { colKey: "dimensions", title: "向量维度", width: 100 },
   { colKey: "isDefault", title: "默认", width: 80 },
   { colKey: "enabled", title: "启用", width: 90 },
-  { colKey: "actions", title: "操作", width: 220, align: "right" as const },
+  { colKey: "actions", title: "操作", width: 280, align: "right" as const },
 ];
 
 onMounted(fetchConfigs);
 </script>
 
 <template>
-  <div class="providers-page">
+  <div class="page-container">
     <div class="page-header">
       <div>
         <h2 class="page-title">模型管理</h2>
@@ -442,140 +507,64 @@ onMounted(fetchConfigs);
       </div>
 
       <div v-else class="config-list">
-        <t-card
-          v-for="cfg in configs"
-          :key="cfg.id"
-          class="config-card"
-          :bordered="true"
-        >
+        <t-card v-for="cfg in configs" :key="cfg.id" class="config-card" :bordered="true">
           <div class="config-head">
             <div class="config-title">
               <span class="config-name">{{ cfg.name }}</span>
               <t-tag size="small" variant="light" theme="primary">{{
                 PROVIDER_LABELS[cfg.provider]
-              }}</t-tag>
-              <t-tag
-                size="small"
-                variant="light"
-                :theme="statusMeta[cfg.status].theme"
-                >{{ statusMeta[cfg.status].label }}</t-tag
-              >
+                }}</t-tag>
+              <t-tag size="small" variant="light" :theme="statusMeta[cfg.status].theme">{{ statusMeta[cfg.status].label
+                }}</t-tag>
             </div>
             <div class="config-actions">
-              <t-button
-                size="small"
-                variant="outline"
-                :disabled="cfg.status === 'DISABLED'"
-                @click="onTestSaved(cfg)"
-                >测试连接</t-button
-              >
-              <t-button
-                size="small"
-                variant="outline"
-                :disabled="cfg.status === 'DISABLED'"
-                @click="onFetchModels(cfg)"
-                >获取模型</t-button
-              >
-              <t-button
-                size="small"
-                variant="outline"
-                theme="primary"
-                @click="openAddModel(cfg)"
-                >手动添加模型</t-button
-              >
-              <t-button size="small" variant="outline" @click="openEdit(cfg)"
-                >编辑</t-button
-              >
-              <t-button
-                size="small"
-                theme="danger"
-                variant="outline"
-                @click="onDelete(cfg)"
-                >删除</t-button
-              >
+              <t-button size="small" variant="outline" :disabled="cfg.status === 'DISABLED'"
+                @click="onTestSaved(cfg)">测试连接</t-button>
+              <t-button size="small" variant="outline" :disabled="cfg.status === 'DISABLED'"
+                @click="onFetchModels(cfg)">获取模型</t-button>
+              <t-button size="small" variant="outline" theme="primary" @click="openAddModel(cfg)">手动添加模型</t-button>
+              <t-button size="small" variant="outline" @click="openEdit(cfg)">编辑</t-button>
+              <t-button size="small" theme="danger" variant="outline" @click="onDelete(cfg)">删除</t-button>
             </div>
           </div>
 
           <div class="config-meta">
-            <span class="meta-item"
-              ><span class="meta-label">Base URL：</span
-              >{{ cfg.baseUrl || "（默认）" }}</span
-            >
-            <span class="meta-item"
-              ><span class="meta-label">API Key：</span
-              >{{ cfg.apiKeyMasked || "（无）" }}</span
-            >
+            <span class="meta-item"><span class="meta-label">Base URL：</span>{{ cfg.baseUrl || "（默认）" }}</span>
+            <span class="meta-item"><span class="meta-label">API Key：</span>{{ cfg.apiKeyMasked || "（无）" }}</span>
           </div>
 
-          <t-alert
-            v-if="cfg.status === 'ERROR' && cfg.lastError"
-            theme="error"
-            :message="`最近错误：${cfg.lastError}`"
-            class="config-error"
-          />
+          <t-alert v-if="cfg.status === 'ERROR' && cfg.lastError" theme="error" :message="`最近错误：${cfg.lastError}`"
+            class="config-error" />
 
           <div class="models-section">
             <div class="models-title">
-              模型（{{ cfg.models.length }}）<span class="models-hint"
-                >可在此设置默认模型</span
-              >
+              模型（{{ cfg.models.length }}）<span class="models-hint">可在此设置默认模型</span>
             </div>
-            <t-table
-              v-if="cfg.models.length"
-              :data="cfg.models"
-              :columns="modelsColumns"
-              row-key="id"
-              size="small"
-              hover
-            >
+            <t-table v-if="cfg.models.length" :data="cfg.models" :columns="modelsColumns" row-key="id" size="small"
+              hover>
               <template #capabilities="{ row }">
-                <t-tag
-                  v-for="cap in row.capabilities"
-                  :key="cap"
-                  size="small"
-                  variant="light"
-                  theme="default"
-                  class="cap-tag"
-                  >{{ CAPABILITY_LABELS[cap as ModelCapability] }}</t-tag
-                >
+                <t-tag v-for="cap in row.capabilities" :key="cap" size="small" variant="light" theme="default"
+                  class="cap-tag">{{ CAPABILITY_LABELS[cap as ModelCapability] }}</t-tag>
+              </template>
+              <template #dimensions="{ row }">
+                <t-tag v-if="row.embeddingDimensions" size="small" variant="light"
+                  :theme="row.isVerified ? 'success' : 'warning'">{{ row.embeddingDimensions }}</t-tag>
+                <span v-else class="muted">—</span>
               </template>
               <template #isDefault="{ row }">
-                <t-tag v-if="row.isDefault" size="small" theme="success" variant="light"
-                  >默认</t-tag
-                >
+                <t-tag v-if="row.isDefault" size="small" theme="success" variant="light">默认</t-tag>
                 <span v-else class="muted">—</span>
               </template>
               <template #enabled="{ row }">
-                <t-switch
-                  :value="row.enabled"
-                  size="small"
-                  @change="(val: boolean) => onToggleEnabled(row, val)"
-                />
+                <t-switch :value="row.enabled" size="small" @change="(val: boolean) => onToggleEnabled(row, val)" />
               </template>
               <template #actions="{ row }">
-                <t-button
-                  v-if="!row.isDefault"
-                  size="small"
-                  variant="text"
-                  theme="primary"
-                  :disabled="!row.enabled"
-                  @click="onSetDefault(row)"
-                  >设为默认</t-button
-                >
-                <t-button
-                  size="small"
-                  variant="text"
-                  theme="default"
-                  @click="openEditModel(row)"
-                  >编辑</t-button
-                >
-                <t-button
-                  size="small"
-                  variant="text"
-                  theme="danger"
-                  @click="onDeleteModel(row)"
-                  >删除</t-button
-                >
+                <t-button v-if="!row.isDefault" size="small" variant="text" theme="primary" :disabled="!row.enabled"
+                  @click="onSetDefault(row)">设为默认</t-button>
+                <t-button size="small" variant="text" theme="primary" :loading="verifyingId === row.id"
+                  @click="onVerifyModel(row)">验证</t-button>
+                <t-button size="small" variant="text" theme="default" @click="openEditModel(row)">编辑</t-button>
+                <t-button size="small" variant="text" theme="danger" @click="onDeleteModel(row)">删除</t-button>
               </template>
             </t-table>
             <p v-else class="models-empty">
@@ -587,91 +576,50 @@ onMounted(fetchConfigs);
     </t-loading>
 
     <!-- 添加 / 编辑 配置对话框 -->
-    <t-dialog
-      v-model:visible="dialogVisible"
-      :header="editingId ? '编辑模型配置' : '添加模型'"
-      width="560px"
-    >
+    <t-dialog v-model:visible="dialogVisible" :header="editingId ? '编辑模型配置' : '添加模型'" width="560px">
       <t-form :data="form" layout="vertical" label-align="top">
         <t-form-item label="配置名称" required-mark>
-          <t-input
-            v-model="form.name"
-            placeholder="例如：我的 DeepSeek / 本地 Ollama"
-          />
+          <t-input v-model="form.name" placeholder="例如：我的 DeepSeek / 本地 Ollama" />
         </t-form-item>
 
         <t-form-item label="模型提供商" required-mark>
-          <t-select
-            v-model="form.provider"
-            :options="providerOptions"
-            @change="(val: LlmProviderType) => onProviderChange(val)"
-          />
+          <t-select v-model="form.provider" :options="providerOptions"
+            @change="(val: LlmProviderType) => onProviderChange(val)" />
         </t-form-item>
 
-        <t-form-item
-          label="API Base URL"
-          :tips="
-            form.provider === 'openai-compatible'
-              ? '填写 API 根地址（到版本号为止），例如 https://open.bigmodel.cn/api/paas/v4 或 https://your-gateway/v1。请勿填成完整聊天接口 /chat/completions 或模型列表 /models，后端会自动处理。'
-              : 'OpenAI / DeepSeek 可留空使用默认地址；Ollama 默认 http://localhost:11434。'
-          "
-        >
-          <t-input
-            v-model="form.baseUrl"
-            :placeholder="
-              form.provider === 'openai-compatible'
-                ? '必填，到版本号为止，例如 https://open.bigmodel.cn/api/paas/v4'
-                : '可留空使用默认地址'
-            "
-          />
+        <t-form-item label="API Base URL" :tips="form.provider === 'openai-compatible'
+          ? '填写 API 根地址（到版本号为止），例如 https://open.bigmodel.cn/api/paas/v4 或 https://your-gateway/v1。请勿填成完整聊天接口 /chat/completions 或模型列表 /models，后端会自动处理。'
+          : 'OpenAI / DeepSeek 可留空使用默认地址；Ollama 默认 http://localhost:11434。'
+          ">
+          <t-input v-model="form.baseUrl" :placeholder="form.provider === 'openai-compatible'
+            ? '必填，到版本号为止，例如 https://open.bigmodel.cn/api/paas/v4'
+            : '可留空使用默认地址'
+            " />
         </t-form-item>
 
         <t-form-item :label="form.provider === 'ollama' ? 'API Key（可选）' : 'API Key'">
-          <t-input
-            v-model="form.apiKey"
-            type="password"
-            :placeholder="
-              form.provider === 'ollama'
-                ? '本地 Ollama 通常无需 Key'
-                : '密钥仅加密存储，不会以明文返回前端'
-            "
-          />
+          <t-input v-model="form.apiKey" type="password" :placeholder="form.provider === 'ollama'
+            ? '本地 Ollama 通常无需 Key'
+            : '密钥仅加密存储，不会以明文返回前端'
+            " />
         </t-form-item>
 
-        <t-form-item
-          label="模型 ID"
-          tips="模型标识符，与 Base URL 是两回事。填写后只会添加这一个模型，不会自动拉取全部；留空则保存后可在卡片上点「获取模型」勾选添加。"
-        >
-          <t-input
-            v-model="form.modelId"
-            placeholder="例如 deepseek-chat / gpt-4o-mini / qwen2.5:7b"
-          />
+        <t-form-item label="模型 ID" tips="模型标识符，与 Base URL 是两回事。填写后只会添加这一个模型，不会自动拉取全部；留空则保存后可在卡片上点「获取模型」勾选添加。">
+          <t-input v-model="form.modelId" placeholder="例如 deepseek-chat / gpt-4o-mini / qwen2.5:7b" />
         </t-form-item>
 
         <t-form-item label="显示名称">
-          <t-input
-            v-model="form.displayName"
-            placeholder="留空则使用模型 ID"
-          />
+          <t-input v-model="form.displayName" placeholder="留空则使用模型 ID" />
         </t-form-item>
 
         <t-form-item label="模型能力">
-          <t-checkbox-group
-            v-model="form.capabilities"
-            :options="capabilityOptions"
-          />
+          <t-checkbox-group v-model="form.capabilities" :options="capabilityOptions" />
         </t-form-item>
 
-        <t-alert
-          v-if="testResult"
-          :theme="testResult.ok ? 'success' : 'error'"
-          :message="
-            testResult.ok
-              ? `连接成功，发现 ${testResult.models.length} 个模型`
-              : `连接失败：${testResult.error || ''}`
-          "
-          class="test-result"
-        />
+        <t-alert v-if="testResult" :theme="testResult.ok ? 'success' : 'error'" :message="testResult.ok
+          ? `连接成功，发现 ${testResult.models.length} 个模型`
+          : `连接失败：${testResult.error || ''}`
+          " class="test-result" />
 
       </t-form>
 
@@ -688,118 +636,72 @@ onMounted(fetchConfigs);
     </t-dialog>
 
     <!-- 编辑 模型 对话框 -->
-    <t-dialog
-      v-model:visible="modelDialogVisible"
-      header="编辑模型"
-      :confirm-btn="{ content: '保存', theme: 'primary', loading: savingModel }"
-      cancel-btn="取消"
-      width="440px"
-      @confirm="onSaveModel"
-    >
+    <t-dialog v-model:visible="modelDialogVisible" header="编辑模型"
+      :confirm-btn="{ content: '保存', theme: 'primary', loading: savingModel }" cancel-btn="取消" width="440px"
+      @confirm="onSaveModel">
       <t-form layout="vertical" label-align="top">
         <t-form-item label="显示名称">
           <t-input v-model="modelForm.displayName" placeholder="留空使用模型 ID" />
         </t-form-item>
-        <t-form-item label="模型能力">
-          <t-checkbox-group
-            v-model="modelForm.capabilities"
-            :options="capabilityOptions"
-          />
+        <t-form-item label="模型能力" tips="可多选。能力以实测为准，不确定就点「验证」；视觉理解 ≠ 图片生成。">
+          <t-checkbox-group v-model="modelForm.capabilities" :options="capabilityOptions" />
         </t-form-item>
+        <t-form-item v-if="modelIsEmbedding" label="向量维度" tips="仅向量模型需要。推荐用「验证」按钮实测写入，不要靠模型名猜。">
+          <t-input-number v-model="modelForm.embeddingDimensions" :min="1" :max="8192" :step="8" />
+        </t-form-item>
+        <t-form-item label="输入模态">
+          <t-checkbox-group v-model="modelForm.inputModalities" :options="modalityOptions" />
+        </t-form-item>
+        <t-form-item label="输出模态">
+          <t-checkbox-group v-model="modelForm.outputModalities" :options="modalityOptions" />
+        </t-form-item>
+        <t-form-item label="最大输入 Token">
+          <t-input-number v-model="modelForm.maxInputTokens" :min="1" :step="1024" />
+        </t-form-item>
+        <t-alert v-if="editingModel && !editingModel.isVerified" theme="warning"
+          message="该模型尚未通过实测验证，保存后建议点列表里的「验证」确认能力与维度。" />
       </t-form>
     </t-dialog>
 
     <!-- 手动添加单个模型 -->
-    <t-dialog
-      v-model:visible="addModelDialogVisible"
-      :header="
-        addModelConfigName ? `添加模型（${addModelConfigName}）` : '添加模型'
-      "
-      :confirm-btn="{ content: '添加', theme: 'primary', loading: addModelSaving }"
-      cancel-btn="取消"
-      width="480px"
-      @confirm="onAddModelSubmit"
-    >
+    <t-dialog v-model:visible="addModelDialogVisible" :header="addModelConfigName ? `添加模型（${addModelConfigName}）` : '添加模型'
+      " :confirm-btn="{ content: '添加', theme: 'primary', loading: addModelSaving }" cancel-btn="取消" width="480px"
+      @confirm="onAddModelSubmit">
       <t-form layout="vertical" label-align="top">
-        <t-form-item
-          label="模型 ID"
-          required-mark
-          tips="只添加你填写的这一个模型，不会自动拉取全部。"
-        >
-          <t-input
-            v-model="addModelForm.modelId"
-            placeholder="例如 deepseek-chat / gpt-4o-mini / qwen2.5:7b"
-            @enter="onAddModelSubmit"
-          />
+        <t-form-item label="模型 ID" required-mark tips="只添加你填写的这一个模型，不会自动拉取全部。">
+          <t-input v-model="addModelForm.modelId" placeholder="例如 deepseek-chat / gpt-4o-mini / qwen2.5:7b"
+            @enter="onAddModelSubmit" />
         </t-form-item>
         <t-form-item label="显示名称">
-          <t-input
-            v-model="addModelForm.displayName"
-            placeholder="留空则使用模型 ID"
-          />
+          <t-input v-model="addModelForm.displayName" placeholder="留空则使用模型 ID" />
         </t-form-item>
         <t-form-item label="模型能力">
-          <t-checkbox-group
-            v-model="addModelForm.capabilities"
-            :options="capabilityOptions"
-          />
+          <t-checkbox-group v-model="addModelForm.capabilities" :options="capabilityOptions" />
         </t-form-item>
       </t-form>
     </t-dialog>
 
     <!-- 获取模型：表格勾选后添加 -->
-    <t-dialog
-      v-model:visible="remoteDialogVisible"
-      :header="
-        remoteConfigName ? `获取模型（${remoteConfigName}）` : '获取模型'
-      "
-      :confirm-btn="{
+    <t-dialog v-model:visible="remoteDialogVisible" :header="remoteConfigName ? `获取模型（${remoteConfigName}）` : '获取模型'
+      " :confirm-btn="{
         content: `添加选中${remoteSelected.length ? `（${remoteSelected.length}）` : ''}`,
         theme: 'primary',
         loading: remoteSaving,
-      }"
-      cancel-btn="取消"
-      width="720px"
-      @confirm="onAddSelectedModels"
-    >
+      }" cancel-btn="取消" width="720px" @confirm="onAddSelectedModels">
       <div class="remote-toolbar">
-        <t-input
-          v-model="remoteKeyword"
-          placeholder="搜索模型 ID"
-          clearable
-          class="remote-search"
-        >
+        <t-input v-model="remoteKeyword" placeholder="搜索模型 ID" clearable class="remote-search">
           <template #prefix-icon><t-icon name="search" /></template>
         </t-input>
-        <t-button
-          variant="outline"
-          :disabled="!filteredRemoteRows.length"
-          @click="toggleSelectAll"
-          >全选 / 取消</t-button
-        >
-        <span class="remote-count"
-          >共 {{ filteredRemoteRows.length }} 个，已选
-          {{ remoteSelected.length }} 个</span
-        >
+        <t-button variant="outline" :disabled="!filteredRemoteRows.length" @click="toggleSelectAll">全选 / 取消</t-button>
+        <span class="remote-count">共 {{ filteredRemoteRows.length }} 个，已选
+          {{ remoteSelected.length }} 个</span>
       </div>
 
-      <t-table
-        :data="filteredRemoteRows"
-        :columns="remoteColumns"
-        row-key="modelId"
-        size="small"
-        hover
-        :loading="remoteLoading"
-        :selected-row-keys="remoteSelected"
-        select-on-row-click
-        max-height="380px"
-        empty="未获取到模型"
-        @select-change="onRemoteSelectChange"
-      >
+      <t-table :data="filteredRemoteRows" :columns="remoteColumns" row-key="modelId" size="small" hover
+        :loading="remoteLoading" :selected-row-keys="remoteSelected" select-on-row-click max-height="380px"
+        empty="未获取到模型" @select-change="onRemoteSelectChange">
         <template #status="{ row }">
-          <t-tag v-if="row.existing" size="small" theme="success" variant="light"
-            >已添加</t-tag
-          >
+          <t-tag v-if="row.existing" size="small" theme="success" variant="light">已添加</t-tag>
           <span v-else class="muted">—</span>
         </template>
       </t-table>
@@ -810,163 +712,129 @@ onMounted(fetchConfigs);
 <style scoped lang="less">
 @import "../../styles/variables.less";
 
-.providers-page {
-  padding: @space-6;
-  max-width: 960px;
-  margin: 0 auto;
+.page-subtitle {
+  max-width: 560px;
+}
 
-  .page-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: @space-4;
-    margin-bottom: @space-6;
+.muted {
+  color: @color-text-tertiary;
+}
 
-    .page-title {
-      font-size: @font-xl;
-      font-weight: 600;
-      color: @color-text;
-      margin: 0 0 @space-1;
-    }
+.config-list {
+  display: flex;
+  flex-direction: column;
+  gap: @space-4;
+}
 
-    .page-subtitle {
-      font-size: @font-sm;
-      color: @color-text-secondary;
-      margin: 0;
-      max-width: 560px;
-    }
+.config-card {
+  :deep(.t-card__body) {
+    padding: @space-4;
   }
 
-  .empty-state {
+  .config-head {
     display: flex;
-    flex-direction: column;
     align-items: center;
+    justify-content: space-between;
     gap: @space-3;
-    padding: @space-10 @space-4;
-    color: @color-text-tertiary;
-    text-align: center;
-  }
+    flex-wrap: wrap;
 
-  .muted {
-    color: @color-text-tertiary;
-  }
-
-  .config-list {
-    display: flex;
-    flex-direction: column;
-    gap: @space-4;
-  }
-
-  .config-card {
-    :deep(.t-card__body) {
-      padding: @space-4;
-    }
-
-    .config-head {
+    .config-title {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: @space-3;
-      flex-wrap: wrap;
+      gap: @space-2;
 
-      .config-title {
-        display: flex;
-        align-items: center;
-        gap: @space-2;
-
-        .config-name {
-          font-size: @font-base;
-          font-weight: 600;
-          color: @color-text;
-        }
-      }
-
-      .config-actions {
-        display: flex;
-        gap: @space-2;
-        flex-wrap: wrap;
-      }
-    }
-
-    .config-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: @space-4;
-      margin: @space-3 0;
-      font-size: @font-sm;
-
-      .meta-label {
-        color: @color-text-tertiary;
-      }
-    }
-
-    .config-error {
-      margin-bottom: @space-3;
-    }
-
-    .models-section {
-      margin-top: @space-2;
-
-      .models-title {
-        font-size: @font-sm;
+      .config-name {
+        font-size: @font-base;
         font-weight: 600;
-        color: @color-text-secondary;
-        margin-bottom: @space-2;
-
-        .models-hint {
-          font-weight: 400;
-          color: @color-text-tertiary;
-          margin-left: @space-2;
-        }
-      }
-
-      .cap-tag {
-        margin-right: @space-1;
-      }
-
-      .models-empty {
-        font-size: @font-sm;
-        color: @color-text-tertiary;
-        margin: @space-1 0 0;
-      }
-
-      .muted {
-        color: @color-text-tertiary;
+        color: @color-text;
       }
     }
-  }
 
-  .test-result {
-    margin-bottom: @space-3;
-  }
-
-  .dialog-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: @space-4;
-
-    .footer-right {
+    .config-actions {
       display: flex;
       gap: @space-2;
+      flex-wrap: wrap;
     }
   }
 
-  .remote-toolbar {
+  .config-meta {
     display: flex;
-    align-items: center;
-    gap: @space-2;
-    margin-bottom: @space-3;
+    flex-wrap: wrap;
+    gap: @space-4;
+    margin: @space-3 0;
+    font-size: @font-sm;
 
-    .remote-search {
-      width: 240px;
-    }
-
-    .remote-count {
-      margin-left: auto;
-      font-size: @font-sm;
+    .meta-label {
       color: @color-text-tertiary;
     }
+  }
+
+  .config-error {
+    margin-bottom: @space-3;
+  }
+
+  .models-section {
+    margin-top: @space-2;
+
+    .models-title {
+      font-size: @font-sm;
+      font-weight: 600;
+      color: @color-text-secondary;
+      margin-bottom: @space-2;
+
+      .models-hint {
+        font-weight: 400;
+        color: @color-text-tertiary;
+        margin-left: @space-2;
+      }
+    }
+
+    .cap-tag {
+      margin-right: @space-1;
+    }
+
+    .models-empty {
+      font-size: @font-sm;
+      color: @color-text-tertiary;
+      margin: @space-1 0 0;
+    }
+
+    .muted {
+      color: @color-text-tertiary;
+    }
+  }
+}
+
+.test-result {
+  margin-bottom: @space-3;
+}
+
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: @space-4;
+
+  .footer-right {
+    display: flex;
+    gap: @space-2;
+  }
+}
+
+.remote-toolbar {
+  display: flex;
+  align-items: center;
+  gap: @space-2;
+  margin-bottom: @space-3;
+
+  .remote-search {
+    width: 240px;
+  }
+
+  .remote-count {
+    margin-left: auto;
+    font-size: @font-sm;
+    color: @color-text-tertiary;
   }
 }
 </style>

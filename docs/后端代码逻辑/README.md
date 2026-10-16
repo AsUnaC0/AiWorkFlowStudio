@@ -63,6 +63,19 @@
 | 9 | 01 | 表清单补 `GeneratedFile` / `ModelCallLog` / `PlatformOperationLog`，数量 15 → **23**；模块树补 `AssistantModule` |
 | 10 | 05 | `mcpServerMap` → **`mcpBindings`**（重构后已改名），`executeWithTools` 补 `telemetry` 参数，第 4 步改为 `McpToolService.buildBindings()`（缓存优先） |
 | 11 | 04 | 「系统预设 Agent」一节重写：`ensureSystemAgents()` 已委托 `PlatformAssistantService.ensure()`，不再硬编码创建 `meibus`；`runStream` 补平台助理分支与 `operation` / `file` 两个 SSE 事件 |
+| 12 | 03 | 新增 **第九节 内容归一化**：`ai/content.util.ts` 的 `normalizeContentToString()`（把多模态 content parts 归一化成字符串，避免 `Expected String, provided Object` 落库报错），补 `ChatMessage.content` 类型说明与四处调用点 |
+| 13 | 04 + 10 | `ChatMessage.content` 字段说明补「**始终是字符串**」及落库兜底；10 区分「输入侧多模态（images）」与「输出侧多模态（content parts）」，交叉引用 03 第九节 |
+| 14 | 01 | **修正硬错误**：`DocumentChunk` 写「向量已移出」与 schema 矛盾——遗留列 `embedding vector(768)?` 仍在（手写迁移维护 + IVFFlat 索引），新版向量走版本物理表；PrismaService 补 driver adapter 说明（`$connect()` 在 `onModuleInit`，非构造函数）；过滤器 500 分支补 `describeInfraError()` |
+| 15 | 02 | 补 JWT 有效期（`JWT_EXPIRES_IN ?? '7d'`）、DTO 校验规则表、`getMe()` 二次查库逻辑 |
+| 16 | 03 | 补 `images` 视觉输入通道、`ChatOptions.telemetry` 与 `ModelCallLog` 埋点（新增专节）、`tool-args.util.ts`（parse/stringifyToolArguments）、usage 统计映射（Ollama `prompt_eval_count/eval_count`、OpenAI 仅 `total_tokens` 有值才返回）；修正 Authorization 头为条件添加、`normalizeBaseUrl` 剥三个后缀、`resolveModelRuntime` 返回值补 `capabilities` |
+| 17 | 04 | **修正硬错误**：`ensureSystemAgents` 行号 `:182` → `:199`；MCP 路由行号 `:531/537`、`:725/727` → `:580-593`、`:827-860`；Agent 模型代码块 `temperature` 重复行删除；补遥测五级回退链与 `recordAgentCall`、`supportsStream` 流式降级、assistant tool_calls 落库、平台工具路由条件 `platformToolContext &&`、`file` 事件在 `tool_result` 之前 yield |
+| 18 | 05 | **修正硬错误**：LLM 节点 `mcpService.findRuntimeConfigs()` → `findByIds()`（`:401`）；补 `WorkflowController`（`@Controller('workflow')` 无鉴权的调试直跑）、telemetry 注入与 `RunMonitorService`、`update()` 仅传 definition 才建版本、`remove()` 永久删除（级联 + 摘 Agent 绑定）、`executeWithTools` 空返回分支、Condition 右侧也 resolve、`errorCode` 字段、RAG 默认模板分支 |
+| 19 | 06 | 补 `sanitizeText()` 三处清洗（22021 根因修复）、`POST /documents/:id/reprocess`、空文本预检（扫描件保护）、向量化遥测、整批前置维度校验；上传白名单 4 → **5** 个扩展名 |
+| 20 | 07 | `resolveModelRuntime` / `resolveUserDefaultChatModel` 返回值补 `capabilities`；`testBeforeSave` 失败分支补 `models: []`；「新增的 4 个」→ **5 个** |
+| 21 | 08 | **修正硬错误**：Dashboard 段落「Agent 聊天链路不写 ModelCallLog」已过时（`recordAgentCall` 已接入）；补 `readBuffer()`、`logRunComplete` 参数名 `totalMs` → `durationMs`、Friendship `searchUsers` |
+| 22 | 09 | `sourceType` 4 → **5** 值（含 `export`）+ `POST /generate` 默认 `?? 'export'`；流程图补 `normalizeSpreadsheet()`；FilesModule 导出 2 → **3**；markdown 预览补返回 `text` |
+| 23 | 10 | csv 解析器补上限 **500 行 / 60 列** |
+| 24 | 教程 00~09 | 后端文件数 100 → **163**；队列三条 → **四条**（补 `chat-file-processing`）；目录树补 chat-files / files / assistant / platform-tools；业务模块 14 → **17**；auth 6 → **8** 个文件；schema 521 行 → **852** 行、19 → **25** model；「SSE 调试入口没按钮 / 轮询没超时兜底」两处过时描述删除（按钮与 `POLL_MAX_COUNT=150` 均已存在）；教程 08 补 `DELETE /workflows/:id`；教程 07 补整批前置维度校验、空文本预检、`retryFailedOnly` 未生效标注、local 落盘路径补 `<kbId>` 层；教程 09 补 `readBuffer`、`getDownloadUrl` local 返回 null、签名 try/catch |
 
 > 仍在文档里但**代码尚未修**的缺口见下表（G2 / G3）。
 

@@ -35,6 +35,14 @@ JwtPayload → validate() → JwtUser（注入到 Controller 的 @CurrentUser()�
 }
 ```
 
+**DTO 校验规则**（`register.dto.ts`，全局 ValidationPipe 执行，不合法直接 400）：
+
+| 字段 | 规则 | 不满足时的报错 |
+|---|---|---|
+| `username` | `@IsString` + `@IsNotEmpty` | "username should not be empty" |
+| `email` | `@IsEmail` + `@IsNotEmpty` | "email must be an email" |
+| `password` | `@IsString` + `@IsNotEmpty` + `@MinLength(6)` | "password must be longer than or equal to 6 characters" |
+
 **中间处理**（auth.service.ts → register）：
 
 1. **查重邮箱**：`SELECT * FROM User WHERE email = ?` → 存在则抛 `ConflictException('该邮箱已被注册')`
@@ -71,6 +79,8 @@ JwtPayload → validate() → JwtUser（注入到 Controller 的 @CurrentUser()�
   "password": "string"
 }
 ```
+
+**DTO 校验规则**（`login.dto.ts`）：`email` 需 `@IsEmail` + `@IsNotEmpty`；`password` 需 `@IsString` + `@IsNotEmpty`（登录时**不校验**密码最小长度——那是注册时的事）。
 
 **中间处理**（auth.service.ts → login）：
 
@@ -115,6 +125,10 @@ interface JwtPayload {
 ```
 
 > **为什么只放这三个字段？** JWT Payload 里不应该放敏感信息（如密码）。放够标识用户身份的就够了——真正需要其他用户信息时再用 `sub` 去数据库查。
+
+**Token 有效期**：在 `auth.module.ts` 的 `JwtModule.registerAsync()` 里注册，`expiresIn` 取环境变量
+`JWT_EXPIRES_IN`，**未配置时默认 `'7d'`（7 天）**。前端 `utils/token.ts` 会读 payload 里的 `exp`
+做过期预判（详见 [教程 05](../教程/05-前端全局基础设施.md)）。
 
 ---
 
@@ -177,6 +191,11 @@ me(@CurrentUser() user: JwtUser) {      // @CurrentUser() 把 validate() 返回�
   return this.authService.getMe(user);
 }
 ```
+
+**`GET /api/auth/me` 的内部逻辑**（auth.service.ts → getMe）：虽然 `JwtStrategy.validate()`
+已经查过一次库并返回了 `JwtUser`，`getMe()` **仍会再用 `user.id` 查一次 `User` 表**（这次是全量字段，
+用于返回完整资料）——查不到就抛 `UnauthorizedException('User not found')`，然后走 `toPublicUser()`
+剥掉 `passwordHash` 返回。两次查库不是冗余：一次保证 token 有效，一次保证返回的资料是最新的。
 
 **请求头格式**：
 ```

@@ -14,6 +14,8 @@ import { TxtParser } from './documents/parsers/txt.parser';
 import { MarkdownParser } from './documents/parsers/markdown.parser';
 import { ChunkService } from './documents/chunk/chunk.service';
 import { EmbeddingService } from './embedding/embedding.service';
+import { EmbeddingVersionService } from './embedding/embedding-version.service';
+import { EmbeddingVersionController } from './embedding/embedding-version.controller';
 import { VectorStoreService } from './vector/vector-store.service';
 import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.service';
 
@@ -25,8 +27,15 @@ import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.servi
     BullModule.registerQueue({
       name: 'document-processing',
     }),
+    BullModule.registerQueue({
+      name: 'knowledge-reembed',
+    }),
   ],
-  controllers: [KnowledgeController, DocumentsController],
+  controllers: [
+    KnowledgeController,
+    DocumentsController,
+    EmbeddingVersionController,
+  ],
   providers: [
     KnowledgeService,
     DocumentService,
@@ -37,6 +46,7 @@ import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.servi
     MarkdownParser,
     ChunkService,
     EmbeddingService,
+    EmbeddingVersionService,
     VectorStoreService,
     KnowledgeRetrievalService,
   ],
@@ -48,6 +58,7 @@ import { KnowledgeRetrievalService } from './retrieval/knowledge-retrieval.servi
     KnowledgeRetrievalService,
     VectorStoreService,
     EmbeddingService,
+    EmbeddingVersionService,
   ],
 })
 export class KnowledgeModule {}

@@ -26,15 +26,14 @@ model Agent {
   model            String       // 模型名（默认 qwen2.5:7b）
   llmModelId       String?      // 可选的自定义云端模型 id（优先于 model）
   systemPrompt     String?      // 给 LLM 的 System Prompt
-  temperature      Float?       // 0.7
-  
+
   workflowIds      String[]     // 绑定的工作流
   knowledgeBaseIds String[]     // 绑定的知识库
   skillIds         String[]     // 绑定的 Skill
   mcpServerIds     String[]     // 绑定的 MCP Server
-  
+
   maxToolIterations Int        // ReAct 循环最大轮数（默认 10）
-  temperature      Float       // 0.7
+  temperature      Float       // 0.7（schema 里是 @default(0.7)，非空）
 
   /** 是否允许调用 generate_file 生成 Word / Excel / PDF 文件（默认 true） */
   enableFileGeneration Boolean @default(true)
@@ -62,7 +61,7 @@ model Agent {
 
 ### 系统预设 Agent —— 现在只有「平台助理」一个
 
-`ensureSystemAgents()` 已经不再自己创建助手，而是一行委托给平台助理服务（`agent.service.ts:182`）：
+`ensureSystemAgents()` 已经不再自己创建助手，而是一行委托给平台助理服务（`agent.service.ts:199`）：
 
 ```typescript
 async ensureSystemAgents() {
@@ -91,7 +90,7 @@ async ensureSystemAgents() {
 >
 > | 字段 | 运行时是否生效 | 说明 |
 > |---|---|---|
-> | `Agent.mcpServerIds` | ✅ **已接入** | `runStream()` 初始化阶段调 `McpService.findRuntimeConfigs()` + `McpToolService.buildBindings()`，把选中 Server 的工具合并进 ReAct 工具集；tool_call 先查 MCP binding，没命中才回落 `ToolRegistry`（`agent.service.ts:531/537`、`:725/727`） |
+> | `Agent.mcpServerIds` | ✅ **已接入** | `runStream()` 初始化阶段调 `McpService.findRuntimeConfigs()` + `McpToolService.buildBindings()`（`agent.service.ts:580-593`），把选中 Server 的工具合并进 ReAct 工具集；tool_call 先查 MCP binding，没命中才回落 `ToolRegistry`（三级路由在 `:827-860`） |
 > | `Agent.skillIds` | ❌ **仅 CRUD** | 字段能存能查（`getAvailableResources()` 会返回可选列表），但 `AgentService` 没有注入 `SkillService`，运行时不把 `instructions` 拼进 System Prompt。**已由产品确认暂缓实现，不是 bug** |
 >
 > 所以：**在 Agent 配置页勾选 MCP Server 会生效；勾选 Skill 不会。** 想用 Skill 只能走工作流的 LLM 节点（画布上勾选），详见 [05](./05-工作流引擎.md)。
@@ -115,10 +114,14 @@ async ensureSystemAgents() {
    agent.llmModelId 有值        → llmConfigService.resolveModelRuntime()          → 云端 Provider
    平台助理（llmModelId 为 null）→ llmConfigService.resolveUserDefaultChatModel(userId) → 该用户各自的默认对话模型
    都没命中                      → aiService.getProvider()                        → 全局 Ollama 单例
+   （同时记录 `supportsStream = runtime.capabilities.includes('STREAM')` —— 不支持流式的模型后面走非流式分支，避免触发服务商 SSE 限制）
 4. 平台助理上下文（仅平台助理走这一步）：
    isPlatformAssistant = agent.isSystem && agent.isDefault
    assistantContext    = platformAssistant.buildContext(userId, options.workspaceId)  // workspaceId 后端重新校验成员关系
    platformToolContext = platformAssistant.buildToolContext(...)                      // userId 只来自已验证的 JWT
+4.5. 遥测归属（紧跟平台助理上下文之后、附件处理之前）：
+   telemetryWorkspaceId = resolveTelemetryWorkspaceId(userId, 五级回退，见下方说明)
+   telemetry = telemetryWorkspaceId ? { workspaceId, agentId } : undefined
 5. 处理附件（options.attachmentIds 非空时，见 10）：
    attachments = chatFiles.resolveForChat(userId, attachmentIds, sessionId)  // 校验归属 + 等 READY
    ctx = fileContext.build({ question, attachments, model, userId })         // 文本截断 + 图片转 base64
@@ -145,10 +148,13 @@ async ensureSystemAgents() {
 **工具路由优先级**（ReAct 循环里 `tool_calls` 来了之后）：
 
 ```
-① 平台工具（platformAssistant.isPlatformTool）→ platformAssistant.executeTool()  // 权限校验 + 审计 + 异常兜底
-② MCP 工具（mcpBindings.get(name)）           → mcpToolService.callTool()
-③ 资源工具（兜底）                             → toolRegistry.executeTool()
+① 平台工具（platformToolContext 存在 && platformAssistant.isPlatformTool）→ platformAssistant.executeTool()  // 权限校验 + 审计 + 异常兜底
+② MCP 工具（mcpBindings.get(name) 命中）                    → mcpToolService.callTool()
+③ 资源工具（兜底）                                          → toolRegistry.executeTool()
 ```
+
+> 注意平台工具的条件是 **`platformToolContext && isPlatformTool(name)`** 两段都满足——
+> 只有平台助理才拿得到 `platformToolContext`，普通 Agent 即使猜到了平台工具的名字也不会走到这一支。
 
 > **平台助理的三点特别之处**（详见 [11](./11-平台助理.md)）：
 > 1. **不绑定固定模型** —— 一份记录服务所有用户，所以 `llmModelId` 为 null，靠第 3 步按用户解析
@@ -156,6 +162,19 @@ async ensureSystemAgents() {
 > 3. **工具来自后端注册，不是用户配置** —— 17 个平台工具，用户无法通过聊天临时定义
 
 > **附件解析失败**：用户消息已落库（不丢），但本轮会 `yield { type: 'error', message }` 直接结束，不再调用 LLM。
+>
+> **遥测归属（ModelCallLog）**：初始化第 9 步解析 `telemetryWorkspaceId` 后构造
+> `telemetry = { workspaceId, agentId }`，之后每次 LLM 调用前后都 `recordAgentCall(telemetry, chatBackend, {...})`
+> 写 `ModelCallLog`（成功/失败都记）。`workspaceId` 的解析是**五级回退链**
+> （`resolveTelemetryWorkspaceId()`，`agent.service.ts:928`）：
+> 1. 平台助理当前选中的空间
+> 2. 平台助理可访问的第一个空间（多空间且未选择时兜底，保证统计不丢）
+> 3. Agent 自身所属空间（普通 Agent）
+> 4. 前端传入的 `workspaceId`（仅作意图，最后才用）
+> 5. 用户最早创建的可见空间（纯个人对话兜底）
+>
+> `telemetry` 还会**往下传给工具**（`ToolRegistry.executeTool` 的 context）——工具内部若再发起模型调用
+> （工作流 LLM 节点、知识库向量化）才能被归入统计。
 >
 > 附件上下文注入的完整逻辑（解析器分派、预算截断、视觉通道、越权防护）见 **[10 - 聊天文件上传模块](./10-聊天文件上传模块.md)**。
 
@@ -168,10 +187,18 @@ if (tools.length === 0) {
   allTrailSteps.push({ type: 'thinking', message: '思考中...' });
 
   let fullContent = '';
-  for await (const token of chatBackend.streamChat(currentMessages, chatOptions)) {
-    fullContent += token;
-    yield { type: 'message', content: fullContent };   // 累积内容（不是单个 token）
+  if (supportsStream) {
+    for await (const token of chatBackend.streamChat(currentMessages, chatOptions)) {
+      fullContent += token;
+      yield { type: 'message', content: fullContent };   // 累积内容（不是单个 token）
+    }
+  } else {
+    // 模型不支持流式：改用一次性非流式 chat，避免触发服务商 SSE 限制（如 1212 错误）
+    const res = await chatBackend.chat(currentMessages, chatOptions);
+    fullContent = res.content;
+    yield { type: 'message', content: fullContent };
   }
+  // 前后各调一次 recordAgentCall(telemetry, ...) 写 ModelCallLog（成功/失败都记，见 03 第八节）
 
   // 落库 assistant 消息（content + trail 执行轨迹），再刷一次 updatedAt
   return;
@@ -214,6 +241,19 @@ for (let i = 0; i < maxIters; i++) {
     tool_calls: result.toolCalls,
   });
 
+  // 会话模式下：assistant 的 tool_calls 也会单独落库一条 ChatMessage（role=assistant，带 toolCalls）
+  // 这样下次读历史时能完整重建「assistant 发起了哪些 tool_call」的链路
+  if (options.sessionId) {
+    await this.prisma.chatMessage.create({
+      data: {
+        sessionId: options.sessionId,
+        role: 'assistant',
+        content: normalizeContentToString(result.content),
+        toolCalls: result.toolCalls as any,
+      },
+    });
+  }
+
   for (const tc of result.toolCalls) {
     // 兼容 arguments 为「JSON 字符串」或「对象」两种形态（部分 OpenAI 兼容服务会返回对象）
     const args = parseToolArguments(tc.function.arguments);
@@ -225,32 +265,41 @@ for (let i = 0; i < maxIters; i++) {
     const toolStart = Date.now();
     let toolResult = '';
     try {
-      if (this.platformAssistant.isPlatformTool(tc.function.name)) {
+      if (platformToolContext && this.platformAssistant.isPlatformTool(tc.function.name)) {
         // ① 平台工具：走 PlatformAssistantService，内部做权限校验 + 审计 + operation 事件
         const execution = await this.platformAssistant.executeTool(
           tc.function.name, args, platformToolContext,
         );
         toolResult = execution.text;
         if (execution.operation) yield { type: 'operation', operation: execution.operation };
-      } else if (mcpBindings.has(tc.function.name)) {
-        // ② MCP 工具：会话由连接层复用，失败自动重连一次
-        const outcome = await this.mcpToolService.callTool(
-          mcpBindings.get(tc.function.name), args,
-        );
-        toolResult = outcome.text;
       } else {
-        // ③ 资源工具（workflow / knowledge / generate_file）
-        toolResult = await this.toolRegistry.executeTool(tc.function.name, args, {
-          agentId: agent.id,
-          userId,
-          knowledgeBaseIds: agent.knowledgeBaseIds,   // ← 别漏，KnowledgeTool 要用
-        });
+        // ② MCP 工具：按 binding 路由（会话由连接层复用，失败自动重连一次）
+        const binding = mcpBindings.get(tc.function.name);
+        if (binding) {
+          const outcome = await this.mcpToolService.callTool(binding, args);
+          toolResult = outcome.text;
+        } else {
+          // ③ 资源工具（workflow / knowledge / generate_file）
+          toolResult = await this.toolRegistry.executeTool(tc.function.name, args, {
+            agentId: agent.id,
+            userId,
+            knowledgeBaseIds: agent.knowledgeBaseIds,   // ← 别漏，KnowledgeTool 要用
+            // 遥测往下传：工具内部若再发起模型调用（工作流 LLM 节点 / 知识库向量化）才能被统计
+            telemetry,
+          });
+        }
       }
     } catch (err) {
       // 工具报错不中断循环 —— 转成字符串喂回 LLM，让它自己决定怎么办
       toolResult = `工具执行错误：${err.message}`;
     }
     const durationMs = Date.now() - toolStart;
+
+    // 工具可能产出了文件（generate_file）——flushFileEvents() 在 tool_result 之前 yield，
+    // 让前端先渲染文件卡片再看到工具结果
+    for (const event of flushFileEvents()) {
+      yield event;
+    }
 
     yield { type: 'tool_result', tool: tc.function.name, result: toolResult, durationMs };
 
@@ -280,9 +329,9 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 | `meta` | 模型信息 | agentId, agentName, model, provider, **isPlatformAssistant** |
 | `thinking` | LLM 正在推理 | message |
 | `tool_call` | LLM 调用工具 | tool name, args |
-| `tool_result` | 工具返回结果 | tool name, result, durationMs |
+| **`file`** | **`generate_file` 产出的文件**（每个工具执行后，`flushFileEvents()` 在 `tool_result` **之前** yield） | file，前端渲染成文件卡片，见 09 |
 | **`operation`** | **平台工具的一次操作记录**（仅平台助理） | operation（工具 / 风险 / 目标资源 / 状态 / 耗时 / 跳转链接），前端渲染成操作卡片，见 11 |
-| **`file`** | **`generate_file` 产出的文件**（仅开启文件生成时） | file，前端渲染成文件卡片，见 09 |
+| `tool_result` | 工具返回结果 | tool name, result, durationMs |
 | `thinking` | 继续下一轮... | |
 | `message` | 最终回答（累积内容） | content（每次都是完整内容） |
 | `error` | 出错（附件解析失败 / 达到工具调用上限 / Agent 被禁用） | message |
@@ -483,7 +532,7 @@ ChatMessage 的 role 有 4 种：`user` / `assistant` / `system` / `tool`。
 | 字段 | 用途 |
 |---|---|
 | `role` | user / assistant / system / tool |
-| `content` | 消息正文 |
+| `content` | 消息正文（**始终是字符串**）—— 云端模型可能把内容返回成多模态 content parts 数组，Provider 边界已用 `normalizeContentToString()` 归一化，落库前 `persistAssistantMessage()` 再兜一道，见 [03 第九节](./03-AI%20Provider大模型接入层.md) |
 | `toolCalls`（Json?） | 仅 assistant：LLM 返回的原始 tool_calls，用于多轮对话历史重建 |
 | `trail`（Json?） | 仅 assistant：本轮的 `thinking / tool_call / tool_result` 执行轨迹，前端渲染折叠面板 |
 | `toolCallId` | 仅 tool：对应 assistant 消息里某个 toolCall 的 `id` |

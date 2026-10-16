@@ -1,0 +1,502 @@
+/* ============================================================
+ * AI WorkFlow Studio — Global Styles
+ * 引入所有设计系统文件，设置 CSS 变量和 TDesign 主题覆盖
+ * ============================================================ */
+/* ============================================================
+ * AI WorkFlow Studio — Design Tokens
+ * 专业 / 简洁 / AI / 现代 / 轻量 / 高级
+ * ============================================================ */
+/* ---- 品牌主色（紫色系）---- */
+/* ---- 功能色 ---- */
+/* ---- 文本层级 ---- */
+/* ---- 背景色（Light）---- */
+/* ---- 边框 ---- */
+/* ---- 基础字号 ---- */
+/* 辅助信息、角标、时间戳 */
+/* 表单标签、次要文本 */
+/* 正文、列表项、卡片内容（基准） */
+/* 表格表头、卡片标题 */
+/* 区块标题（Section） */
+/* 二级页面标题 */
+/* 页面主标题 */
+/* Dashboard 英雄标题、统计数字 */
+/* ---- 语义化字号（页面层级）---- */
+/* 所有页面的 .page-title 统一 20px */
+/* 区块/卡片 .section-title 统一 16px */
+/* 卡片内标题 15px */
+/* 指标卡数值 18px */
+/* ---- 圆角 ---- */
+/* ---- 间距 ---- */
+/* ---- 阴影（克制、不夸张）---- */
+/* ---- 布局 ---- */
+/* ---- 动画时长 ---- */
+/* ---- 缓动曲线 ---- */
+/* ---- 字体 ---- */
+/* ============================================================
+ * AI WorkFlow Studio — Keyframe Animations
+ * 所有动画时长 ≤ 320ms，避免廉价感
+ * ============================================================ */
+/* ---- 打字指示器（三点跳动）---- */
+@keyframes typing-bounce {
+  0%,
+  80%,
+  100% {
+    transform: scale(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+/* ---- Processing 小圆点呼吸 ---- */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+/* ---- 节点运行中旋转光环 ---- */
+@keyframes running-ring {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+/* ---- 连接线流动粒子 ---- */
+@keyframes flow-particle {
+  0% {
+    stroke-dashoffset: 20;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+/* ---- 侧边栏 active indicator 滑入 ---- */
+@keyframes indicator-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+/* ---- Fade in ---- */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* ---- Fade + Slide up（页面进入）---- */
+@keyframes fade-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* ---- Fade + Scale（弹出组件）---- */
+@keyframes fade-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* ---- 抽屉从右滑入 ---- */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+/* ---- Shimmer（加载骨架屏）---- */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+/* ============================================================
+ * AI WorkFlow Studio — Vue Transition Classes
+ * 统一页面 / 组件过渡效果
+ * ============================================================ */
+/* ---- 页面路由过渡（fade + slide up，220ms）---- */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 220ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+/* ---- 组件淡入（快速）---- */
+.fast-fade-enter-active,
+.fast-fade-leave-active {
+  transition: opacity 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.fast-fade-enter-from,
+.fast-fade-leave-to {
+  opacity: 0;
+}
+/* ---- 抽屉 / Dialog（scale + fade）---- */
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 220ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.modal-enter-from {
+  opacity: 0;
+  transform: scale(0.98);
+}
+.modal-leave-to {
+  opacity: 0;
+  transform: scale(0.98);
+}
+/* ---- 右侧抽屉 ---- */
+.drawer-right-enter-active,
+.drawer-right-leave-active {
+  transition: transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.drawer-right-enter-from,
+.drawer-right-leave-to {
+  transform: translateX(100%);
+}
+/* ---- 侧边栏折叠过渡 ---- */
+.sidebar-collapse-transition {
+  transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* ---- 列表进入过渡（stagger 效果可通过 JS 控制）---- */
+.list-enter-active {
+  transition: opacity 220ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.list-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+/* ---- Hover 过渡（统一 180ms）---- */
+.hover-transition {
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1), background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+/* ---- Focus ring ---- */
+.focus-ring {
+  transition: box-shadow 150ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 150ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.focus-ring:focus {
+  box-shadow: 0 0 0 2px rgba(124, 92, 252, 0.08), 0 0 0 1px #7C5CFC;
+  border-color: #7C5CFC !important;
+  outline: none;
+}
+/* ========== 全局样式重置 ========== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  font-size: 14px;
+  line-height: 1.5;
+}
+#app {
+  height: 100%;
+}
+/* ========== CSS 变量（Light Mode）========== */
+:root {
+  /* 品牌主色 —— 紫色系 */
+  --primary: #7C5CFC;
+  --primary-hover: #6D5DFB;
+  --primary-light: #EDE9FE;
+  --primary-shadow: rgba(124, 92, 252, 0.18);
+  /* 功能色 */
+  --color-success: #2BA471;
+  --color-warning: #E37318;
+  --color-error: #D54941;
+  /* 文本层级 */
+  --color-text: #18181B;
+  --color-text-secondary: #71717A;
+  --color-text-tertiary: #A1A1AA;
+  /* 背景色 */
+  --color-bg: #F7F8FA;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-white: #FFFFFF;
+  /* 兼容旧变量 */
+  --color-bg-hover: #F4F4F5;
+  --color-bg-active: #EDE9FE;
+  --primary-bg: #EDE9FE;
+  /* 兼容旧变量 */
+  /* 边框 */
+  --color-border: #E8EAF0;
+  --color-border-strong: #D4D4D8;
+  --color-border-dashed: #D4D4D8;
+  /* 兼容旧变量 */
+  /* 字号 */
+  --font-xs: 12px;
+  --font-sm: 13px;
+  --font-base: 14px;
+  --font-md: 15px;
+  --font-lg: 16px;
+  --font-xl: 18px;
+  --font-xxl: 20px;
+  --font-hero: 28px;
+  /* 语义化字号 */
+  --font-page-title: 20px;
+  --font-section-title: 16px;
+  --font-card-title: 15px;
+  --font-stat-value: 18px;
+  /* 圆角 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-card: 12px;
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  /* 阴影 */
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.08);
+  /* 布局 */
+  --header-height: 56px;
+  --sidebar-width: 220px;
+  --sidebar-collapsed-width: 64px;
+  /* TDesign 主题 Token 覆盖 —— 把默认蓝改成品牌紫 */
+  --td-brand-color: #7C5CFC;
+  --td-brand-color-hover: #6D5DFB;
+  --td-brand-color-focus: #6D5DFB;
+  --td-brand-color-active: #5B4AE0;
+  --td-brand-color-disabled: #C4B8FC;
+  --td-brand-color-light: #EDE9FE;
+  --td-text-color-primary: #18181B;
+  --td-text-color-secondary: #71717A;
+  --td-text-color-placeholder: #A1A1AA;
+  --td-bg-color-page: #F7F8FA;
+  --td-bg-color-container: #FFFFFF;
+  --td-bg-color-container-hover: #F4F4F5;
+  --td-bg-color-container-active: #EDE9FE;
+  --td-component-stroke: #E8EAF0;
+  --td-component-border: #E8EAF0;
+  --td-border-level-1-color: #E8EAF0;
+}
+/* ========== 公共页面布局样式 ========== */
+.page-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: var(--space-6) var(--space-8) var(--space-8);
+  box-sizing: border-box;
+  animation: fade-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* ---------- 页面头部（各页面共用）---------- */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+  animation: fade-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* 左侧：标题组 */
+  /* 右侧：操作按钮组 */
+}
+.page-header > div:first-child,
+.page-header .page-header-info,
+.page-header .header-left {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.page-header .page-header-actions,
+.page-header .header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+/* 页面主标题 —— 所有列表页统一 */
+.page-title {
+  font-size: var(--font-page-title);
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+/* 页面副标题 */
+.page-subtitle {
+  font-size: var(--font-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+/* ---------- 区块标题（Section Title）---------- */
+.section-title {
+  font-size: var(--font-section-title);
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* ---------- 列表行（通用）---------- */
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  transition: all 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: fade-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.list-row:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-sm);
+}
+/* ---------- 空状态（通用）---------- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-16) var(--space-8);
+  text-align: center;
+  animation: fade-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.empty-state .empty-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-card);
+  background: var(--color-bg-hover);
+  color: var(--color-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  margin-bottom: var(--space-5);
+}
+.empty-state .empty-title {
+  font-size: var(--font-lg);
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 var(--space-2);
+}
+.empty-state .empty-desc {
+  font-size: var(--font-sm);
+  color: var(--color-text-secondary);
+  max-width: 400px;
+  margin: 0 0 var(--space-6);
+}
+/* ---------- 旧版兼容保留 ---------- */
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) 0 var(--space-4);
+  flex-shrink: 0;
+}
+.page-toolbar .toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.page-toolbar .toolbar-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.form-alert {
+  margin-bottom: var(--space-2);
+}
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-5);
+}
+.clickable-card {
+  cursor: pointer;
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.clickable-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.04);
+}
+.error-message {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 13px;
+}
+.list-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+}
+.delete-tip {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.6;
+}
+/* ========== 滚动条美化（Webkit）========== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #D4D4D8;
+  border-radius: 4px;
+  transition: background-color 150ms;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #A1A1AA;
+}
+/* ========== 选中文字颜色 ========== */
+::selection {
+  background: #EDE9FE;
+  color: #7C5CFC;
+}

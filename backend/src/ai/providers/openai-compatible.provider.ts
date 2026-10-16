@@ -10,6 +10,7 @@ import {
   ToolChatResult,
 } from '../ai-provider.interface';
 import { stringifyToolArguments } from '../tool-args.util';
+import { normalizeContentToString } from '../content.util';
 
 /**
  * OpenAI 兼容 Provider —— 覆盖 OpenAI 官方、DeepSeek、以及任意 OpenAI 兼容网关。
@@ -129,7 +130,8 @@ export class OpenAICompatibleProvider implements AiProvider {
     }
 
     const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      // content 可能是字符串，也可能是多模态内容块数组（图像生成 / 多模态模型）
+      choices?: Array<{ message?: { content?: unknown } }>;
       usage?: {
         prompt_tokens?: number;
         completion_tokens?: number;
@@ -137,7 +139,7 @@ export class OpenAICompatibleProvider implements AiProvider {
       };
     };
 
-    const content = data.choices?.[0]?.message?.content ?? '';
+    const content = normalizeContentToString(data.choices?.[0]?.message?.content);
     const usage = data.usage;
     return {
       content,
@@ -197,10 +199,14 @@ export class OpenAICompatibleProvider implements AiProvider {
 
           try {
             const json = JSON.parse(payload) as {
-              choices?: Array<{ delta?: { content?: string } }>;
+              choices?: Array<{ delta?: { content?: unknown } }>;
             };
             const delta = json.choices?.[0]?.delta?.content;
-            if (delta) yield delta;
+            // delta.content 可能是内容块数组（多模态 / 图像生成），统一转成文本
+            if (delta != null) {
+              const text = normalizeContentToString(delta);
+              if (text) yield text;
+            }
           } catch {
             // 忽略不完整/心跳行
           }
@@ -266,7 +272,8 @@ export class OpenAICompatibleProvider implements AiProvider {
     const data = (await response.json()) as {
       choices?: Array<{
         message?: {
-          content?: string;
+          // 同 chat：可能是字符串或内容块数组
+          content?: unknown;
           tool_calls?: Array<{
             id?: string;
             type: 'function';
@@ -296,7 +303,7 @@ export class OpenAICompatibleProvider implements AiProvider {
 
     const usage = data.usage;
     return {
-      content: msg?.content ?? '',
+      content: normalizeContentToString(msg?.content),
       toolCalls,
       model: options.model,
       usage:

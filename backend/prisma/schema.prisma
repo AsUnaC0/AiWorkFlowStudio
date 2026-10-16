@@ -226,6 +226,7 @@ model KnowledgeBase {
   owner              User     @relation("KnowledgeBaseOwner", fields: [ownerId], references: [id])
   documents          Document[]
   workspaces         WorkspaceKnowledgeBase[]
+  embeddingVersions  KnowledgeBaseEmbeddingVersion[]
 
   @@index([ownerId])
 }
@@ -307,9 +308,40 @@ model DocumentChunk {
   updatedAt   DateTime @updatedAt
 
   document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  embeddings  DocumentChunkEmbedding[]
 
   @@index([documentId])
   @@index([chunkIndex])
+}
+
+// ---------------------------------------------------------------------------
+// DocumentChunkEmbedding —— 某个文本块在某个向量版本下的「生成状态」
+//
+// 文本与向量解耦：切换模型 / 维度不再动 DocumentChunk（也不重复解析原文件），
+// 只为新版本生成一份新向量，验证通过后再原子切换 isActive。
+//
+// ⚠️ 向量值本身不存这里，而放在版本专属的物理表 KnowledgeBaseEmbeddingVersion.vectorTable
+//    （列固定 vector(dimensions)，建 HNSW 索引）。这张表只记录状态，用于进度统计与失败重试。
+// ---------------------------------------------------------------------------
+
+model DocumentChunkEmbedding {
+  id                 String @id @default(uuid())
+  chunkId            String
+  embeddingVersionId String
+
+  // PENDING 待生成 / DONE 已完成 / FAILED 失败
+  status String  @default("PENDING")
+  error  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chunk   DocumentChunk                 @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  version KnowledgeBaseEmbeddingVersion @relation(fields: [embeddingVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([chunkId, embeddingVersionId])
+  @@index([embeddingVersionId])
+  @@index([embeddingVersionId, status])
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +757,49 @@ model LlmProviderConfig {
 }
 
 // ---------------------------------------------------------------------------
+// KnowledgeBaseEmbeddingVersion —— 知识库的「向量版本」
+//
+// 一个知识库可以同时存在多个向量版本（不同模型 / 不同维度），
+// 但只有 isActive = true 的那个参与检索。切换模型 = 建新版本 → 重新向量化 → 激活。
+// ---------------------------------------------------------------------------
+
+model KnowledgeBaseEmbeddingVersion {
+  id              String @id @default(uuid())
+  knowledgeBaseId String
+
+  // 该版本使用的向量模型：本地 Ollama 模型名，或 LlmModel.modelId（云端/自定义）
+  modelId         String
+  llmModelId      String?
+
+  // 该版本的向量维度（写入前逐条校验，保证整列同维）
+  dimensions      Int
+
+  // 该版本对应的物理向量表名（每个版本一张表，列固定为 vector(dimensions)，
+  // 才能建 HNSW 索引 —— pgvector 不允许在无维度的 vector 列上建索引）
+  vectorTable     String
+
+  // PENDING 待处理 / PROCESSING 处理中 / READY 就绪 / FAILED 失败 / ARCHIVED 已归档（回滚后保留）
+  status          String  @default("PENDING")
+  isActive        Boolean @default(false)
+
+  chunkTotal      Int     @default(0)
+  chunkDone       Int     @default(0)
+  chunkFailed     Int     @default(0)
+
+  error       String?
+  activatedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  knowledgeBase KnowledgeBase            @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  embeddings    DocumentChunkEmbedding[]
+
+  @@index([knowledgeBaseId])
+  @@index([knowledgeBaseId, isActive])
+}
+
+// ---------------------------------------------------------------------------
 // LlmModel —— 提供商下可选的模型（区分聊天 / Embedding 等能力）
 // ---------------------------------------------------------------------------
 
@@ -741,8 +816,25 @@ model LlmModel {
   // 前端展示名称
   displayName  String?
 
-  // 能力：CHAT / STREAM / TOOLS / EMBEDDING
+  // 能力标签（多选）：
+  //   CHAT 对话 / STREAM 流式 / TOOLS 工具调用 / EMBEDDING 向量化
+  //   VISION 视觉理解 / REASONING 推理 / RERANK 重排序 / IMAGE_GENERATION 图片生成
   capabilities String[] @default(["CHAT", "STREAM"])
+
+  // 输入模态：text / image / audio
+  inputModalities  String[] @default(["text"])
+  // 输出模态：text / image
+  outputModalities String[] @default(["text"])
+
+  // 仅向量模型有意义：实测输出维度（由「验证模型」写入，不靠模型名猜）
+  embeddingDimensions Int?
+
+  // 最大输入 token（按模型实际规格填写，可空）
+  maxInputTokens Int?
+
+  // 是否通过实测验证（连接 + 能力 + 维度）
+  isVerified Boolean   @default(false)
+  verifiedAt DateTime?
 
   // 是否为用户默认模型（同一 owner 仅一个）
   isDefault    Boolean  @default(false)

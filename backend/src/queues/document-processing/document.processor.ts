@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { DocumentParserService } from '../../knowledge/documents/document-parser.service';
 import { ChunkService } from '../../knowledge/documents/chunk/chunk.service';
 import { EmbeddingService } from '../../knowledge/embedding/embedding.service';
+import { EmbeddingVersionService } from '../../knowledge/embedding/embedding-version.service';
 import { VectorStoreService } from '../../knowledge/vector/vector-store.service';
 import { StorageService } from '../../storage/storage.service';
 import { unlink } from 'node:fs/promises';
@@ -16,9 +17,6 @@ export interface ProcessDocumentJobData {
   storagePath: string; // local: 绝对路径；qiniu: 对象 Key
 }
 
-/** pgvector 向量列维度（与 DocumentChunk.embedding vector(768) 保持一致） */
-const EMBEDDING_DIMENSION = 768;
-
 @Processor('document-processing')
 export class DocumentProcessor extends WorkerHost {
   constructor(
@@ -26,6 +24,7 @@ export class DocumentProcessor extends WorkerHost {
     private readonly documentParserService: DocumentParserService,
     private readonly chunkService: ChunkService,
     private readonly embeddingService: EmbeddingService,
+    private readonly versionService: EmbeddingVersionService,
     private readonly vectorStoreService: VectorStoreService,
     private readonly storageService: StorageService,
   ) {
@@ -117,6 +116,11 @@ export class DocumentProcessor extends WorkerHost {
         throw new Error('知识库不存在');
       }
 
+      // 取激活向量版本 —— 文档向量一律写入「当前生效版本」，保证与检索时用的模型/维度一致
+      const activeVersion = await this.versionService.ensureActiveVersion(
+        knowledgeBaseId,
+      );
+
       // 向量化遥测：优先用知识库关联的第一个工作空间，否则回退知识库 owner 的可见空间。
       // 没有归属就不写记录（与「无归属上下文的调用不记录」的约定一致）。
       const telemetryWorkspaceId =
@@ -137,33 +141,33 @@ export class DocumentProcessor extends WorkerHost {
         ? { workspaceId: telemetryWorkspaceId }
         : undefined;
 
-      // 6. 批量向量化（优先用户所选 Embedding 模型，否则回退本地 Ollama）
+      // 6. 批量向量化 —— 用「激活版本」绑定的模型（与库中已有向量同源）
       if (storedChunks.length > 0) {
         const vectors = await this.embeddingService.embedBatch(
           storedChunks.map((c) => c.content),
-          kb.embeddingModel,
-          kb.embeddingLlmModelId,
+          activeVersion.modelId,
+          activeVersion.llmModelId,
           telemetry,
         );
 
-        // 维度校验：pgvector 列为 vector(768)，维度不符会导致写入失败，
-        // 这里提前抛出可读的错误信息，提示用户改用 768 维模型。
+        // 维度校验：写入前比对版本维度，避免脏数据混进同一检索空间
         const dim = vectors[0]?.length;
-        if (dim !== undefined && dim !== EMBEDDING_DIMENSION) {
+        if (dim !== undefined && dim !== activeVersion.dimensions) {
           throw new Error(
-            `Embedding 维度不匹配：所选模型输出 ${dim} 维，但知识库向量列固定为 ${EMBEDDING_DIMENSION} 维。` +
-              `请改用 ${EMBEDDING_DIMENSION} 维的 Embedding 模型（如 Ollama nomic-embed-text）。`,
+            `Embedding 维度不匹配：激活版本「${activeVersion.modelId}」输出 ${dim} 维，` +
+              `但该知识库当前向量版本为 ${activeVersion.dimensions} 维。` +
+              `请到知识库设置里用「切换向量模型」建立新版本并重新向量化，不要直接改配置。`,
           );
         }
 
         await job.updateProgress(80);
 
-        // 7. 批量写 pgvector
+        // 7. 写入激活版本的向量表
         const pairs = storedChunks.map((c, i) => ({
           chunkId: c.id,
           vector: vectors[i],
         }));
-        await this.vectorStoreService.updateEmbeddingBatch(pairs);
+        await this.versionService.writeVectors(activeVersion.id, pairs);
       }
 
       await job.updateProgress(100);

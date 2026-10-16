@@ -68,6 +68,15 @@ export class LlmConfigController {
     return this.llmConfigService.updateModel(user.id, id, dto);
   }
 
+  /** POST /llm-configs/models/:id/verify —— 实测模型能力（向量模型会回写真实输出维度） */
+  @Post('models/:id/verify')
+  verifyModel(
+    @CurrentUser() user: JwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.llmConfigService.verifyModel(user.id, id);
+  }
+
   /** DELETE /llm-configs/models/:id —— 删除单个模型 */
   @Delete('models/:id')
   removeModel(

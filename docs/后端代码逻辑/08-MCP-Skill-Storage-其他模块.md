@@ -276,6 +276,10 @@ class StorageService {
   // qiniu → 下载到系统临时目录，返回临时路径（调用方用完要 unlink 清理）
   async getLocalPath(key: string): Promise<string>;
 
+  // 读取对象存储二进制：local → 直读文件；qiniu → 下载到临时文件读 Buffer（用完需清理）
+  // 被 chat-files 的 /raw 与 /download、平台工具 attach_document_to_knowledge_base 使用
+  async readBuffer(key: string): Promise<Buffer>;
+
   // 生成可访问的下载 URL：local → null；qiniu → `${QINIU_DOMAIN}/${key}`
   getDownloadUrl(key: string, expireSeconds = 3600): string | null;
 }
@@ -398,7 +402,9 @@ if (!workspace) throw new ForbiddenException('无权访问');
 >
 > ✅ **更新（原文档写"tokenUsage 恒为 0"已过期）**：新增 `ModelCallLog` 表后，overview 的 `tokenUsage` 取的是 `ModelCallLog.totalTokens` 的真实聚合值，`modelCalls` 是同期的调用次数。数据由 `AiService.recordModelCall()` 在 LLM 节点执行时写入，**仅在 `workspaceId` 存在时落库**（fire-and-forget，吞异常）。
 >
-> ⚠️ **没有 workspaceId 的调用不记账**——Agent 聊天链路目前不写 `ModelCallLog`，所以控制台的 Token 统计只覆盖**工作流**产生的调用。
+> ⚠️ **没有 workspaceId 的调用不记账**——Agent 聊天链路通过 `recordAgentCall()` 写 `ModelCallLog`
+> （见 [04](./04-Agent智能体模块.md) 遥测归属一节），所以控制台的 Token 统计**同时覆盖工作流与 Agent 聊天**；
+> 但无归属空间（如用户没进任何空间）的调用仍会被跳过。
 >
 > `p95DurationMs` 是内存里排序取的**第 95 百分位**（`durations[Math.floor(len * 0.95)]`），不是精确 P95 算法；`durationMs` 缺失时会用 `completedAt - startedAt` 兜底。
 
@@ -408,7 +414,7 @@ if (!workspace) throw new ForbiddenException('无权访问');
 
 **文件路径**：`backend/src/friendship/friendship.service.ts`
 
-简单的好友关系管理，支持：发送请求 / 接受 / 拒绝 / 删除 / 列出好友 / 列出收到的请求。功能相对独立，不与其他业务模块深度耦合。
+简单的好友关系管理，支持：发送请求 / 接受 / 拒绝 / 删除 / 列出好友 / 列出收到的请求。功能相对独立，不与其他业务模块深度耦合。另含 `searchUsers(userId, keyword)`——按关键词搜索用户，是「添加好友」页的用户搜索入口。
 
 ---
 
@@ -445,6 +451,6 @@ Engine.run() / runStream() 里每步都打日志：
 - `logNodeStart(runId, nodeType, nodeId, label)`
 - `logNodeComplete(runId, nodeType, nodeId, durationMs, branch)`
 - `logNodeFailed(runId, nodeType, nodeId, durationMs, message)`
-- `logRunComplete(runId, totalMs)`
+- `logRunComplete(runId, durationMs)`
 
 日志输出到 console + 可选的持久化（后续可接 ELK/Loki）。runId 贯穿全链路，方便排查"某次工作流为什么失败"。

@@ -71,8 +71,8 @@
 
 ```
 KnowledgeBase（你建的知识库）
-├── embeddingModel     "nomic-embed-text"      ← 用什么模型向量化
-├── embeddingDimension 768                      ← 向量几维
+├── embeddingModel     "nomic-embed-text"      ← ★ 现在只是「展示用元数据」，由激活版本同步写入
+├── embeddingDimension 768                      ← ★ 同上，不再是检索依据
 ├── documentCount      冗余计数
 └── chunkCount         冗余计数
         │ 1:N
@@ -84,15 +84,36 @@ Document（一篇文档）
 └── errorMessage       FAILED 的原因
         │ 1:N
         ▼
-DocumentChunk（一个文本块）
+DocumentChunk（一个文本块）  ← ★ 只存文本，不再存向量
 ├── content            ← 切出来的~1000字符文本
-├── chunkIndex         ← 第几块
-└── embedding vector(768)   ← ★ Unsupported 类型列，手写 migration 维护，读写走裸 SQL
+└── chunkIndex         ← 第几块
+
+        ╎ 1:N（★ 本次新增：向量版本化）
+        ▼
+KnowledgeBaseEmbeddingVersion（某知识库的一个向量版本）
+├── modelId / llmModelId   ← 用什么模型生成的
+├── dimensions             ← 该版本的向量维度（768 / 1024 / 1536 …）
+├── vectorTable            ← "EmbeddingVector_<uuid>" ← 物理表名，每个版本一张
+├── status                 ← PENDING | PROCESSING | READY | FAILED | ARCHIVED
+├── isActive               ← 是否为该库的生效版本（同一库只有一个 true）
+└── chunkTotal / chunkDone / chunkFailed   ← 向量化进度
+        │ 1:N
+        ▼
+DocumentChunkEmbedding（★ 只记状态，不存向量）
+├── chunkId / embeddingVersionId
+└── status   PENDING | DONE | FAILED（+ error 原因）
 ```
 
-**最关键的一句**（第 2 篇强调过，这里是实战）：`embedding` 列是手写 migration 建的，
-schema 里用 `Unsupported("vector(768)")?` 占位，**Prisma 客户端不能增删查它**，
-所有向量的读写都是裸 SQL（`VectorStoreService`）。
+**最关键的三句**：
+
+1. `DocumentChunk` **不再存向量**。向量按「版本」存在各自独立的物理表 `EmbeddingVector_<uuid>` 里，
+   列是 `vector(该版本 dimensions)` + HNSW 索引。
+2. **真正的检索依据是「生效版本」**（`isActive = true`），不是 `KnowledgeBase.embeddingModel`。
+   `DocumentChunk.embedding` 这个老列（`vector(768)`）只在「该库还没建过版本」时作兼容回退。
+3. 所有向量的读写都是**裸 SQL**（`VectorStoreService`），Prisma 客户端读不了 `vector` 类型。
+
+> **为什么一个版本一张表**：pgvector 的 HNSW / IVFFlat 索引**只能建在有固定维度的 `vector(N)` 列上**。
+> 换 Embedding 模型必然换维度，共用一个列就装不下。详见 **§4.10**。
 
 ---
 
@@ -115,10 +136,10 @@ schema 里用 `Unsupported("vector(768)")?` 占位，**Prisma 客户端不能增
 >
 > 旧实现用 `fs.rm(join(UPLOAD_DIR, id))` 删 `uploads/<kbId>` 目录，但文档实际上传落盘在：
 > ```typescript
-> // storage.service.ts（uploadLocal）
-> join(uploadDir, 'documents', `${randomUUID()}${ext}`)       // uploads/documents/<uuid>.pdf  （local）
-> // uploadQiniu
-> `${subDir}/${datePath}/${randomUUID()}${ext}`                // documents/<date>/<uuid>.pdf  （qiniu 对象 key）
+> // storage.service.ts（uploadLocal）—— subDir 是调用方传的，知识库文档传的是 documents/${kbId}
+> join(uploadDir, subDir, `${randomUUID()}${ext}`)          // uploads/documents/<kbId>/<uuid>.pdf  （local）
+> // uploadQiniu —— 对象 key 同样带 subDir
+> `${subDir}/${datePath}/${randomUUID()}${ext}`            // documents/<kbId>/<date>/<uuid>.pdf  （qiniu 对象 key）
 > ```
 > 路径对不上，且 `fs.rm` 根本不会碰七牛云，**local 残留目录、qiniu 残留对象**。
 >
@@ -385,6 +406,12 @@ export class DocumentProcessor extends WorkerHost {
       }
       const text = await this.documentParserService.parse(localPath);
 
+      // ②.5 ★ 空文本预检：扫描件 / 图片型 PDF 提不出文字 → 直接 FAILED（给 OCR 提示）
+      //      不静默标记 COMPLETED，避免用户误以为向量化成功
+      if (!hasTextContent(text)) {
+        throw new Error('未能从该文件中提取到有效文本内容（可能是扫描件或图片型 PDF，需先做 OCR）');
+      }
+
       await job.updateProgress(30);                    // 30%
 
       // ③ 分块 → 入库（同时 increment 知识库的 chunkCount）
@@ -399,24 +426,35 @@ export class DocumentProcessor extends WorkerHost {
         select: { id: true, content: true },
       });
 
-      // ⑤ 查知识库 embeddingModel 配置
-      const kb = await this.prisma.knowledgeBase.findUnique({
-        where: { id: knowledgeBaseId },
-        select: { embeddingModel: true },
-      });
-      if (!kb) throw new Error('知识库不存在');
+      // ⑤ ★ 取该知识库的「生效向量版本」（没有会按 KB 配置自动建 v1 并激活）
+      const activeVersion =
+        await this.versionService.ensureActiveVersion(knowledgeBaseId);
 
-      // ⑥ 批量向量化
+      // ⑥ 批量向量化 —— ★ 用生效版本的模型，而不是 kb.embeddingModel
       if (storedChunks.length > 0) {
         const vectors = await this.embeddingService.embedBatch(
           storedChunks.map((c) => c.content),
-          kb.embeddingModel,                           // ★ 用知识库配置的模型
+          activeVersion.modelId,                       // ★ 生效版本的模型
+          activeVersion.llmModelId,
+          telemetry,
         );
+
+        // ⑥.5 ★ 整批前置维度校验：vectors[0].length !== 生效版本.dimensions → 直接 throw
+        //      （整篇文档 FAILED，错误消息是中文可操作提示；writeVectors() 内的逐条 FAILED 只是兜底）
+        const dim = vectors[0]?.length;
+        if (dim !== undefined && dim !== activeVersion.dimensions) {
+          throw new Error(
+            `Embedding 维度不匹配：激活版本「${activeVersion.modelId}」输出 ${dim} 维，` +
+              `但该知识库当前向量版本为 ${activeVersion.dimensions} 维。` +
+              `请到知识库设置里用「切换向量模型」建立新版本并重新向量化，不要直接改配置。`,
+          );
+        }
+
         await job.updateProgress(80);                  // 80%
 
-        // ⑦ 批量写 pgvector（一条 SQL，unnest）
+        // ⑦ ★ 写入版本专属物理表（writeVectors 内部逐条兜底校验，不符的记 FAILED 不中断整批）
         const pairs = storedChunks.map((c, i) => ({ chunkId: c.id, vector: vectors[i] }));
-        await this.vectorStoreService.updateEmbeddingBatch(pairs);
+        await this.versionService.writeVectors(activeVersion.id, pairs);
       }
 
       await job.updateProgress(100);                   // 100%
@@ -458,8 +496,8 @@ export class DocumentProcessor extends WorkerHost {
 | **`throw error` 不能省** | 漏了它，BullMQ 会认为任务成功，`attempts` 重试和 `failed` 事件都不会触发 |
 | **`updateProgress`** | 让前端能显示进度条（但目前前端没接 `QueueEvents`，只是本地 fake 进度） |
 | **`attempts: 3` + 指数退避** | 3s → 6s → 12s。适合「Ollama 偶发超时」这种瞬时故障 |
-| **embeddingModel 从哪来** | 知识库记录！**不能用节点里的模型**，否则维度对不上 |
-| **先入库再更新向量** | 因为 Prisma 只能插非 embedding 列，所以先 `createMany` 再裸 `UPDATE` |
+| **★ embeddingModel 从哪来** | **不再是** `kb.embeddingModel`！现在是 `EmbeddingVersionService.ensureActiveVersion(kbId)` 返回的**生效版本**的 `modelId` / `llmModelId`。用错模型 = 向量空间不一致 = 检索精度归零 |
+| **★ 先入库再更新向量** | 因为 Prisma 只能插非 vector 列，所以先 `createMany` 写文本块，再写版本物理表 |
 | **重复执行会重复插入 chunk**（已修） | ⚠️ 原来 `createMany` 前不删旧 chunk，`attempts: 3` 重投会插入重复 chunk 并重复 `increment chunkCount`。**现在 `process()` 开头加了幂等保护**：`count` 出残留量 → `$transaction` 里 `deleteMany` + `decrement chunkCount` |
 | **幂等保护为什么放最前面** | 必须赶在 `createMany` 之前，而且要和「回退 `chunkCount`」放同一个 `$transaction`，否则删成功但计数回退失败就永久对不上 |
 | **`storagePath` 有两种语义**（★ 新增） | `local` = 绝对路径；`qiniu` = 对象 key。`process()` 开头会先 `getLocalPath` 转成可解析的本地路径，并在 `finally` 里 `unlink` 掉临时文件 |
@@ -555,33 +593,43 @@ async embedBatch(
 **调用方**（`document.processor.ts`）会把知识库的两个字段都读出来传进去——这就是「建库用哪个模型、向量化就用哪个模型」的保证：
 
 ```typescript
-const kb = await this.prisma.knowledgeBase.findUnique({
-  where: { id: knowledgeBaseId },
-  select: { embeddingModel: true, embeddingLlmModelId: true },   // ★ 两个都取
-});
+// ★ 本次升级后：模型来自「生效向量版本」，不再直接读 kb 的两个字段
+const activeVersion =
+  await this.versionService.ensureActiveVersion(knowledgeBaseId);
 const vectors = await this.embeddingService.embedBatch(
   storedChunks.map((c) => c.content),
-  kb.embeddingModel,
-  kb.embeddingLlmModelId,      // ← 有自定义模型就用它，没有就 null → 回退 Ollama
+  activeVersion.modelId,       // 生效版本的模型
+  activeVersion.llmModelId,    // 有自定义模型就用它，没有 → null → 回退 Ollama
+  telemetry,
 );
 ```
 
 - 交给 `AIService` → Ollama **`/api/embeddings`**（⚠️ 旧文档写的 `/api/embed` 是错的，少了结尾的 `s`）
 - **一批 100 条**，防止单次请求体太大
-- `model` 必须和 `nomic-embed-text` 一致（取决于你建库时填的）
-- ★ **维度校验**：向量化后立即检查维度，不匹配就抛可读错误（见下）
+- `model` 必须和**该版本当初生成向量时用的一致**，否则向量空间不同，检索就没意义
+- ★ **维度校验**：向量化后**逐条**检查维度，不匹配的 chunk 单独标记 `FAILED` 并记原因（见下）
 
-> **★ 维度校验（`document.processor.ts:115-121`）**
+> **★ 维度校验有两层（别只记一层）**
+>
+> 1. **整批前置校验**（`document.processor.ts`，`embedBatch()` 之后、`writeVectors()` 之前）：
+>    `vectors[0].length !== activeVersion.dimensions` → **直接 throw，整篇文档 FAILED**，
+>    错误消息是中文可操作提示（「请到知识库设置里用『切换向量模型』建立新版本并重新向量化」）。
+>    这是**主校验**——维度整体不对说明配错了模型，整篇重跑没意义。
+> 2. **逐条兜底校验**（`EmbeddingVersionService.writeVectors()`）：个别条目不匹配时
+>    只把该 chunk 记 `FAILED`，不中断整批，可单独重试。
+>
 > ```typescript
-> const dim = vectors[0]?.length;
-> if (dim !== undefined && dim !== EMBEDDING_DIMENSION) {   // EMBEDDING_DIMENSION = 768
->   throw new Error(
->     `Embedding 维度不匹配：所选模型输出 ${dim} 维，但知识库向量列固定为 ${EMBEDDING_DIMENSION} 维。` +
->     `请改用 ${EMBEDDING_DIMENSION} 维的 Embedding 模型（如 Ollama nomic-embed-text）。`,
->   );
+> // writeVectors() 内部：以生效版本的 dimensions 为准，逐条判定，不中断整批
+> for (const { chunkId, vector } of pairs) {
+>   if (!Array.isArray(vector) || vector.length !== version.dimensions) {
+>     // → DocumentChunkEmbedding.status = 'FAILED'，error 记「期望 N 维，实际 X 维」
+>     continue;
+>   }
+>   // → 写入 "EmbeddingVector_<versionId>"，状态置 DONE
 > }
 > ```
-> 因为 pgvector 的列被**硬编码成 `vector(768)`**（见 §4.9），任何输出非 768 维的模型（比如很多云端模型是 1024 / 1536 维）都会在这里被**提前拦下**，给出人话错误，而不是等 `UPDATE` 时数据库报一句天书。
+> 好处：768 不再是硬编码常量，**换 1024 / 1536 维的云端模型也不会整批炸**（只要版本维度配置正确），
+> 只是个别不匹配的块被标记失败，可以单独重试（见 §4.10）。
 
 > **⚠️ 「一批 100 条」≠ 一次请求**：`ollama.provider.ts:135-155` 的实际实现是
 > ```typescript
@@ -597,8 +645,19 @@ const vectors = await this.embeddingService.embedBatch(
 > 1000 个 chunk 就是 1000 次 HTTP 往返。这是「上传大文档慢」的主要原因之一。
 > 想加速的话，可以改成 `Promise.all` 并发（注意限流）或换支持批量的 embedding 服务（如用户自配的云端模型）。
 
-### 4.8 ★ 批量写向量：一次 UPDATE 100 个 chunk
+### 4.8 ★ 批量写向量
 
+**当前主路径**：写进版本专属物理表（`EmbeddingVersionService.writeVectors()`）：
+
+```sql
+INSERT INTO "EmbeddingVector_<versionId>" ("chunkId", "embedding")
+VALUES ($1::text, $2::vector)
+ON CONFLICT ("chunkId") DO UPDATE SET "embedding" = EXCLUDED."embedding"
+```
+
+写入前**逐条**比对 `vector.length === version.dimensions`，不符的登记 `FAILED` + 原因，不中断整批。
+
+**旧路径（仅兼容回退，库里还没有任何向量版本时才走）** —— 一次 UPDATE 100 个 chunk，
 `vector-store.service.ts`：
 
 ```typescript
@@ -624,8 +683,9 @@ await this.prisma.$executeRawUnsafe(sql, ids, vectors);
 
 **① 它是干嘛的** —— 给「语义」一个可计算的形式：
 
-- 每个文本块编码成 **768 个浮点数**（`nomic-embed-text`），这串数就是它在「语义空间」里的坐标
-- 你问一个问题，问题也被编码成同样 768 个数
+- 每个文本块编码成 **N 个浮点数**（`nomic-embed-text` 是 768，`bge-m3` 是 1024，
+  `text-embedding-3-small` 是 1536），这串数就是它在「语义空间」里的坐标
+- 你问一个问题，问题也被编码成**同样 N 个数**（★ 必须用同一个模型，见 §5.1.1）
 - pgvector 用 **`<=>` 余弦距离**算「问题坐标」和「每个块坐标」离得多近，最近的就是答案候选
 - 没有它，检索只能靠关键词；有了它，**换个说法也能命中**（「业绩怎么算」和「KPI 定义」语义相近）
 
@@ -636,6 +696,12 @@ model DocumentChunk {
   ...
   embedding   Unsupported("vector(768)")?   // ← Unsupported = 「这列存在，但我不管它」
 }
+// ★ 本次新增：每个向量版本一张物理表，维度由版本决定（运行时 CREATE TABLE，不在 schema 里）
+//    CREATE TABLE "EmbeddingVector_<versionId>" (
+//      "chunkId"   text PRIMARY KEY,
+//      "embedding" vector(<dimensions>)
+//    );
+//    CREATE INDEX ... USING hnsw ("embedding" vector_cosine_ops);
 ```
 
 | 什么操作 | Prisma 会怎样 |
@@ -654,6 +720,41 @@ model DocumentChunk {
 
 > 这一整套（误删事故 + 修复）的来龙去脉见 **第 1 篇 §5.2**，这里只讲「为什么」。
 
+### 4.10 ★ 向量版本化：怎么安全地换 Embedding 模型（本次新增）
+
+**问题**：`DocumentChunk.embedding` 是 `vector(768)`。
+你把知识库的 `embeddingDimension` 改成 1024，只是改了个元数据——
+列还是 768 维，新向量根本写不进去，老向量也没重新生成，**检索会静默错乱**。
+而 pgvector 的 HNSW/IVFFlat 索引又**只能建在固定维度的 `vector(N)` 上**，不能建在无维度列上。
+
+**解法**：文本块与向量解耦，**一个版本一张物理表**。
+
+```
+DocumentChunk（文本块，解析一次永久复用）
+    ├── EmbeddingVector_<v1>  vector(768)  + HNSW   ← nomic-embed-text  [isActive]
+    ├── EmbeddingVector_<v2>  vector(1024) + HNSW   ← bge-m3           [READY，待激活]
+    └── EmbeddingVector_<v3>  vector(1536) + HNSW   ← text-embedding-3-small
+```
+
+**完整流程（前端：知识库详情页「向量模型配置」区）**：
+
+| 步骤 | 做什么 | 接口 |
+|---|---|---|
+| 1 | 模型管理页给目标模型勾 `EMBEDDING` → 点「验证」，后端实测写入 `embeddingDimensions` | `POST /llm-configs/models/:id/verify` |
+| 2 | 知识库详情页选目标模型 → 「创建目标版本」 | `POST /knowledge-bases/:id/embedding-versions` |
+| 3 | 「开始重新向量化」→ 入队 `knowledge-reembed`，页面每 3s 轮询进度 | `POST .../embedding-versions/:vid/re-embed` |
+| 4 | 进度 100% 且无失败 → 点「激活」（原子切换，旧版本保留可回滚） | `POST .../embedding-versions/:vid/activate` |
+
+重新向量化**不重新解析原文件**（那是 `POST /documents/:id/reprocess` 干的事），
+只复用已有文本块重新生成向量，重跑只捞 `PENDING / FAILED` 的 chunk（已 `DONE` 的不动）。
+> ⚠️ job data 里定义了 `retryFailedOnly` 参数，但**当前实现未使用**（`re-embedding.processor.ts` 里
+> `pendingChunks(versionId)` 固定取全部 PENDING/FAILED，不分「只重试失败」还是「全量重跑」）——
+> 属预留字段，行为上与「失败可重试」一致，但「只重试失败项」这个粒度**还没真正生效**。
+
+> 只有 `status = READY` 的版本能激活，防止跑到一半的版本顶上来造成检索空窗。
+> 激活在**一个事务**里做完三件事：旧版本 → `ARCHIVED`、新版本 `isActive = true`、
+> 同步 `KnowledgeBase.embeddingModel / embeddingDimension`（所以这俩字段现在是**结果**不是**配置**）。
+
 ---
 
 ## 5. ★ 检索路：RAG 节点怎么找到「答案段落」
@@ -670,31 +771,51 @@ model DocumentChunk {
 | **keyword** | PostgreSQL `to_tsvector` 全文检索 | 精确名词（型号、人名、专有名词） |
 | **hybrid** | 两路并跑 + RRF 融合 | ★ 日常推荐（默认） |
 
-### 5.1.1 ★ 查询向量用哪个 Embedding 模型？（`resolveEmbedding`）
+### 5.1.1 ★ 查询向量用哪个 Embedding 模型？（★ 本次改为「按生效版本」）
 
 检索的第一步是把用户的**问题**也变成向量，再拿去和库里的向量比距离。**问题用哪个模型编码，必须和当初写库时一致**，否则等于拿中文词典去查英文句子。
 
-`knowledge-retrieval.service.ts` 的 `resolveEmbedding()` 负责这个决策，规则是**三档优先级**：
+**当前主路径**是 `searchForQuery()`：不再「全局共用一个模型」，
+而是**按每个知识库各自的生效版本**分别向量化、分别检索，再合并排序：
 
 ```typescript
-private async resolveEmbedding(model: string | undefined, knowledgeBaseIds: string[]) {
-  // ① 调用方显式传了 model（Ollama 模型名）→ 直接用，不带 llmModelId
-  if (model) return { model, llmModelId: null };
-
-  // ② 一个知识库都没选 → 兜底本地 nomic-embed-text
-  if (knowledgeBaseIds.length === 0) return { model: 'nomic-embed-text', llmModelId: null };
-
-  // ③ 否则取「第一个知识库」绑定的模型：自定义 Embedding 模型 id 优先，回退本地模型名
-  const kb = await this.prisma.knowledgeBase.findUnique({
-    where: { id: knowledgeBaseIds[0] },
-    select: { embeddingModel: true, embeddingLlmModelId: true },
+private async searchForQuery(query, knowledgeBaseIds, explicitModel?, telemetry?, topK = 20) {
+  // ① 取这些 KB 的所有「生效版本」
+  const versions = await this.prisma.knowledgeBaseEmbeddingVersion.findMany({
+    where: { knowledgeBaseId: { in: knowledgeBaseIds }, isActive: true },
+    select: { id, knowledgeBaseId, modelId, llmModelId, dimensions, vectorTable },
   });
-  return {
-    model: kb?.embeddingModel ?? 'nomic-embed-text',
-    llmModelId: kb?.embeddingLlmModelId ?? null,   // ★ 有就传给 embedBatch 走用户 Provider
-  };
+
+  // ② 兼容回退：还没建过向量版本 → 沿用旧的 DocumentChunk.embedding + resolveEmbedding()
+  if (versions.length === 0) {
+    const v = await this.embed(query, explicitModel, knowledgeBaseIds, telemetry);
+    return this.vectorStoreService.vectorSearch(knowledgeBaseIds, v, topK, 1.0);
+  }
+
+  // ③ 每个版本用自己的模型各向量化一次，各自查自己的物理表
+  const buckets = await Promise.all(versions.map(async (v) => {
+    const [vector] = await this.embeddingService.embedBatch(
+      [query],
+      explicitModel ?? v.modelId,
+      explicitModel ? null : v.llmModelId,
+      telemetry,
+    );
+    // 维度不符 → 跳过该版本（只 warn，不让整次检索挂掉）
+    if (vector?.length !== v.dimensions) return [];
+    return this.vectorStoreService.vectorSearchInTable(
+      v.vectorTable, [v.knowledgeBaseId], vector, perTable, threshold,
+    );
+  }));
+
+  return buckets.flat().sort((a, b) => a.distance - b.distance).slice(0, topK);
 }
 ```
+
+**这顺带修掉了旧实现的一个已知限制**：原来 `resolveEmbedding()` 只取 `knowledgeBaseIds[0]` 的模型，
+多库混绑不同 Embedding 模型时只有第一个库生效、其余库等于用错模型检索（精度归零）。
+现在是**每个库各用自己的模型**，多库混绑也正确。
+
+**旧的 `resolveEmbedding()`**（三档优先级）只在「没有向量版本」的兼容回退分支里生效：
 
 | 档位 | 条件 | 用什么编码问题 |
 |------|------|--------------|
@@ -702,11 +823,33 @@ private async resolveEmbedding(model: string | undefined, knowledgeBaseIds: stri
 | ② | 没选知识库 | 本地 `nomic-embed-text` |
 | ③ | 选了知识库 | **第一个库**绑定的模型：`embeddingLlmModelId` 优先 → 否则 `embeddingModel` |
 
-> **⚠️ 只取第一个知识库的模型**：RAG 节点可以同时选多个库，但这里只读 `knowledgeBaseIds[0]` 的配置。
-> 所以**多库混用不同 embedding 模型时，只有第一个库的模型生效**——这是个已知限制（见 §7）。
-> 实践建议：一个 RAG 节点尽量选**同一套 embedding 模型**建的知识库。
+> **⚠️ 别再直接改 `KnowledgeBase.embeddingModel` 来「换模型」**：它已降级为展示元数据
+> （由 `activateVersion()` 反向同步）。换模型请走 **§4.10** 的版本流程。
 
-### 5.2 向量检索（`vectorSearch`）
+### 5.2 向量检索（`vectorSearch` / ★ `vectorSearchInTable`）
+
+**当前主路径** —— 查版本专属物理表（`vectorSearchInTable`）：
+
+```typescript
+const sql = `
+  SELECT
+    dc."id" AS "chunkId", dc."documentId", d."knowledgeBaseId",
+    dc.content, dc.metadata, d."fileName",
+    v."embedding" <=> $1::vector AS distance
+  FROM "${table}" v                                   -- ★ EmbeddingVector_<versionId>
+  JOIN "DocumentChunk" dc ON dc."id" = v."chunkId"
+  JOIN "Document" d       ON d."id" = dc."documentId"
+  WHERE d."knowledgeBaseId" = ANY($2::text[])
+    AND v."embedding" <=> $1::vector <= $3
+  ORDER BY v."embedding" <=> $1::vector ASC
+  LIMIT $4
+`;
+return this.prisma.$queryRawUnsafe(sql, vectorString, knowledgeBaseIds, threshold, topK);
+```
+
+表名由系统生成（`EmbeddingVector_<uuid>`）**不来自用户输入**，所以拼表名是安全的。
+
+**旧路径（兼容回退）** —— 查 `DocumentChunk.embedding`：
 
 ```typescript
 const rows = await this.prisma.$queryRaw<VectorHit[]>`
@@ -868,7 +1011,7 @@ RAG 节点（第 4 篇讲过）把 hits 拼成：
 
 | # | 问题 | 后果 | 建议 |
 |---|------|------|------|
-| 1 | `embeddingModel` 填错或维度填错 | **后台任务**报 `expected 768 dimensions, not 1024`，文档转 `FAILED` | 建库就填对；检索报维度错先查这个 |
+| 1 | 向量维度与**当前生效版本**不符 | 报 `expected N dimensions, not X`（N 不再是固定 768），该 chunk 记 `FAILED` | 建库就选对模型；换模型走 **§4.10** 的版本流程，别手改 `embeddingDimension` |
 | 2 | DOCX 解析未实现 | 传 docx → **上传返回 201，但后台任务失败** → 文档 `FAILED` | 用 `mammoth` 补 `DocxParser` |
 | ~~3~~ | ~~Chat 页 `knowledgeBaseIds` 被无视~~ **已修** | — | ✅ Chat 页改成 Agent，通过 Knowledge 工具走统一检索；`/ai/chat` 本身仍不带知识库 |
 | ~~4~~ | ~~`KnowledgeRetrievalService` 是半成品~~ **已实现** | — | ✅ 现在按 `mode` 路由到 `vector` / `keyword` / `hybrid`（RRF，`rrfK=60`），底层调 `VectorStoreService` + `EmbeddingService`，不再 `throw` |
@@ -884,15 +1027,38 @@ RAG 节点（第 4 篇讲过）把 hits 拼成：
 | 13 | ★ **`document.service.ts` 的 `updateStatus` 成了死代码** | 异步化后 Processor 直接用 `prisma.document.update`，没人调它 | 可以删，或让 Processor 改用它 |
 | 14 | ★ **幂等保护只清了 chunk，没清向量** | 删的是 `DocumentChunk` 行（向量跟着行一起没），但如果以后把向量存到外部服务（Qdrant / Milvus）就漏了 | 目前向量在 pgvector 里所以安全；换外部向量库时这里要一起清 |
 | 15 | ★ **进度条是假的** | 页面写死 `percentage="60"`；`job.updateProgress(10/30/50/80/100)` 的真值没出口给前端 | 要接 `QueueEvents` + SSE，或让 `getDocument` 返回进度字段 |
-| 16 | ★ **自定义 Embedding 模型维度可能不是 768** | 云端模型常是 1024 / 1536 维，写库时被维度校验拦下、文档 `FAILED` | 要么改用 768 维模型，要么把 `embedding` 列和 `EMBEDDING_DIMENSION` 一起改成对应维度（需手写 migration） |
-| 17 | ★ **多库混用不同 Embedding 模型** | 检索时只取**第一个知识库**的模型（`knowledgeBaseIds[0]`），其余库的向量用错模型编码，召回质量下降 | 一个 RAG 节点只选同一套 embedding 模型建的知识库；或按模型分组、分多个 RAG 节点 |
+| ~~16~~ | ~~★ 自定义 Embedding 模型维度可能不是 768~~ **已解决** | — | ✅ 引入**向量版本化**（§4.10）：一个版本一张 `vector(N)` 物理表，768 不再是硬约束；1024 / 1536 维模型可直接用，走「建版本 → 重向量化 → 激活」 |
+| ~~17~~ | ~~★ 多库混用不同 Embedding 模型~~ **已解决** | — | ✅ `searchForQuery()`（§5.1.1）改为**按每个 KB 各自的生效版本**分别向量化再合并，不再只取 `knowledgeBaseIds[0]` 的模型 |
 | 18 | ★ **`embeddingLlmModelId` 是软引用（无外键）** | 用户在「模型管理」删掉该模型后，知识库仍指向一个不存在的 id，向量化时 `resolveModelRuntime` 抛错 | 删除模型前校验引用，或运行时做存在性检查 + 优雅回退本地模型 |
+| 19 | ★ **未 `READY` 的版本不参与检索** | 正在重新向量化的版本查不到内容，看起来「检索突然变空」 | 这是**刻意设计**（防中间态污染召回）；切换前务必等进度 100% 并点「激活」 |
+| 20 | ★ **`knowledge-reembed` 依赖 Redis** | Redis 没起时任务堆积不执行，进度条永远不动，也不报错 | 排查时先确认 Redis；`document-processing` 同理 |
+| 21 | ★ **版本物理表不在 Prisma schema 里** | 运行时 `CREATE TABLE`，`prisma migrate dev` 不认识它们 | 不要指望迁移管理这些表；删除版本走 `DELETE .../embedding-versions/:vid`（会 `DROP TABLE`） |
 
 ---
 
 ## 8. 用 SQL 亲手验证
 
 **查一个知识库有没有向量成功写入：**
+
+**★ 现在的正确姿势：先查知识库有哪些向量版本，再看具体那张表：**
+
+```sql
+-- ① 看某知识库的所有向量版本（生效版本 isActive = true）
+SELECT id, "modelId", dimensions, "vectorTable", status, "isActive",
+       "chunkTotal", "chunkDone", "chunkFailed"
+FROM "KnowledgeBaseEmbeddingVersion"
+WHERE "knowledgeBaseId" = '你的kbId'
+ORDER BY "createdAt";
+
+-- ② 数一下生效版本里实际写了多少条向量（把上面的 vectorTable 填进来）
+SELECT count(*) FROM "EmbeddingVector_4d75adfea7f44bdb97295590829ed226";
+
+-- ③ 看有没有失败的块
+SELECT status, count(*) FROM "DocumentChunkEmbedding"
+WHERE "embeddingVersionId" = '你的versionId' GROUP BY status;
+```
+
+**旧版写法（仅在没有向量版本时适用）：**
 
 ```sql
 SELECT count(*) AS with_vector,
@@ -921,26 +1087,27 @@ SELECT "fileName", "status", "errorMessage" FROM "Document" ORDER BY "createdAt"
 
 | 概念 | 一句话 |
 |------|--------|
-| **写入路（两段）** | 同步段：落盘 → 建记录(`UPLOADED`) → 入队；异步段：解析 → 切块 → 入库 → 向量化 → `COMPLETED` |
-| **检索路** | 问题 → 向量化 → `<=>` 找最近 → 拼上下文 → 喂 LLM |
-| **★ 队列** | `document-processing`；Processor 在 `queues/document-processing/document.processor.ts` |
+| **写入路（两段）** | 同步段：落盘 → 建记录(`UPLOADED`) → 入队；异步段：解析 → 切块 → **只存文本** → 按生效版本向量化 → 写版本物理表 → `COMPLETED` |
+| **检索路** | 问题 → **按各 KB 生效版本**向量化 → 到版本物理表 `<=>` 找最近 → 合并排序 → 拼上下文 → 喂 LLM |
+| **★ 队列** | `document-processing`（解析+首次向量化）、**`knowledge-reembed`（★ 换模型后的重新向量化）**；Processor 分别在 `queues/document-processing/` 与 `queues/re-embedding/` |
 | **★ 重试** | `attempts: 3` + 指数退避（3s/6s/12s）；失败必须 `throw` 出去 BullMQ 才知道 |
 | **★ 幂等保护** | `process()` 开头：`count` 残留 chunk → `$transaction`(`deleteMany` + `decrement chunkCount`)，重投不会重复插入 |
 | **状态机（4 态）** | `UPLOADED`（接口写）→ `PROCESSING`（Worker）→ `COMPLETED` / `FAILED` |
 | **前端跟进** | `detail.vue` 每 2s 轮询文档列表，有 `UPLOADED`/`PROCESSING` 就刷 |
 | **支持格式** | PDF（pdf-parse）、TXT/MD（readFile）；DOCX **未实现** |
 | **切块** | ★ chunkSize **100** / overlap **50**（旧版 1000/200，本次调小） |
-| **向量化** | `EmbeddingService.embedBatch` 每批 100 条，用**知识库**配置的模型（`embeddingLlmModelId` 优先，回退 `embeddingModel`） |
+| **向量化** | `EmbeddingService.embedBatch` 每批 100 条，用**生效向量版本**的模型（`ensureActiveVersion()` 取，不再是 `kb.embeddingModel`） |
 | **★ 建库的 Embedding 模型** | `CreateKnowledgeBaseDto.embeddingLlmModelId`（可选）：传了用云端模型，没传回退本地 Ollama；**写入和检索必须用同一个模型** |
-| **★ 检索用哪个模型** | `resolveEmbedding()` 三档：显式传 > 无库兜底 `nomic-embed-text` > **第一个知识库**绑定的模型 |
-| **★ 维度校验** | 向量化后比对 `EMBEDDING_DIMENSION = 768`，不符提前抛可读错误，避免写库时才炸 |
-| **写库** | `unnest($1, $2)` 一条 SQL 批量更新 embedding 列 |
+| **★ 检索用哪个模型** | ★ 现在按**每个 KB 各自的生效版本**分别向量化（`searchForQuery()`）；旧的 `resolveEmbedding()` 三档只在「无向量版本」回退时用 |
+| **★ 维度校验** | 以**生效版本的 `dimensions`** 为准逐条校验（`writeVectors()`），不符的 chunk 记 `FAILED` 不中断整批；`EMBEDDING_DIMENSION = 768` 常量**已删除** |
+| **写库** | ★ 写版本物理表 `EmbeddingVector_<versionId>`（upsert）；旧的 `unnest($1,$2)` 批量 UPDATE 仅作兼容回退 |
+| **★ 换模型** | 不能改 `embeddingModel` 字段了事 → 走 **§4.10**：建版本 → 重新向量化 → 激活（原子切换、旧版保留可回滚） |
 | **向量检索** | `embedding <=> query` 余弦距离，`≤ threshold` 保留，升序取 topK |
 | **关键词检索** | PostgreSQL `to_tsvector('simple') @@ plainto_tsquery` + `ts_rank` |
 | **混合检索** | 两路并跑 + RRF `Σ 1/(60+rank+1)` 融合取 topK |
 | **RAG 节点输出** | `【问题】...【知识库参考】[1]...` 文本，或 `json` 结构 |
 | **Count 策略** | 增用 increment，删用重算 |
-| **⚠️ 最大坑** | `embedding` 列 Prisma 客户端读写不了（`Unsupported` 类型，只能裸 SQL）、embeddingModel/维度必须和模型一致；**异步化后失败不再 HTTP 报错**；**跑 `migrate dev` 看它是否带了 `DROP INDEX dc_embedding_ivf`** |
+| **⚠️ 最大坑** | ① 向量列 Prisma 客户端读写不了（`Unsupported` 类型，只能裸 SQL）；② **写入和检索必须用同一个模型**；③ 异步化后失败不再 HTTP 报错；④ 跑 `migrate dev` 看它是否带了 `DROP INDEX dc_embedding_ivf`；⑤ ★ **换模型必须走版本流程，直接改 `embeddingModel`/`embeddingDimension` 是无效的** |
 
 ---
 

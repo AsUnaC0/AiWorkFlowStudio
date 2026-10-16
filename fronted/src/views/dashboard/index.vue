@@ -698,7 +698,7 @@ onBeforeUnmount(() => {
      底部：资源汇总 + 更新时间
 ====================================================================== -->
 <template>
-  <div class="dashboard">
+  <div class="page-container">
     <!-- ========== 页面标题栏 ========== -->
     <header class="page-header">
       <div class="header-left">
@@ -708,18 +708,17 @@ onBeforeUnmount(() => {
       <div class="header-right">
         <div class="time-range-select">
           <span class="range-label">时间范围</span>
-          <div class="range-buttons">
-            <button v-for="range in ['7', '14', '30']" :key="range" class="range-btn"
-              :class="{ active: timeRange === range }"
-              @click="timeRange = range as '7' | '14' | '30'; handleTimeRangeChange()">
-              近 {{ range }} 天
-            </button>
-          </div>
+          <t-radio-group v-model="timeRange" variant="primary-filled" @change="handleTimeRangeChange">
+            <t-radio-button value="7">近 7 天</t-radio-button>
+            <t-radio-button value="14">近 14 天</t-radio-button>
+            <t-radio-button value="30">近 30 天</t-radio-button>
+          </t-radio-group>
         </div>
-        <button class="refresh-btn" :disabled="refreshing" @click="handleRefresh">
-          <t-icon :name="refreshing ? 'loading' : 'refresh'" />
+        <t-button class="refresh-btn" :disabled="refreshing" :loading="refreshing" variant="outline"
+          @click="handleRefresh">
+          <template #icon><t-icon name="refresh" /></template>
           <span>{{ refreshing ? "刷新中..." : "刷新" }}</span>
-        </button>
+        </t-button>
       </div>
     </header>
 
@@ -922,22 +921,22 @@ onBeforeUnmount(() => {
         <div class="runs-filter">
           <div class="filter-item">
             <span class="filter-label">状态</span>
-            <select v-model="runStatusFilter" class="filter-select" @change="handleRunsFilterChange">
-              <option value="">全部</option>
-              <option value="COMPLETED">已完成</option>
-              <option value="FAILED">失败</option>
-              <option value="RUNNING">运行中</option>
-              <option value="QUEUED">排队中</option>
-            </select>
+            <t-select v-model="runStatusFilter" class="filter-select" @change="handleRunsFilterChange">
+              <t-option value="" label="全部" />
+              <t-option value="COMPLETED" label="已完成" />
+              <t-option value="FAILED" label="失败" />
+              <t-option value="RUNNING" label="运行中" />
+              <t-option value="QUEUED" label="排队中" />
+            </t-select>
           </div>
           <div class="filter-item">
             <span class="filter-label">错误码</span>
-            <input v-model="runErrorCodeFilter" class="filter-input" placeholder="如 AI_PROVIDER_TIMEOUT"
-              @keyup.enter="handleRunsFilterChange" />
+            <t-input v-model="runErrorCodeFilter" class="filter-input" placeholder="如 AI_PROVIDER_TIMEOUT"
+              @enter="handleRunsFilterChange" />
           </div>
-          <button class="filter-btn" @click="handleRunsFilterChange">筛选</button>
-          <button class="filter-btn ghost"
-            @click="runStatusFilter = ''; runErrorCodeFilter = ''; handleRunsFilterChange()">重置</button>
+          <t-button theme="primary" @click="handleRunsFilterChange">筛选</t-button>
+          <t-button variant="outline"
+            @click="runStatusFilter = ''; runErrorCodeFilter = ''; handleRunsFilterChange()">重置</t-button>
         </div>
 
         <t-table :data="runs" :columns="runsColumns" row-key="id" size="small" hover :loading="loading" :pagination="{
@@ -1068,7 +1067,9 @@ onBeforeUnmount(() => {
             <span>运行详情</span>
             <span class="drawer-sub">{{ runDetail?.workflowName }} · {{ runDetail?.id.slice(0, 8) }}</span>
           </div>
-          <button class="drawer-close" @click="closeDrawer"><t-icon name="close" /></button>
+          <t-button class="drawer-close" variant="text" shape="square" size="small" @click="closeDrawer">
+            <t-icon name="close" />
+          </t-button>
         </div>
 
         <div v-if="runDetailLoading" class="drawer-loading">
@@ -1078,14 +1079,14 @@ onBeforeUnmount(() => {
 
         <template v-else-if="runDetail">
           <div class="drawer-tabs">
-            <button class="detail-tab" :class="{ active: detailTab === 'overview' }"
-              @click="detailTab = 'overview'">执行概览</button>
-            <button class="detail-tab" :class="{ active: detailTab === 'nodes' }"
-              @click="detailTab = 'nodes'">节点追踪</button>
-            <button class="detail-tab" :class="{ active: detailTab === 'logs' }"
-              @click="detailTab = 'logs'">执行日志</button>
-            <button class="detail-tab" :class="{ active: detailTab === 'models' }"
-              @click="detailTab = 'models'">模型调用</button>
+            <t-button class="detail-tab" :class="{ active: detailTab === 'overview' }" variant="text"
+              @click="detailTab = 'overview'">执行概览</t-button>
+            <t-button class="detail-tab" :class="{ active: detailTab === 'nodes' }" variant="text"
+              @click="detailTab = 'nodes'">节点追踪</t-button>
+            <t-button class="detail-tab" :class="{ active: detailTab === 'logs' }" variant="text"
+              @click="detailTab = 'logs'">执行日志</t-button>
+            <t-button class="detail-tab" :class="{ active: detailTab === 'models' }" variant="text"
+              @click="detailTab = 'models'">模型调用</t-button>
           </div>
 
           <div class="drawer-body">
@@ -1109,18 +1110,18 @@ onBeforeUnmount(() => {
               <div v-if="runDetail.errorMessage" class="error-box">
                 <div class="error-box-head">
                   <span>错误信息</span>
-                  <button class="link-btn" @click="copyText(runDetail.errorMessage || '')">复制</button>
+                  <t-button variant="text" size="small" @click="copyText(runDetail.errorMessage || '')">复制</t-button>
                 </div>
                 <pre class="error-pre">{{ runDetail.errorMessage }}</pre>
               </div>
               <div class="io-block">
-                <div class="io-head"><span>输入（已脱敏）</span><button class="link-btn"
-                    @click="copyText(formatJson(runDetail.input))">复制</button></div>
+                <div class="io-head"><span>输入（已脱敏）</span><t-button variant="text" size="small"
+                    @click="copyText(formatJson(runDetail.input))">复制</t-button></div>
                 <pre class="io-pre">{{ formatJson(runDetail.input) }}</pre>
               </div>
               <div class="io-block">
-                <div class="io-head"><span>输出（已脱敏）</span><button class="link-btn"
-                    @click="copyText(formatJson(runDetail.output))">复制</button></div>
+                <div class="io-head"><span>输出（已脱敏）</span><t-button variant="text" size="small"
+                    @click="copyText(formatJson(runDetail.output))">复制</t-button></div>
                 <pre class="io-pre">{{ formatJson(runDetail.output) }}</pre>
               </div>
             </div>
@@ -1181,33 +1182,13 @@ onBeforeUnmount(() => {
 <style scoped lang="less">
 @import "../../styles/variables.less";
 
-.dashboard {
-  padding: @space-6 @space-8;
-  max-width: 1440px;
+.page-container {
   margin: 0 auto;
 }
 
 /* ==================== 页面标题栏 ==================== */
 .page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: @space-6;
-
-  .header-left {
-    .page-title {
-      font-size: @font-hero;
-      font-weight: 600;
-      color: @color-text;
-      margin: 0 0 @space-1;
-    }
-
-    .page-subtitle {
-      font-size: @font-sm;
-      color: @color-text-secondary;
-      margin: 0;
-    }
-  }
+  align-items: center;
 
   .header-right {
     display: flex;
@@ -1222,35 +1203,6 @@ onBeforeUnmount(() => {
       .range-label {
         font-size: @font-sm;
         color: @color-text-secondary;
-      }
-
-      .range-buttons {
-        display: flex;
-        background: @color-bg-surface;
-        border: 1px solid @color-border;
-        border-radius: @radius-md;
-        padding: 2px;
-      }
-
-      .range-btn {
-        padding: 4px 12px;
-        font-size: @font-xs;
-        color: @color-text-secondary;
-        background: transparent;
-        border: none;
-        border-radius: @radius-sm;
-        cursor: pointer;
-        transition: all @duration-fast;
-
-        &:hover {
-          color: @color-text;
-        }
-
-        &.active {
-          background: @primary-light;
-          color: @primary;
-          font-weight: 500;
-        }
       }
     }
 
@@ -1548,39 +1500,7 @@ onBeforeUnmount(() => {
 
   .filter-select,
   .filter-input {
-    padding: 6px 10px;
-    font-size: @font-sm;
-    border: 1px solid @color-border;
-    border-radius: @radius-sm;
-    background: @color-bg;
-    color: @color-text;
     min-width: 160px;
-
-    &:focus {
-      outline: none;
-      border-color: @primary;
-    }
-  }
-
-  .filter-btn {
-    padding: 6px 16px;
-    font-size: @font-sm;
-    color: #fff;
-    background: @primary;
-    border: none;
-    border-radius: @radius-sm;
-    cursor: pointer;
-    transition: opacity @duration-fast;
-
-    &:hover {
-      opacity: 0.9;
-    }
-
-    &.ghost {
-      background: transparent;
-      color: @color-text-secondary;
-      border: 1px solid @color-border;
-    }
   }
 }
 
@@ -1853,15 +1773,7 @@ onBeforeUnmount(() => {
     }
 
     .drawer-close {
-      border: none;
-      background: transparent;
-      cursor: pointer;
-      font-size: 20px;
       color: @color-text-tertiary;
-
-      &:hover {
-        color: @color-text;
-      }
     }
   }
 

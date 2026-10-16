@@ -10,6 +10,7 @@ import type {
   TestLlmConfigResult,
   UpdateLlmConfigRequest,
   UpdateLlmModelRequest,
+  VerifyModelResult,
 } from "@/types/provider";
 
 /** 当前用户全部模型提供商配置（API Key 已脱敏） */
@@ -79,3 +80,7 @@ export const updateLlmModel = (
 /** 设为默认模型 */
 export const setDefaultLlmModel = (id: string): Promise<LlmModel> =>
   request.patch(`/llm-configs/models/${id}/default`);
+
+/** 实测模型能力（向量模型会回写真实输出维度） */
+export const verifyLlmModel = (id: string): Promise<VerifyModelResult> =>
+  request.post(`/llm-configs/models/${id}/verify`);

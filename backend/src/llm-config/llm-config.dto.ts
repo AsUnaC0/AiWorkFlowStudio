@@ -2,10 +2,13 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
+  Min,
 } from 'class-validator';
 import type { LlmProviderType } from '../ai/providers/provider.factory';
 
@@ -16,14 +19,34 @@ export const PROVIDER_TYPES: LlmProviderType[] = [
   'openai-compatible',
 ];
 
-/** 模型能力枚举 */
+/**
+ * 模型能力标签（多选，不是互斥的「类型」）：
+ *   CHAT             文本生成 / 对话
+ *   STREAM           流式输出
+ *   TOOLS            工具调用（Function Calling）
+ *   EMBEDDING        向量化（知识库检索 / 语义相似度）
+ *   VISION           视觉理解（图片问答、OCR 场景理解）
+ *   REASONING        推理（复杂分析、多步规划、数学逻辑）
+ *   RERANK           重排序（RAG 召回结果二次打分）
+ *   IMAGE_GENERATION 图片生成（与「理解图片」完全无关）
+ *
+ * ⚠️ 能力必须以实测（verifyModel）或用户显式标注为准，不能靠模型名猜测。
+ */
 export const MODEL_CAPABILITIES = [
   'CHAT',
   'STREAM',
   'TOOLS',
   'EMBEDDING',
+  'VISION',
+  'REASONING',
+  'RERANK',
+  'IMAGE_GENERATION',
 ] as const;
 export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
+
+/** 输入 / 输出模态 */
+export const MODALITIES = ['text', 'image', 'audio'] as const;
+export type Modality = (typeof MODALITIES)[number];
 
 export class CreateLlmConfigDto {
   @IsString()
@@ -133,6 +156,30 @@ export class UpdateLlmModelDto {
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
+
+  /** 输入模态：text / image / audio */
+  @IsOptional()
+  @IsArray()
+  @IsEnum(MODALITIES, { each: true })
+  inputModalities?: Modality[];
+
+  /** 输出模态：text / image / audio */
+  @IsOptional()
+  @IsArray()
+  @IsEnum(MODALITIES, { each: true })
+  outputModalities?: Modality[];
+
+  /** 向量输出维度（仅 EMBEDDING 有意义，建议用「验证模型」实测写入） */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(8192)
+  embeddingDimensions?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxInputTokens?: number | null;
 }
 
 export class TestLlmConfigDto {

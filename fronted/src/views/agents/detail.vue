@@ -167,14 +167,14 @@ const goChat = () => {
 </script>
 
 <template>
-    <div class="agent-detail" v-if="agent">
+    <div class="page-container" v-if="agent">
         <!-- 顶部栏 -->
         <header class="detail-header">
             <div class="header-left">
-                <button class="back-btn" @click="router.push('/agents')">
-                    <t-icon name="chevron-left" />
-                    <span>Agent 列表</span>
-                </button>
+                <t-button variant="text" size="small" @click="router.push('/agents')">
+                    <template #icon><t-icon name="chevron-left" /></template>
+                    Agent 列表
+                </t-button>
                 <div class="agent-title-row">
                     <div class="agent-avatar" :class="agent.type.toLowerCase()">
                         <t-icon :name="template?.icon ?? 'chat'" />
@@ -192,14 +192,14 @@ const goChat = () => {
                 </div>
             </div>
             <div class="header-actions">
-                <button class="action-btn secondary" @click="goChat">
-                    <t-icon name="chat" />
+                <t-button variant="outline" @click="goChat">
+                    <template #icon><t-icon name="chat" /></template>
                     对话
-                </button>
-                <button class="action-btn primary" :disabled="!hasChanges" :loading="saving" @click="handleSave">
-                    <t-icon name="save" />
+                </t-button>
+                <t-button theme="primary" :disabled="!hasChanges" :loading="saving" @click="handleSave">
+                    <template #icon><t-icon name="save" /></template>
                     保存配置
-                </button>
+                </t-button>
             </div>
         </header>
 
@@ -212,13 +212,12 @@ const goChat = () => {
                     <div class="form-grid">
                         <div class="form-item">
                             <label>Agent 名称</label>
-                            <input v-model="form.name" type="text" class="form-input" placeholder="为 Agent 起一个名字"
-                                :disabled="isSystemAgent" />
+                            <t-input v-model="form.name" placeholder="为 Agent 起一个名字" :disabled="isSystemAgent" />
                         </div>
                         <div class="form-item full">
                             <label>描述</label>
-                            <textarea v-model="form.description" class="form-textarea" placeholder="简单描述这个 Agent 的用途..."
-                                rows="2" :disabled="isSystemAgent" />
+                            <t-textarea v-model="form.description" placeholder="简单描述这个 Agent 的用途..."
+                                :autosize="{ minRows: 2 }" :disabled="isSystemAgent" />
                         </div>
                     </div>
                 </section>
@@ -229,11 +228,10 @@ const goChat = () => {
                     <div class="form-grid">
                         <div class="form-item">
                             <label>LLM 模型</label>
-                            <select v-model="form.llmModelId" class="form-input">
-                                <option v-for="opt in modelOptions" :key="opt.value" :value="opt.value">
-                                    {{ opt.label }}
-                                </option>
-                            </select>
+                            <t-select v-model="form.llmModelId" placeholder="选择模型">
+                                <t-option v-for="opt in modelOptions" :key="opt.value" :value="opt.value"
+                                    :label="opt.label" />
+                            </t-select>
                             <p class="form-hint">
                                 选择你在「模型管理」中添加的模型；选「Ollama 本地」则使用本地默认模型。
                             </p>
@@ -256,8 +254,8 @@ const goChat = () => {
                         系统提示词 (System Prompt)
                         <span class="section-hint">告诉 Agent 它是谁、应该怎么回答</span>
                     </h2>
-                    <textarea v-model="form.systemPrompt" class="form-textarea prompt" placeholder="你是一个..." rows="6"
-                        :disabled="isSystemAgent" />
+                    <t-textarea v-model="form.systemPrompt" placeholder="你是一个..."
+                        :autosize="{ minRows: 6, maxRows: 20 }" :disabled="isSystemAgent" />
                 </section>
 
                 <!-- 知识库 -->
@@ -270,8 +268,9 @@ const goChat = () => {
                         暂无可用知识库，请先在知识库页面创建
                     </div>
                     <div v-else class="resource-grid">
-                        <button v-for="kb in resources.knowledgeBases" :key="kb.id" class="resource-card"
-                            :class="{ active: form.knowledgeBaseIds.includes(kb.id) }" @click="toggleKB(kb.id)">
+                        <div v-for="kb in resources.knowledgeBases" :key="kb.id" class="resource-card" role="button"
+                            tabindex="0" :class="{ active: form.knowledgeBaseIds.includes(kb.id) }"
+                            @click="toggleKB(kb.id)">
                             <div class="resource-icon">
                                 <t-icon name="library" />
                             </div>
@@ -280,7 +279,7 @@ const goChat = () => {
                                 <span class="resource-meta">{{ kb.documentCount }} 文档 · {{ kb.chunkCount }} 分块</span>
                             </div>
                             <t-icon v-if="form.knowledgeBaseIds.includes(kb.id)" name="check" class="resource-check" />
-                        </button>
+                        </div>
                     </div>
                 </section>
 
@@ -294,8 +293,9 @@ const goChat = () => {
                         暂无已发布工作流，请先在工作空间创建并发布
                     </div>
                     <div v-else class="resource-grid">
-                        <button v-for="wf in resources.workflows" :key="wf.id" class="resource-card"
-                            :class="{ active: form.workflowIds.includes(wf.id) }" @click="toggleWorkflow(wf.id)">
+                        <div v-for="wf in resources.workflows" :key="wf.id" class="resource-card" role="button"
+                            tabindex="0" :class="{ active: form.workflowIds.includes(wf.id) }"
+                            @click="toggleWorkflow(wf.id)">
                             <div class="resource-icon">
                                 <t-icon name="flow" />
                             </div>
@@ -307,7 +307,7 @@ const goChat = () => {
                                 <span class="resource-meta">{{ wf.description ?? "已发布工作流" }}</span>
                             </div>
                             <t-icon v-if="form.workflowIds.includes(wf.id)" name="check" class="resource-check" />
-                        </button>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -367,12 +367,7 @@ const goChat = () => {
 <style scoped lang="less">
 @import "../../styles/variables.less";
 
-.agent-detail {
-    padding: @space-6 @space-10;
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
+/* ---------- 详情页头部 ---------- */
 .detail-header {
     display: flex;
     align-items: center;
@@ -385,25 +380,6 @@ const goChat = () => {
         display: flex;
         flex-direction: column;
         gap: @space-3;
-    }
-
-    .back-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 10px;
-        border: none;
-        background: transparent;
-        color: @color-text-secondary;
-        font-size: @font-sm;
-        cursor: pointer;
-        border-radius: @radius-md;
-        width: fit-content;
-
-        &:hover {
-            background: @color-bg-hover;
-            color: @primary;
-        }
     }
 
     .agent-title-row {
@@ -449,7 +425,7 @@ const goChat = () => {
     }
 
     .agent-name {
-        font-size: 22px;
+        font-size: @font-xl;
         font-weight: 700;
         margin: 0;
     }
@@ -460,7 +436,7 @@ const goChat = () => {
         gap: @space-2;
 
         .agent-type {
-            font-size: 12px;
+            font-size: @font-xs;
             color: @color-text-tertiary;
         }
     }
@@ -471,49 +447,14 @@ const goChat = () => {
     }
 }
 
-.action-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: @space-1;
-    padding: @space-2 @space-4;
-    border: 1px solid @color-border;
-    border-radius: @radius-md;
-    font-size: @font-sm;
-    cursor: pointer;
-    transition: all @duration-fast;
-
-    &.secondary {
-        background: transparent;
-        color: @color-text-secondary;
-
-        &:hover {
-            background: @color-bg-hover;
-            color: @color-text;
-        }
-    }
-
-    &.primary {
-        background: @primary;
-        color: #fff;
-        border-color: @primary;
-
-        &:hover:not(:disabled) {
-            background: @primary-hover;
-        }
-
-        &:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-    }
-}
-
+/* ---------- 双栏布局 ---------- */
 .detail-body {
     display: grid;
     grid-template-columns: 1fr 320px;
     gap: @space-8;
 }
 
+/* ---------- 配置区块（卡片）---------- */
 .config-section {
     background: @color-bg-surface;
     border: 1px solid @color-border;
@@ -528,7 +469,7 @@ const goChat = () => {
 
     &.info {
         .info-value {
-            font-size: 12px;
+            font-size: @font-xs;
         }
     }
 
@@ -554,22 +495,14 @@ const goChat = () => {
     }
 }
 
-.section-title {
-    font-size: @font-sm;
-    font-weight: 600;
-    color: @color-text;
-    margin: 0 0 @space-4;
-    display: flex;
-    align-items: center;
-    gap: @space-2;
-
-    .section-hint {
-        font-size: 12px;
-        font-weight: 400;
-        color: @color-text-tertiary;
-    }
+/* section-title 在全局有定义，这里只补充特有子元素 */
+.section-title .section-hint {
+    font-size: @font-xs;
+    font-weight: 400;
+    color: @color-text-tertiary;
 }
 
+/* ---------- 表单布局 ---------- */
 .form-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -586,48 +519,25 @@ const goChat = () => {
     gap: @space-2;
 
     label {
-        font-size: 12px;
+        font-size: @font-xs;
         font-weight: 500;
         color: @color-text-secondary;
     }
 
     .form-hint {
-        font-size: 11px;
+        font-size: @font-xs;
         color: @color-text-tertiary;
         margin: 0;
     }
 }
 
-.form-input,
-.form-textarea {
-    width: 100%;
-    padding: @space-2 @space-3;
-    border: 1px solid @color-border;
-    border-radius: @radius-md;
-    background: @color-bg-surface;
-    font-size: @font-base;
-    color: @color-text;
-    font-family: inherit;
-    outline: none;
-    transition: all @duration-fast;
-
-    &:focus {
-        border-color: @primary;
-        box-shadow: 0 0 0 3px @primary-glow;
-    }
-
-    &:disabled {
-        background: @color-bg-hover;
-        cursor: not-allowed;
-        color: @color-text-tertiary;
-    }
+/* ---------- 系统提示词等宽字体 ---------- */
+:deep(.t-textarea__inner) {
+    /* 默认等宽字体应用到所有 textarea（系统提示词区块） */
 }
 
-.form-textarea {
-    resize: vertical;
-    min-height: 80px;
-
-    &.prompt {
+.config-section:nth-of-type(3) {
+    :deep(.t-textarea__inner) {
         font-family: "Menlo", "Consolas", monospace;
         font-size: 13px;
         line-height: 1.6;
@@ -642,10 +552,11 @@ const goChat = () => {
 .range-labels {
     display: flex;
     justify-content: space-between;
-    font-size: 11px;
+    font-size: @font-xs;
     color: @color-text-tertiary;
 }
 
+/* ---------- 资源选择卡片 ---------- */
 .resource-grid {
     display: flex;
     flex-direction: column;
@@ -702,7 +613,7 @@ const goChat = () => {
             gap: @space-2;
 
             .resource-version {
-                font-size: 11px;
+                font-size: @font-xs;
                 font-weight: 400;
                 color: @color-text-tertiary;
                 padding: 1px 6px;
@@ -712,7 +623,7 @@ const goChat = () => {
         }
 
         .resource-meta {
-            font-size: 12px;
+            font-size: @font-xs;
             color: @color-text-tertiary;
         }
     }
@@ -733,6 +644,7 @@ const goChat = () => {
     text-align: center;
 }
 
+/* ---------- 基本信息网格 ---------- */
 .info-grid {
     display: flex;
     flex-direction: column;
@@ -745,7 +657,7 @@ const goChat = () => {
     align-items: center;
 
     .info-label {
-        font-size: 12px;
+        font-size: @font-xs;
         color: @color-text-tertiary;
     }
 

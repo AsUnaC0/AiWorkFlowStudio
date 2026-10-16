@@ -264,12 +264,13 @@ onMounted(() => {
 
             <!-- 操作 -->
             <div class="skill-row-actions">
-              <button class="row-action-btn" type="button" title="Edit" @click.stop="openEditDialog(skill)">
-                <t-icon name="edit-1" />
-              </button>
-              <button class="row-action-btn row-action-danger" type="button" title="Delete" @click.stop="openDeleteDialog(skill)">
-                <t-icon name="delete" />
-              </button>
+              <t-button variant="text" shape="square" size="small" @click.stop="openEditDialog(skill)" title="Edit">
+                <template #icon><t-icon name="edit-1" /></template>
+              </t-button>
+              <t-button theme="danger" variant="text" shape="square" size="small" @click.stop="openDeleteDialog(skill)"
+                title="Delete">
+                <template #icon><t-icon name="delete" /></template>
+              </t-button>
             </div>
           </div>
         </div>
@@ -293,8 +294,8 @@ onMounted(() => {
     <!-- 创建 / 编辑 Skill 对话框 -->
     <t-dialog v-model:visible="createDialogVisible" :header="editingSkill ? 'Edit Skill' : 'Create Skill'"
       :confirm-btn="{ content: editingSkill ? 'Save' : 'Create', theme: 'primary', loading: formSaving }"
-      cancel-btn="Cancel" :width="'auto'"
-      :dialog-style="{ minWidth: 'min(880px, 90vw)', maxWidth: '90vw' }" @confirm="submitForm">
+      cancel-btn="Cancel" :width="'auto'" :dialog-style="{ minWidth: 'min(880px, 90vw)', maxWidth: '90vw' }"
+      @confirm="submitForm">
       <t-form layout="vertical" label-align="top" @submit="submitForm">
         <t-form-item label="Name">
           <t-input v-model="formData.name" placeholder="SEO Article Generation" maxlength="200" />
@@ -326,9 +327,9 @@ onMounted(() => {
                 </t-select>
                 <t-input v-model="param.description" class="param-desc" placeholder="description" size="small" />
                 <t-checkbox v-model="param.required" class="param-required">Required</t-checkbox>
-                <button class="param-remove" @click="removeParam(idx)">
-                  <t-icon name="close" size="14px" />
-                </button>
+                <t-button theme="danger" variant="text" shape="square" size="small" @click="removeParam(idx)">
+                  <template #icon><t-icon name="close" /></template>
+                </t-button>
               </div>
             </div>
             <t-button theme="default" variant="outline" size="small" @click="addParam">
@@ -362,41 +363,6 @@ onMounted(() => {
 <style scoped lang="less">
 @import "../../styles/variables.less";
 
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: @space-8;
-  animation: fade-slide-up @duration-normal @ease-out;
-
-  .page-header-info {
-    display: flex;
-    flex-direction: column;
-    gap: @space-1;
-  }
-
-  .page-title {
-    font-size: @font-xxl;
-    font-weight: 700;
-    color: @color-text;
-    letter-spacing: -0.01em;
-    margin: 0;
-  }
-
-  .page-subtitle {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    margin: 0;
-  }
-}
-
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: @space-3;
-  flex-shrink: 0;
-}
-
 /* ========== Skill 列表 ========== */
 .skill-list {
   display: flex;
@@ -420,10 +386,6 @@ onMounted(() => {
     box-shadow: @shadow-sm;
 
     .skill-icon {
-      opacity: 1;
-    }
-
-    .row-action-btn {
       opacity: 1;
     }
 
@@ -533,35 +495,6 @@ onMounted(() => {
     align-items: center;
     gap: @space-1;
     flex-shrink: 0;
-
-    .row-action-btn {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background: transparent;
-      border-radius: @radius-md;
-      color: @color-text-tertiary;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      transition: all @duration-fast;
-
-      &:hover {
-        background: @color-bg-hover;
-        color: @color-text;
-      }
-
-      &.row-action-danger:hover {
-        background: lighten(@color-error, 42%);
-        color: @color-error;
-      }
-    }
-  }
-
-  &:hover .row-action-btn {
-    opacity: 1;
   }
 }
 
@@ -613,62 +546,6 @@ onMounted(() => {
         white-space: nowrap;
       }
     }
-
-    .param-remove {
-      width: 28px;
-      height: 28px;
-      border: none;
-      background: transparent;
-      border-radius: @radius-sm;
-      color: @color-text-tertiary;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-
-      &:hover {
-        background: lighten(@color-error, 42%);
-        color: @color-error;
-      }
-    }
-  }
-}
-
-/* ========== 空状态 ========== */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: @space-16 @space-8;
-  text-align: center;
-  animation: fade-slide-up @duration-normal @ease-out;
-
-  .empty-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: @radius-card;
-    background: @color-bg-hover;
-    color: @color-text-tertiary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: @space-5;
-  }
-
-  .empty-title {
-    font-size: @font-lg;
-    font-weight: 600;
-    color: @color-text;
-    margin: 0 0 @space-2;
-  }
-
-  .empty-desc {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    max-width: 400px;
-    margin: 0 0 @space-6;
   }
 }
 

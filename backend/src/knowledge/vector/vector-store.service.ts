@@ -112,6 +112,50 @@ export class VectorStoreService {
   }
 
   /**
+   * 指定「向量版本物理表」的向量检索。
+   *
+   * 每个向量版本一张表（列固定 vector(dimensions)），因此不同模型/维度
+   * 的向量天然隔离，不会混在同一个检索空间里。
+   * 查询向量必须由**该版本对应的模型**生成，否则维度不符会直接报错。
+   */
+  async vectorSearchInTable(
+    table: string,
+    knowledgeBaseIds: string[],
+    queryVector: number[],
+    topK = 10,
+    threshold = 0.8,
+  ): Promise<VectorHit[]> {
+    if (knowledgeBaseIds.length === 0) return [];
+
+    const vectorString = JSON.stringify(queryVector);
+    // 表名由系统生成（EmbeddingVector_<uuid>），不来自用户输入
+    const sql = `
+      SELECT
+        dc."id"              AS "chunkId",
+        dc."documentId",
+        d."knowledgeBaseId",
+        dc.content,
+        dc.metadata,
+        d."fileName",
+        v."embedding" <=> $1::vector AS distance
+      FROM "${table}" v
+      JOIN "DocumentChunk" dc ON dc."id" = v."chunkId"
+      JOIN "Document" d ON d."id" = dc."documentId"
+      WHERE d."knowledgeBaseId" = ANY($2::text[])
+        AND v."embedding" <=> $1::vector <= $3
+      ORDER BY v."embedding" <=> $1::vector ASC
+      LIMIT $4
+    `;
+    return this.prisma.$queryRawUnsafe<VectorHit[]>(
+      sql,
+      vectorString,
+      knowledgeBaseIds,
+      threshold,
+      topK,
+    );
+  }
+
+  /**
    * 关键词检索 —— PostgreSQL 原生 tsvector 全文检索
    * 用 simple 分词器（兼容中英文，不依赖 zhparser 扩展）。
    */

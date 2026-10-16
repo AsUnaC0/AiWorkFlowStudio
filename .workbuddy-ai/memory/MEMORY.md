@@ -60,6 +60,11 @@
 - 前端表单用 `t-form` 时需 `label-align="top"`；弹窗用 TDesign 自带 footer；行内操作用显式按钮而非 `t-dropdown` + `@click.stop`。
 - **需要缓存的页面**（如聊天页）：路由加 `meta.keepAlive: true`，且页面组件必须 `defineOptions({ name: '与路由 name 一致' })` —— `<keep-alive :include>` 匹配的是**组件 name 而非路由 name**，对不上会**静默失效**。`MainLayout` 的 `cachedViews` 自动从路由 meta 收集，新增缓存页无需改布局文件。缓存页若要恢复滚动位置，须在滚动时持续记录（`onDeactivated` 里读 `scrollTop` 已归零）。
 - 接口返回给前端的对象要显式剥离敏感字段（不要靠前端过滤）。
+- **覆盖第三方组件样式（`:deep()`）前必须先去 node_modules 确认真实类名**：类名写错不会报错，只会静默失效，然后默认样式和自定义样式叠加 → 表现成「样式错乱」，极难排查。
+  查法：`grep -o '\.t-menu[a-z0-9_-]*' node_modules/<pkg>/es/<comp>/style/index.css | sort -u`，或直接读 `es/<comp>/<comp>.mjs` 里的 `classPrefix` 拼接。
+  TDesign Menu 的坑（chat 侧边栏踩过）：根节点是 `.t-default-menu`（**不是** `.t-menu`，`.t-menu` 是内部 `ul`）、菜单项 `.t-menu__item`（不是 `.t-menu-item`）、内容槽 `.t-menu__content`、激活态 `.t-is-active`、折叠态 `.t-default-menu.t-is-collapsed`。
+  且**折叠态会 `display:none` 掉 `.t-menu__item > .t-menu__content`**，自定义内容放进内容槽时会被一起隐藏。
+- 只做前端样式改动时，可复用 `.workbuddy-ai/tmp/sidebar-check/render-check.cjs` 的做法做无头渲染校验：真实组件 CSS + 组件 scoped CSS + 手写 DOM 快照 → 静态 HTML → 本机 Chrome `--headless=new --screenshot` / `--dump-dom` 读计算样式。截图输出必须写在工作区内（写系统 temp 会被沙箱拒绝）。
 
 ### 已知遗留
 - Agent 侧 Skill（`Agent.skillIds`）仍未接入运行时（只有工作流 LLM 节点会注入 Skill instructions）。

@@ -31,15 +31,21 @@
 @color-border-strong: #D4D4D8;
 @color-border-focus: @primary;
 
-/* ---- 字号 ---- */
-@font-xs: 12px;
-@font-sm: 13px;
-@font-base: 14px;
-@font-md: 15px;
-@font-lg: 16px;
-@font-xl: 18px;
-@font-xxl: 20px;
-@font-hero: 28px;
+/* ---- 基础字号 ---- */
+@font-xs: 12px;   /* 辅助信息、角标、时间戳 */
+@font-sm: 13px;   /* 表单标签、次要文本 */
+@font-base: 14px; /* 正文、列表项、卡片内容（基准） */
+@font-md: 15px;   /* 表格表头、卡片标题 */
+@font-lg: 16px;   /* 区块标题（Section） */
+@font-xl: 18px;   /* 二级页面标题 */
+@font-xxl: 20px;  /* 页面主标题 */
+@font-hero: 28px; /* Dashboard 英雄标题、统计数字 */
+
+/* ---- 语义化字号（页面层级）---- */
+@font-page-title: @font-xxl;   /* 所有页面的 .page-title 统一 20px */
+@font-section-title: @font-lg; /* 区块/卡片 .section-title 统一 16px */
+@font-card-title: @font-md;    /* 卡片内标题 15px */
+@font-stat-value: @font-xl;    /* 指标卡数值 18px */
 
 /* ---- 圆角 ---- */
 @radius-sm: 4px;

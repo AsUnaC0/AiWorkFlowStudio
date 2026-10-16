@@ -263,11 +263,7 @@ onMounted(() => {
       <!-- Server 列表 -->
       <template v-else-if="servers.length > 0">
         <div class="server-list">
-          <div
-            v-for="server in servers"
-            :key="server.id"
-            class="server-row"
-          >
+          <div v-for="server in servers" :key="server.id" class="server-row">
             <!-- 图标 -->
             <div class="server-icon" :class="getStatusInfo(server).cls">
               <t-icon name="plugin" />
@@ -320,29 +316,21 @@ onMounted(() => {
 
             <!-- 操作 -->
             <div class="server-row-actions">
-              <t-button
-                size="small"
-                theme="primary"
-                variant="outline"
-                :loading="testingId === server.id"
-                @click.stop="handleTestConnection(server)"
-              >
+              <t-button size="small" theme="primary" variant="outline" :loading="testingId === server.id"
+                @click.stop="handleTestConnection(server)">
                 Test
               </t-button>
-              <t-button
-                size="small"
-                variant="outline"
-                :loading="refreshingId === server.id"
-                @click.stop="handleRefreshTools(server)"
-              >
+              <t-button size="small" variant="outline" :loading="refreshingId === server.id"
+                @click.stop="handleRefreshTools(server)">
                 Refresh
               </t-button>
-              <button class="row-action-btn" type="button" title="Edit" @click.stop="openEditDialog(server)">
+              <t-button variant="text" shape="square" size="small" title="Edit" @click.stop="openEditDialog(server)">
                 <t-icon name="edit-1" />
-              </button>
-              <button class="row-action-btn row-action-danger" type="button" title="Delete" @click.stop="openDeleteDialog(server)">
+              </t-button>
+              <t-button theme="danger" variant="text" shape="square" size="small" title="Delete"
+                @click.stop="openDeleteDialog(server)">
                 <t-icon name="delete" />
-              </button>
+              </t-button>
             </div>
           </div>
         </div>
@@ -363,25 +351,16 @@ onMounted(() => {
     </t-loading>
 
     <!-- 创建 / 编辑 对话框 -->
-    <t-dialog
-      v-model:visible="createDialogVisible"
-      :header="editingServer ? 'Edit MCP Server' : 'Add MCP Server'"
+    <t-dialog v-model:visible="createDialogVisible" :header="editingServer ? 'Edit MCP Server' : 'Add MCP Server'"
       :confirm-btn="{ content: editingServer ? 'Save' : 'Add', theme: 'primary', loading: formSaving }"
-      cancel-btn="Cancel"
-      width="560px"
-      @confirm="submitForm"
-    >
+      cancel-btn="Cancel" width="560px" @confirm="submitForm">
       <t-form layout="vertical" label-align="top" @submit="submitForm">
         <t-form-item label="Name">
           <t-input v-model="formData.name" placeholder="GitHub MCP" maxlength="200" />
         </t-form-item>
         <t-form-item label="Description (optional)">
-          <t-textarea
-            v-model="formData.description"
-            placeholder="GitHub repository management tool"
-            :maxlength="1000"
-            :autosize="{ minRows: 2, maxRows: 4 }"
-          />
+          <t-textarea v-model="formData.description" placeholder="GitHub repository management tool" :maxlength="1000"
+            :autosize="{ minRows: 2, maxRows: 4 }" />
         </t-form-item>
         <t-form-item label="Transport">
           <t-radio-group v-model="formData.transport">
@@ -400,38 +379,23 @@ onMounted(() => {
           </t-select>
         </t-form-item>
         <t-form-item v-if="formData.authType === 'API_KEY'" label="API Key">
-          <t-input
-            v-model="formData.apiKey"
-            type="password"
-            :placeholder="editingServer ? 'Enter new key to update' : 'Your API key'"
-          />
+          <t-input v-model="formData.apiKey" type="password"
+            :placeholder="editingServer ? 'Enter new key to update' : 'Your API key'" />
         </t-form-item>
         <t-form-item v-if="formData.authType === 'BEARER_TOKEN'" label="Bearer Token">
-          <t-input
-            v-model="formData.bearerToken"
-            type="password"
-            :placeholder="editingServer ? 'Enter new token to update' : 'Your bearer token'"
-          />
+          <t-input v-model="formData.bearerToken" type="password"
+            :placeholder="editingServer ? 'Enter new token to update' : 'Your bearer token'" />
         </t-form-item>
-        <t-alert
-          v-if="editingServer && editingServer.hasCredentials"
-          theme="info"
-          class="form-alert"
-          :message="`已保存凭据：${editingServer.credentialPreview || '****'}（留空表示不修改）`"
-        />
+        <t-alert v-if="editingServer && editingServer.hasCredentials" theme="info" class="form-alert"
+          :message="`已保存凭据：${editingServer.credentialPreview || '****'}（留空表示不修改）`" />
         <t-alert v-if="formError" theme="error" :message="formError" class="form-alert" />
       </t-form>
     </t-dialog>
 
     <!-- 删除确认 -->
-    <t-dialog
-      v-model:visible="deleteDialogVisible"
-      header="Delete MCP Server"
-      :confirm-btn="{ content: 'Delete', theme: 'danger', loading: deleting }"
-      cancel-btn="Cancel"
-      width="420px"
-      @confirm="submitDelete"
-    >
+    <t-dialog v-model:visible="deleteDialogVisible" header="Delete MCP Server"
+      :confirm-btn="{ content: 'Delete', theme: 'danger', loading: deleting }" cancel-btn="Cancel" width="420px"
+      @confirm="submitDelete">
       <p class="delete-tip">
         Are you sure you want to delete "{{ deleteTarget?.name }}"? This will disconnect all tools from this server.
       </p>
@@ -441,41 +405,6 @@ onMounted(() => {
 
 <style scoped lang="less">
 @import "../../styles/variables.less";
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: @space-8;
-  animation: fade-slide-up @duration-normal @ease-out;
-
-  .page-header-info {
-    display: flex;
-    flex-direction: column;
-    gap: @space-1;
-  }
-
-  .page-title {
-    font-size: @font-xxl;
-    font-weight: 700;
-    color: @color-text;
-    letter-spacing: -0.01em;
-    margin: 0;
-  }
-
-  .page-subtitle {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    margin: 0;
-  }
-}
-
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: @space-3;
-  flex-shrink: 0;
-}
 
 /* ========== Server 列表 ========== */
 .server-list {
@@ -501,10 +430,6 @@ onMounted(() => {
 
     .server-main .server-name {
       color: @primary;
-    }
-
-    .row-action-btn {
-      opacity: 1;
     }
   }
 
@@ -683,72 +608,6 @@ onMounted(() => {
     align-items: center;
     gap: @space-1;
     flex-shrink: 0;
-
-    .row-action-btn {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background: transparent;
-      border-radius: @radius-md;
-      color: @color-text-tertiary;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      transition: all @duration-fast;
-
-      &:hover {
-        background: @color-bg-hover;
-        color: @color-text;
-      }
-
-      &.row-action-danger:hover {
-        background: lighten(@color-error, 42%);
-        color: @color-error;
-      }
-    }
-  }
-
-  &:hover .row-action-btn {
-    opacity: 1;
-  }
-}
-
-/* ========== 空状态 ========== */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: @space-16 @space-8;
-  text-align: center;
-  animation: fade-slide-up @duration-normal @ease-out;
-
-  .empty-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: @radius-card;
-    background: @color-bg-hover;
-    color: @color-text-tertiary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: @space-5;
-  }
-
-  .empty-title {
-    font-size: @font-lg;
-    font-weight: 600;
-    color: @color-text;
-    margin: 0 0 @space-2;
-  }
-
-  .empty-desc {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    max-width: 400px;
-    margin: 0 0 @space-6;
   }
 }
 

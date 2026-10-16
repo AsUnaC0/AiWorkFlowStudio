@@ -1,7 +1,9 @@
 import { request } from "@/utils/request";
 import { useUserStore } from "@/stores/user";
 import type {
+  CreateEmbeddingVersionRequest,
   CreateKnowledgeBaseRequest,
+  EmbeddingVersion,
   KnowledgeBase,
   UpdateKnowledgeBaseRequest,
 } from "@/types/knowledge";
@@ -138,4 +140,62 @@ export const uploadDocument = async (
 /** 删除文档 */
 export const removeDocument = (id: string): Promise<void> => {
   return request.delete(`/documents/${id}`);
+};
+
+// ===========================================================================
+// 向量版本 / 重新向量化
+// ===========================================================================
+
+/** 列出知识库的全部向量版本（含进度） */
+export const getEmbeddingVersions = (
+  kbId: string,
+): Promise<EmbeddingVersion[]> => {
+  return request.get(`/knowledge-bases/${kbId}/embedding-versions`);
+};
+
+/** 当前生效版本 */
+export const getActiveEmbeddingVersion = (
+  kbId: string,
+): Promise<EmbeddingVersion | null> => {
+  return request.get(`/knowledge-bases/${kbId}/embedding-versions/active`);
+};
+
+/** 创建目标向量版本（不立即生效） */
+export const createEmbeddingVersion = (
+  kbId: string,
+  data: CreateEmbeddingVersionRequest,
+): Promise<EmbeddingVersion> => {
+  return request.post(`/knowledge-bases/${kbId}/embedding-versions`, data);
+};
+
+/** 启动 / 继续重新向量化任务 */
+export const startReEmbed = (
+  kbId: string,
+  versionId: string,
+  retryFailedOnly = false,
+): Promise<{ versionId: string; jobId: string; status: string }> => {
+  return request.post(
+    `/knowledge-bases/${kbId}/embedding-versions/${versionId}/re-embed`,
+    { retryFailedOnly },
+  );
+};
+
+/** 激活指定版本（需已 READY） */
+export const activateEmbeddingVersion = (
+  kbId: string,
+  versionId: string,
+): Promise<EmbeddingVersion> => {
+  return request.post(
+    `/knowledge-bases/${kbId}/embedding-versions/${versionId}/activate`,
+  );
+};
+
+/** 删除历史版本 */
+export const removeEmbeddingVersion = (
+  kbId: string,
+  versionId: string,
+): Promise<{ id: string; deleted: boolean }> => {
+  return request.delete(
+    `/knowledge-bases/${kbId}/embedding-versions/${versionId}`,
+  );
 };

@@ -164,13 +164,8 @@ onMounted(() => {
     <div class="search-section">
       <div class="search-input-wrap">
         <t-icon name="search" class="search-icon" />
-        <t-input
-          v-model="searchKeyword"
-          placeholder="按用户名或邮箱搜索用户..."
-          clearable
-          @input="handleSearch"
-          class="search-input"
-        />
+        <t-input v-model="searchKeyword" placeholder="按用户名或邮箱搜索用户..." clearable @input="handleSearch"
+          class="search-input" />
       </div>
 
       <!-- 搜索结果 -->
@@ -185,13 +180,9 @@ onMounted(() => {
             <div class="user-name">{{ u.username }}</div>
             <div class="user-email">{{ u.email }}</div>
           </div>
-          <t-button
-            size="small"
-            :theme="getSearchAction(u).variant === 'primary' ? 'primary' : 'default'"
-            :disabled="getSearchAction(u).disabled || actionLoading === u.id"
-            :loading="actionLoading === u.id"
-            @click="handleSendRequest(u.id)"
-          >
+          <t-button size="small" :theme="getSearchAction(u).variant === 'primary' ? 'primary' : 'default'"
+            :disabled="getSearchAction(u).disabled || actionLoading === u.id" :loading="actionLoading === u.id"
+            @click="handleSendRequest(u.id)">
             {{ getSearchAction(u).label }}
           </t-button>
         </div>
@@ -200,33 +191,27 @@ onMounted(() => {
 
     <!-- 好友列表 -->
     <t-loading :loading="listLoading" text="加载中..." :delay="200">
-      <!-- Tab 切换 -->
-      <div class="tab-bar">
-        <button
-          class="tab-item"
-          :class="{ active: activeTab === 'friends' }"
-          @click="activeTab = 'friends'"
-        >
-          好友
-          <span class="tab-count">{{ friends.length }}</span>
-        </button>
-        <button
-          class="tab-item"
-          :class="{ active: activeTab === 'received' }"
-          @click="activeTab = 'received'"
-        >
-          待接受
-          <span v-if="pendingReceived.length > 0" class="tab-count">{{ pendingReceived.length }}</span>
-        </button>
-        <button
-          class="tab-item"
-          :class="{ active: activeTab === 'sent' }"
-          @click="activeTab = 'sent'"
-        >
-          已发送
-          <span v-if="pendingSent.length > 0" class="tab-count">{{ pendingSent.length }}</span>
-        </button>
-      </div>
+      <!-- Tab 切换 —— 用 t-tabs 替代 tab-bar -->
+      <t-tabs v-model="activeTab" size="medium" class="friend-tabs">
+        <t-tab-panel value="friends">
+          <template #label>
+            <span class="tab-label">好友</span>
+            <span class="tab-count">{{ friends.length }}</span>
+          </template>
+        </t-tab-panel>
+        <t-tab-panel value="received">
+          <template #label>
+            <span class="tab-label">待接受</span>
+            <span v-if="pendingReceived.length > 0" class="tab-count">{{ pendingReceived.length }}</span>
+          </template>
+        </t-tab-panel>
+        <t-tab-panel value="sent">
+          <template #label>
+            <span class="tab-label">已发送</span>
+            <span v-if="pendingSent.length > 0" class="tab-count">{{ pendingSent.length }}</span>
+          </template>
+        </t-tab-panel>
+      </t-tabs>
 
       <!-- 列表内容 -->
       <div v-if="currentList.length > 0" class="friend-list">
@@ -243,20 +228,12 @@ onMounted(() => {
           <!-- 操作区 -->
           <div class="friend-actions">
             <template v-if="activeTab === 'received'">
-              <t-button
-                size="small"
-                theme="primary"
-                :loading="actionLoading === item.friendshipId"
-                @click="handleAccept(item)"
-              >
+              <t-button size="small" theme="primary" :loading="actionLoading === item.friendshipId"
+                @click="handleAccept(item)">
                 接受
               </t-button>
-              <t-button
-                size="small"
-                variant="outline"
-                :loading="actionLoading === item.friendshipId"
-                @click="handleReject(item)"
-              >
+              <t-button size="small" variant="outline" :loading="actionLoading === item.friendshipId"
+                @click="handleReject(item)">
                 拒绝
               </t-button>
             </template>
@@ -264,13 +241,8 @@ onMounted(() => {
               <span class="pending-hint">等待对方接受...</span>
             </template>
             <template v-else>
-              <t-button
-                size="small"
-                variant="outline"
-                theme="danger"
-                :loading="actionLoading === item.friendshipId"
-                @click="handleRemoveFriend(item)"
-              >
+              <t-button size="small" variant="outline" theme="danger" :loading="actionLoading === item.friendshipId"
+                @click="handleRemoveFriend(item)">
                 删除
               </t-button>
             </template>
@@ -296,32 +268,6 @@ onMounted(() => {
 
 <style scoped lang="less">
 @import "../../styles/variables.less";
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: @space-8;
-
-  .page-header-info {
-    display: flex;
-    flex-direction: column;
-    gap: @space-1;
-  }
-
-  .page-title {
-    font-size: @font-xxl;
-    font-weight: 700;
-    color: @color-text;
-    margin: 0;
-  }
-
-  .page-subtitle {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    margin: 0;
-  }
-}
 
 /* 搜索区 */
 .search-section {
@@ -426,62 +372,44 @@ onMounted(() => {
   &.online {
     background: @color-success;
   }
+
   &.busy {
     background: @color-warning;
   }
+
   &.offline {
     background: @color-text-tertiary;
     opacity: 0.5;
   }
 }
 
-/* Tab */
-.tab-bar {
-  display: flex;
-  gap: @space-1;
+/* ========== t-tabs 穿透样式 ========== */
+.friend-tabs {
   margin-bottom: @space-4;
-  border-bottom: 1px solid @color-border;
-}
 
-.tab-item {
-  display: flex;
-  align-items: center;
-  gap: @space-1;
-  padding: @space-3 @space-4;
-  border: none;
-  background: transparent;
-  font-size: @font-sm;
-  font-weight: 500;
-  color: @color-text-secondary;
-  cursor: pointer;
-  position: relative;
-  transition: color @duration-fast;
+  .tab-label {
+    font-weight: 500;
+  }
 
   .tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 4px;
     font-size: 11px;
     font-weight: 600;
     color: @primary;
     background: @primary-light;
     padding: 1px 6px;
     border-radius: @radius-pill;
+    line-height: 1.2;
   }
 
-  &:hover {
-    color: @color-text;
-  }
-
-  &.active {
-    color: @primary;
-
-    &::after {
-      content: "";
-      position: absolute;
-      bottom: -1px;
-      left: 0;
-      right: 0;
-      height: 2px;
+  /* 激活态 count 颜色随 label 变化（TDesign 默认 active tab 用 primary 色） */
+  :deep(.t-tabs__nav-item.is-active) {
+    .tab-count {
+      color: #fff;
       background: @primary;
-      border-radius: 2px 2px 0 0;
     }
   }
 }
@@ -519,40 +447,5 @@ onMounted(() => {
 .pending-hint {
   font-size: @font-sm;
   color: @color-text-tertiary;
-}
-
-/* 空状态 */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: @space-16 @space-8;
-  text-align: center;
-
-  .empty-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: @radius-card;
-    background: @color-bg-hover;
-    color: @color-text-tertiary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: @space-5;
-  }
-
-  .empty-title {
-    font-size: @font-lg;
-    font-weight: 600;
-    color: @color-text;
-    margin: 0 0 @space-2;
-  }
-
-  .empty-desc {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    margin: 0;
-  }
 }
 </style>

@@ -409,10 +409,18 @@ const loadAgents = async () => {
 
     if (fromQuery) {
       currentAgentId.value = fromQuery;
-    } else if (!currentAgentId.value && agents.value.length > 0) {
-      // 优先选 isDefault 的
+    } else if (
+      currentAgentId.value &&
+      agents.value.some((a) => a.id === currentAgentId.value)
+    ) {
+      // 当前选中的 Agent 仍存在 → 保持不变。
+      // 刷新列表（切回页面 / 新建 Agent）时不要把选中项重置掉。
+    } else if (agents.value.length > 0) {
+      // 未选中，或选中的 Agent 已在别处被删除 → 回退到默认 Agent
       const defaultAgent = agents.value.find((a) => a.isDefault);
       currentAgentId.value = defaultAgent?.id ?? agents.value[0].id;
+    } else {
+      currentAgentId.value = "";
     }
   } catch (err) {
     // 登录失效时拦截器已经统一提示并跳转，这里不再补一条
@@ -819,6 +827,29 @@ const trackScroll = () => {
 /** 首次挂载由 onMounted 负责初始化；onActivated 首次也会触发，需跳过以免重复请求 */
 let activatedOnce = false;
 
+/**
+ * 切回本页时的数据校准。
+ * keep-alive 缓存让组件不会重新挂载，onMounted 也不会再跑，
+ * 因此切走期间在「Agent 管理」页新建 / 删除 / 改名 Agent 后，
+ * 这里的 Agent 列表必须主动重新拉取，否则会一直停留在旧数据。
+ */
+const refreshAfterActivate = async () => {
+  const previousAgentId = currentAgentId.value;
+  await loadAgents();
+
+  // 选中的 Agent 已在别处被删除 → 重置会话上下文，避免展示上一个 Agent 的会话
+  if (currentAgentId.value !== previousAgentId) {
+    if (sending.value) return; // 流式进行中不打断，等本轮结束后由 send 的 finally 校准
+    currentSessionId.value = "";
+    messages.value = [];
+    await loadSessions();
+    return;
+  }
+
+  // 轻量校准会话列表。正在流式输出时不动，避免与 send 的 finally 重复刷新
+  if (currentAgentId.value && !sending.value) await loadSessions();
+};
+
 onActivated(() => {
   if (!activatedOnce) {
     activatedOnce = true;
@@ -837,8 +868,8 @@ onActivated(() => {
     requestAnimationFrame(restore);
   });
 
-  // 轻量校准会话列表。正在流式输出时不动，避免与 send 的 finally 重复刷新
-  if (currentAgentId.value && !sending.value) void loadSessions();
+  // 重新拉取 Agent 列表 + 校准会话列表
+  void refreshAfterActivate();
 });
 
 onMounted(async () => {
@@ -899,86 +930,73 @@ const stepOperation = (step: Record<string, unknown>) =>
 <template>
   <div class="chat-page">
     <!-- Agent 侧边栏 -->
-    <aside class="agent-sidebar" :class="{ collapsed: sidebarCollapsed }">
-      <!-- 折叠按钮 -->
-      <button class="sidebar-toggle" @click="sidebarCollapsed = !sidebarCollapsed">
-        <t-icon :name="sidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
-      </button>
+    <aside class="agent-sidebar">
+      <t-menu class="agent-menu" :collapsed="sidebarCollapsed" :width="['260px', '64px']" theme="light">
 
-      <div v-if="!sidebarCollapsed" class="sidebar-content">
-        <!-- Agent 列表 -->
-        <div class="agent-section">
-          <div class="section-header">
-            <span class="section-title">我的 Agent</span>
-            <button class="create-btn" @click="openCreateDialog()">
-              <t-icon name="add" />
-              <span>新建</span>
-            </button>
-          </div>
+        <!-- 分组 1: 我的 Agent -->
+        <t-menu-group title="我的 Agent">
 
-          <div class="agent-list">
-            <button v-for="agent in agents" :key="agent.id" class="agent-item"
-              :class="{ active: agent.id === currentAgentId }" @click="switchAgent(agent.id)">
+          <t-menu-item v-for="agent in agents" :key="'agent-' + agent.id" :value="'agent-' + agent.id"
+            :class="{ 'is-active': agent.id === currentAgentId }">
+            <div class="agent-item" :class="{ active: agent.id === currentAgentId }" @click="switchAgent(agent.id)">
               <div class="agent-avatar" :class="agent.type.toLowerCase()">
                 <t-icon :name="getAgentTemplate(agent.type)?.icon ?? 'chat'" />
               </div>
-              <div class="agent-info">
+              <div v-if="!sidebarCollapsed" class="agent-info">
                 <div class="agent-name">
-                  {{ agent.name }}
+                  <span class="agent-name-text">{{ agent.name }}</span>
                   <t-tag v-if="isPlatformAssistantAgent(agent)" theme="primary" variant="dark" size="small"
-                    class="default-tag">
-                    平台助理
-                  </t-tag>
-                  <t-tag v-else-if="agent.isDefault" theme="primary" variant="light" size="small" class="default-tag">
-                    默认
-                  </t-tag>
+                    class="default-tag">平台助理</t-tag>
+                  <t-tag v-else-if="agent.isDefault" theme="primary" variant="light" size="small"
+                    class="default-tag">默认</t-tag>
                 </div>
-                <div class="agent-desc">
-                  {{ agent.description || agent.type.toLowerCase() }}
-                </div>
+                <div class="agent-desc">{{ agent.description || agent.type.toLowerCase() }}</div>
               </div>
-              <t-icon v-if="!agent.isDefault" name="delete" class="agent-delete"
-                @click.stop="handleDeleteAgent(agent.id)" />
-            </button>
-
-            <div v-if="agents.length === 0 && !loadingAgents" class="agent-empty">
-              <p>暂无 Agent</p>
-              <button class="create-btn" @click="openCreateDialog()">
-                <t-icon name="add" />
-                <span>创建第一个 Agent</span>
-              </button>
+              <t-button v-if="!agent.isDefault && !sidebarCollapsed" class="agent-delete" variant="text" shape="square"
+                size="small" title="删除 Agent" @click.stop="handleDeleteAgent(agent.id)">
+                <template #icon><t-icon name="delete" /></template>
+              </t-button>
             </div>
-          </div>
-        </div>
+          </t-menu-item>
 
-        <!-- 会话列表 -->
-        <div v-if="currentAgent" class="session-section">
-          <div class="section-header">
-            <span class="section-title">会话</span>
-            <button class="create-btn text-only" @click="createNewSession">
-              <t-icon name="add" />
-            </button>
-          </div>
+          <!-- 空状态（直接放在 group 里，不用 t-menu-item） -->
+          <li v-if="agents.length === 0 && !loadingAgents && !sidebarCollapsed" class="agent-empty">
+            <p>暂无 Agent</p>
+            <t-button theme="primary" size="small" @click="openCreateDialog()">
+              <template #icon><t-icon name="add" /></template>创建第一个 Agent
+            </t-button>
+          </li>
+        </t-menu-group>
 
-          <div class="session-list">
-            <div v-for="session in sessions" :key="session.id" class="session-item"
-              :class="{ active: session.id === currentSessionId }">
+        <!-- 分组 2: 会话（只有选中 agent 且未折叠时显示） -->
+        <t-menu-group v-if="currentAgent && !sidebarCollapsed" title="会话">
+          <template #title>
+            <div class="section-header">
+              <span>会话</span>
+              <t-button variant="text" shape="square" size="small" @click="createNewSession">
+                <template #icon><t-icon name="add" /></template>
+              </t-button>
+            </div>
+          </template>
+          <t-menu-item v-for="session in sessions" :key="'session-' + session.id" :value="'session-' + session.id"
+            :class="{ 'is-active': session.id === currentSessionId }">
+            <div class="session-item" :class="{ active: session.id === currentSessionId }">
               <button class="session-main" @click="switchSession(session.id)">
-                <t-icon name="chat" class="session-icon" />
+                <!-- <t-icon name="chat" class="session-icon" /> -->
                 <span class="session-title">{{ session.title }}</span>
                 <span class="session-time">{{ formatTime(session.updatedAt) }}</span>
               </button>
-              <button class="session-delete" title="删除会话" @click="handleDeleteSession(session.id)">
-                <t-icon name="close" />
-              </button>
+              <t-button class="session-delete" variant="text" shape="square" size="small" title="删除会话"
+                @click.stop="handleDeleteSession(session.id)">
+                <template #icon><t-icon name="close" /></template>
+              </t-button>
             </div>
-
-            <div v-if="sessions.length === 0 && !loadingSessions" class="session-empty">
-              暂无会话，开始你的第一条消息吧
-            </div>
-          </div>
-        </div>
-      </div>
+          </t-menu-item>
+          <li v-if="sessions.length === 0 && !loadingSessions" class="session-empty">
+            暂无会话，开始你的第一条消息吧
+          </li>
+        </t-menu-group>
+      </t-menu>
     </aside>
 
     <!-- 聊天主体 -->
@@ -986,9 +1004,9 @@ const stepOperation = (step: Record<string, unknown>) =>
       <!-- Agent 头部信息 -->
       <header v-if="currentAgent" class="chat-header">
         <div class="header-left">
-          <div class="agent-avatar lg" :class="currentAgent.type.toLowerCase()">
+          <!-- <div class="agent-avatar lg" :class="currentAgent.type.toLowerCase()">
             <t-icon :name="getAgentTemplate(currentAgent.type)?.icon ?? 'chat'" />
-          </div>
+          </div> -->
           <div class="agent-meta">
             <h2 class="agent-title">
               {{ currentAgent.name }}
@@ -998,6 +1016,12 @@ const stepOperation = (step: Record<string, unknown>) =>
               <t-tag v-else-if="currentAgent.isDefault" theme="primary" variant="light" size="small">
                 默认
               </t-tag>
+
+              <span class="model-chip" :title="modelTitle">
+                <t-icon name="server" />
+                {{ displayModel }}
+              </span>
+
             </h2>
             <p class="agent-desc-sm">
               {{ currentAgent.description || currentAgent.type.toLowerCase() }}
@@ -1021,10 +1045,6 @@ const stepOperation = (step: Record<string, unknown>) =>
             <span>操作记录</span>
           </button>
 
-          <span class="model-chip" :title="modelTitle">
-            <t-icon name="server" />
-            {{ displayModel }}
-          </span>
           <button v-if="currentSessionId" class="new-chat-btn" @click="createNewSession">
             <t-icon name="add" />
             <span>新对话</span>
@@ -1050,15 +1070,9 @@ const stepOperation = (step: Record<string, unknown>) =>
                   <t-icon :name="sending ? 'loading' : 'send'" :spin="sending" />
                 </button>
               </div>
-              <ChatAttachmentBar
-                v-if="currentAgentId"
-                :attachments="pendingAttachments"
-                :disabled="sending || uploading"
-                @add="addFiles"
-                @remove="removePendingAttachment"
-                @preview="openAttachmentPreview"
-                @download="handleDownloadAttachment"
-              />
+              <ChatAttachmentBar v-if="currentAgentId" :attachments="pendingAttachments"
+                :disabled="sending || uploading" @add="addFiles" @remove="removePendingAttachment"
+                @preview="openAttachmentPreview" @download="handleDownloadAttachment" />
             </div>
           </div>
         </div>
@@ -1067,11 +1081,7 @@ const stepOperation = (step: Record<string, unknown>) =>
       <!-- 有消息后：标准聊天布局 -->
       <template v-else>
         <div class="chat-layout">
-          <div
-            ref="chatContainerRef"
-            class="chat-messages"
-            @scroll.passive="trackScroll"
-          >
+          <div ref="chatContainerRef" class="chat-messages" @scroll.passive="trackScroll">
             <div v-for="msg in messages" :key="msg.id" class="message-item" :class="msg.role">
               <div class="message-avatar">
                 <template v-if="msg.role === 'user'">👤</template>
@@ -1158,45 +1168,24 @@ const stepOperation = (step: Record<string, unknown>) =>
                 </div>
 
                 <!-- 用户随消息上传的附件（随上下文交给 AI 解析） -->
-                <div
-                  v-if="msg.role === 'user' && msg.attachments && msg.attachments.length"
-                  class="msg-attachments"
-                >
-                  <div
-                    v-for="att in msg.attachments"
-                    :key="att.id"
-                    class="msg-att"
+                <div v-if="msg.role === 'user' && msg.attachments && msg.attachments.length" class="msg-attachments">
+                  <div v-for="att in msg.attachments" :key="att.id" class="msg-att"
                     :class="[att.status.toLowerCase(), { clickable: att.status === 'READY' }]"
-                    @click="att.status === 'READY' && openAttachmentPreview(att)"
-                  >
-                    <t-icon
-                      :name="fileIcon(att.extension)"
-                      :style="{ color: fileColor(att.extension) }"
-                    />
+                    @click="att.status === 'READY' && openAttachmentPreview(att)">
+                    <t-icon :name="fileIcon(att.extension)" :style="{ color: fileColor(att.extension) }" />
                     <span class="msg-att-name">{{ att.originalName }}</span>
                     <span v-if="att.status !== 'READY'" class="msg-att-status">{{
                       att.status === "FAILED" ? "解析失败" : "解析中"
-                    }}</span>
-                    <t-icon
-                      v-if="att.status === 'READY'"
-                      name="download"
-                      class="msg-att-dl"
-                      title="下载"
-                      @click.stop="handleDownloadAttachment(att)"
-                    />
+                      }}</span>
+                    <t-icon v-if="att.status === 'READY'" name="download" class="msg-att-dl" title="下载"
+                      @click.stop="handleDownloadAttachment(att)" />
                   </div>
                 </div>
 
                 <!-- 生成的文件卡片（Agent generate_file 产出，可预览 / 下载） -->
                 <div v-if="msg.files && msg.files.length > 0" class="file-list">
-                  <GeneratedFileCard
-                    v-for="file in msg.files"
-                    :key="file.id"
-                    compact
-                    :file="file"
-                    @preview="openPreview"
-                    @download="handleDownloadFile"
-                  />
+                  <GeneratedFileCard v-for="file in msg.files" :key="file.id" compact :file="file"
+                    @preview="openPreview" @download="handleDownloadFile" />
                 </div>
               </div>
             </div>
@@ -1211,15 +1200,9 @@ const stepOperation = (step: Record<string, unknown>) =>
                   <t-icon :name="sending ? 'loading' : 'send'" :spin="sending" />
                 </button>
               </div>
-              <ChatAttachmentBar
-                v-if="currentAgentId"
-                :attachments="pendingAttachments"
-                :disabled="sending || uploading"
-                @add="addFiles"
-                @remove="removePendingAttachment"
-                @preview="openAttachmentPreview"
-                @download="handleDownloadAttachment"
-              />
+              <ChatAttachmentBar v-if="currentAgentId" :attachments="pendingAttachments"
+                :disabled="sending || uploading" @add="addFiles" @remove="removePendingAttachment"
+                @preview="openAttachmentPreview" @download="handleDownloadAttachment" />
             </div>
           </div>
         </div>
@@ -1230,10 +1213,7 @@ const stepOperation = (step: Record<string, unknown>) =>
     <FilePreviewDrawer v-model:visible="previewVisible" :file="activeFile" />
 
     <!-- 聊天附件预览抽屉（与生成文件使用不同的后端接口） -->
-    <ChatFilePreviewDrawer
-      v-model:visible="chatFilePreviewVisible"
-      :attachment="activeAttachment"
-    />
+    <ChatFilePreviewDrawer v-model:visible="chatFilePreviewVisible" :attachment="activeAttachment" />
 
     <!-- 平台操作记录（审计）：平台助理做过的真实操作，可按资源追溯 -->
     <t-drawer v-model:visible="operationsVisible" header="平台操作记录" size="520px" :footer="false">
@@ -1268,30 +1248,30 @@ const stepOperation = (step: Record<string, unknown>) =>
       <div class="create-agent-form">
         <div class="form-item">
           <label>选择类型</label>
-          <div class="template-grid">
-            <button v-for="tpl in AGENT_TEMPLATES" :key="tpl.type" class="template-card"
-              :class="{ active: creatingAgent.type === tpl.type }" @click="creatingAgent.type = tpl.type">
-              <t-icon :name="tpl.icon" />
-              <div class="tpl-info">
-                <span class="tpl-label">{{ tpl.label }}</span>
-                <span class="tpl-desc">{{ tpl.description }}</span>
+          <t-radio-group v-model="creatingAgent.type" variant="default-filled">
+            <t-radio v-for="tpl in AGENT_TEMPLATES" :key="tpl.type" :value="tpl.type">
+              <div class="template-card">
+                <t-icon :name="tpl.icon" class="tpl-icon" />
+                <div class="tpl-info">
+                  <span class="tpl-label">{{ tpl.label }}</span>
+                  <span class="tpl-desc">{{ tpl.description }}</span>
+                </div>
               </div>
-            </button>
-          </div>
+            </t-radio>
+          </t-radio-group>
         </div>
 
         <div class="form-item">
           <label>Agent 名称</label>
-          <input v-model="creatingAgent.name" type="text" class="form-input"
+          <t-input v-model="creatingAgent.name" type="text"
             :placeholder="getAgentTemplate(creatingAgent.type)?.defaultName" maxlength="50" />
         </div>
 
         <div class="form-item">
           <label>描述（可选）</label>
-          <textarea v-model="creatingAgent.description" class="form-textarea" placeholder="帮助我分析销售数据并生成结论。" rows="2"
+          <t-textarea v-model="creatingAgent.description" placeholder="帮助我分析销售数据并生成结论。" :autosize="{ minRows: 2 }"
             maxlength="200" />
         </div>
-
       </div>
     </t-dialog>
   </div>
@@ -1309,123 +1289,164 @@ const stepOperation = (step: Record<string, unknown>) =>
 }
 
 // ===========================================================================
-// Agent 侧边栏
+// Agent 侧边栏（基于 t-menu + t-menu-group）
 // ===========================================================================
 
 .agent-sidebar {
-  width: 280px;
   flex-shrink: 0;
+  height: 100%;
+  position: relative;
   background: @color-bg-surface;
   border-right: 1px solid @color-border;
-  display: flex;
-  flex-direction: column;
-  transition: width @duration-normal @ease-standard;
-  position: relative;
+  overflow: visible;
 
-  &.collapsed {
-    width: 0;
-    overflow: visible;
+  .sidebar-toggle {
+    position: absolute;
+    top: 10px;
+    right: -14px;
+    z-index: 10;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid @color-border;
+    background: @color-bg-surface;
+    color: @color-text-tertiary;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    transition: all @duration-fast;
 
-    .sidebar-content {
-      display: none;
+    &:hover {
+      color: @primary;
+      border-color: @primary;
+      box-shadow: @shadow-sm;
     }
   }
-}
 
-.sidebar-toggle {
-  position: absolute;
-  top: 12px;
-  right: -14px;
-  z-index: 10;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 1px solid @color-border;
-  background: @color-bg-surface;
-  color: @color-text-tertiary;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  transition: all @duration-fast;
+  :deep(.t-default-menu) {
+    height: 100%;
+    background: transparent;
+    border-right: none;
 
-  &:hover {
-    color: @primary;
-    border-color: @primary;
-    box-shadow: @shadow-sm;
+    .t-default-menu__inner {
+      height: 100%;
+    }
+
+    // ---- 顶部 logo 区（只承载折叠按钮）----
+    .t-menu__logo {
+      height: 48px;
+      min-height: 48px;
+      padding: 0;
+      border-bottom: 1px solid @color-border;
+
+      // TDesign 默认给 logo 的直接子元素 24px 左边距，清零
+      >* {
+        margin-left: 0;
+      }
+    }
+
+    // ---- 可滚动列表 ----
+    .t-menu {
+      flex: 1;
+      min-height: 0;
+      // 左右留 8px，让菜单项的 hover 底色不贴边、圆角可见
+      background: transparent;
+      overflow-x: hidden;
+    }
+
+    .t-menu-group__title {
+      padding: 0;
+      background: transparent;
+
+      // 折叠态那条分隔线不需要，由 .section-header 自己呈现
+      &::after {
+        display: none;
+      }
+    }
+
+    // ---- 菜单项：视觉完全交给内部自定义元素 ----
+    .t-menu__item {
+      height: auto;
+      line-height: normal;
+      padding: 0;
+      border-radius: 0;
+      background: transparent !important;
+      text-align: left;
+      transition: none;
+
+      // 干掉 TDesign 的 hover / active 底色与文字色（含左侧指示条）
+      &:hover:not(.t-is-disabled),
+      &.t-is-active:not(.t-is-opened) {
+        background: transparent !important;
+        color: inherit !important;
+
+        .t-icon {
+          color: inherit !important;
+        }
+      }
+
+      // 没有使用 icon 槽，隐藏 TDesign 预留的图标占位
+      >.t-icon {
+        display: none;
+      }
+
+      .t-menu__item-link {
+        display: none;
+      }
+
+      // 内容槽：取消 TDesign 的 ellipsis 裁剪，交回给 .agent-info / .session-title
+      >.t-menu__content {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        overflow: visible;
+        white-space: normal;
+        text-overflow: clip;
+      }
+
+      // TDesign 会给菜单项里的 .t-icon 加 margin/尺寸，会顶歪头像里的图标
+      .t-icon {
+        margin-right: 0;
+      }
+    }
+
+
   }
 }
 
-.sidebar-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: @space-3;
-  display: flex;
-  flex-direction: column;
-  gap: @space-4;
-}
-
+// 分组标题（「我的 Agent」/「会话」）：由 slot 里的 .section-header 自己撑起留白，
+// 因此上面已把 .t-menu-group__title 的 padding 清零
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: @space-2;
+  width: 100%;
+  box-sizing: border-box;
 
-  .section-title {
+  >span {
     font-size: 11px;
     font-weight: 600;
     color: @color-text-tertiary;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
-
-  .create-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    padding: 3px 8px;
-    border: 1px solid @color-border;
-    border-radius: @radius-pill;
-    background: transparent;
-    color: @color-text-secondary;
-    font-size: 11px;
-    cursor: pointer;
-    transition: all @duration-fast;
-
-    &:hover {
-      background: @primary-light;
-      color: @primary;
-      border-color: @primary;
-    }
-
-    &.text-only {
-      border: none;
-      padding: 2px;
-    }
-  }
 }
 
-// Agent 列表
-.agent-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
+// Agent 菜单项内自定义内容
 .agent-item {
   display: flex;
   align-items: center;
   gap: @space-2;
   padding: @space-2 @space-3;
   border-radius: @radius-md;
-  background: transparent;
-  border: none;
   cursor: pointer;
   width: 100%;
-  text-align: left;
+  min-width: 0;
   transition: all @duration-fast;
-  position: relative;
+  box-sizing: border-box;
 
   &:hover {
     background: @color-bg-hover;
@@ -1435,65 +1456,71 @@ const stepOperation = (step: Record<string, unknown>) =>
     background: @primary-light;
   }
 
-  .agent-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: @radius-md;
-    background: @color-bg-hover;
-    color: @color-text-secondary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    flex-shrink: 0;
+  // .agent-avatar {
+  //   width: 32px;
+  //   height: 32px;
+  //   border-radius: @radius-md;
+  //   background: @color-bg-hover;
+  //   color: @color-text-secondary;
+  //   display: flex;
+  //   align-items: center;
+  //   justify-content: center;
+  //   font-size: 16px;
+  //   flex-shrink: 0;
 
-    &.general {
-      background: rgba(99, 102, 241, 0.1);
-      color: #6366f1;
-    }
+  //   &.general {
+  //     background: rgba(99, 102, 241, 0.1);
+  //     color: #6366f1;
+  //   }
 
-    &.knowledge {
-      background: rgba(34, 197, 94, 0.1);
-      color: #22c55e;
-    }
+  //   &.knowledge {
+  //     background: rgba(34, 197, 94, 0.1);
+  //     color: #22c55e;
+  //   }
 
-    &.workflow {
-      background: rgba(249, 115, 22, 0.1);
-      color: #f97316;
-    }
+  //   &.workflow {
+  //     background: rgba(249, 115, 22, 0.1);
+  //     color: #f97316;
+  //   }
 
-    &.tool {
-      background: rgba(236, 72, 153, 0.1);
-      color: #ec4899;
-    }
+  //   &.tool {
+  //     background: rgba(236, 72, 153, 0.1);
+  //     color: #ec4899;
+  //   }
 
-    &.custom {
-      background: rgba(139, 92, 246, 0.1);
-      color: #8b5cf6;
-    }
+  //   &.custom {
+  //     background: rgba(139, 92, 246, 0.1);
+  //     color: #8b5cf6;
+  //   }
 
-    &.lg {
-      width: 40px;
-      height: 40px;
-      font-size: 20px;
-      border-radius: @radius-lg;
-    }
-  }
+  //   &.lg {
+  //     width: 40px;
+  //     height: 40px;
+  //     font-size: 20px;
+  //     border-radius: @radius-lg;
+  //   }
+  // }
 
   .agent-info {
     flex: 1;
     min-width: 0;
 
     .agent-name {
-      font-size: @font-sm;
-      font-weight: 600;
-      color: @color-text;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
       display: flex;
       align-items: center;
       gap: 4px;
+      min-width: 0;
+      font-size: @font-sm;
+      font-weight: 600;
+      color: @color-text;
+    }
+
+    // 名称文本单独用 span 包裹才能正确省略号（flex 容器上的 text-overflow 不生效）
+    .agent-name-text {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
 
     .agent-desc {
@@ -1505,20 +1532,36 @@ const stepOperation = (step: Record<string, unknown>) =>
     }
   }
 
-  .agent-delete {
-    font-size: 12px;
-    color: @color-text-tertiary;
-    opacity: 0;
-    transition: opacity @duration-fast;
-
-    .agent-item:hover & {
-      opacity: 1;
-    }
-  }
-
   .default-tag {
     flex-shrink: 0;
   }
+
+  // 删除按钮：不参与压缩，避免长名称把它挤变形
+  .agent-delete {
+    flex-shrink: 0;
+    margin-right: -@space-1;
+    color: @color-text-tertiary;
+    opacity: 0;
+    // 隐藏时不可点击，避免点到「看不见的删除」
+    pointer-events: none;
+    transition: opacity @duration-fast;
+
+    &:hover {
+      color: @color-error;
+    }
+  }
+
+  &:hover .agent-delete,
+  &.active .agent-delete {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+// 折叠态（.t-is-collapsed 挂在 t-menu 根节点上）：菜单项里只剩头像，居中显示
+.agent-sidebar .t-is-collapsed .agent-item {
+  justify-content: center;
+  padding: @space-2;
 }
 
 .agent-empty {
@@ -1529,44 +1572,18 @@ const stepOperation = (step: Record<string, unknown>) =>
   display: flex;
   flex-direction: column;
   gap: @space-3;
-
-  .create-btn {
-    margin: 0 auto;
-    display: inline-flex;
-    align-items: center;
-    gap: @space-1;
-    padding: @space-2 @space-3;
-    background: @primary;
-    color: #fff;
-    border: none;
-    border-radius: @radius-md;
-    font-size: @font-sm;
-    cursor: pointer;
-  }
+  align-items: center;
 }
 
-// 会话列表
-.session-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.session-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-}
-
+// 会话菜单项内自定义内容
 .session-item {
   display: flex;
   align-items: center;
   border-radius: @radius-md;
-  background: transparent;
   transition: all @duration-fast;
   position: relative;
+  width: 100%;
+  box-sizing: border-box;
 
   .session-main {
     display: flex;
@@ -1576,17 +1593,14 @@ const stepOperation = (step: Record<string, unknown>) =>
     border: none;
     background: transparent;
     cursor: pointer;
-    width: 100%;
+    // 与右侧删除按钮并排，必须用 flex 而不是 width:100%，否则会把按钮挤出容器
+    flex: 1;
+    min-width: 0;
     text-align: left;
   }
 
   &:hover {
     background: @color-bg-hover;
-
-    .session-delete {
-      opacity: 1;
-      pointer-events: auto;
-    }
 
     .session-time {
       opacity: 0;
@@ -1595,11 +1609,6 @@ const stepOperation = (step: Record<string, unknown>) =>
 
   &.active {
     background: @color-bg-hover;
-
-    .session-delete {
-      opacity: 1;
-      pointer-events: auto;
-    }
 
     .session-time {
       opacity: 0;
@@ -1628,32 +1637,24 @@ const stepOperation = (step: Record<string, unknown>) =>
     transition: opacity @duration-fast;
   }
 
-  .session-delete {
-    opacity: 0;
-    pointer-events: none;
-    flex-shrink: 0;
-    width: 22px;
-    height: 22px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: transparent;
-    border-radius: @radius-sm;
-    color: @color-text-tertiary;
-    cursor: pointer;
-    margin-right: 4px;
-    transition: all @duration-fast;
+  // .session-delete {
+  //   flex-shrink: 0;
+  //   margin-right: @space-1;
+  //   color: @color-text-tertiary;
+  //   opacity: 0;
+  //   // 隐藏时不可点击，避免点到「看不见的删除」
+  //   pointer-events: none;
+  //   transition: opacity @duration-fast;
 
-    &:hover {
-      background: rgba(239, 68, 68, 0.1);
-      color: #ef4444;
-      opacity: 1 !important;
-    }
+  //   &:hover {
+  //     color: @color-error;
+  //   }
+  // }
 
-    .t-icon {
-      font-size: 12px;
-    }
+  &:hover .session-delete,
+  &.active .session-delete {
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 
@@ -1679,7 +1680,7 @@ const stepOperation = (step: Record<string, unknown>) =>
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: @space-4 @space-8;
+  padding: @space-4;
   border-bottom: 1px solid @color-border;
   background: @color-bg-surface;
   flex-shrink: 0;
@@ -1888,7 +1889,6 @@ const stepOperation = (step: Record<string, unknown>) =>
 .message-item {
   display: flex;
   gap: @space-4;
-  max-width: 800px;
   margin: 0 auto;
   width: 100%;
   animation: fade-slide-up @duration-normal @ease-out;
@@ -2317,8 +2317,8 @@ const stepOperation = (step: Record<string, unknown>) =>
 
 .chat-input-bottom {
   padding: @space-4 @space-12 @space-8;
-  max-width: 800px;
-  margin: 0 auto;  width: 100%;
+  margin: 0 auto;
+  width: 100%;
   flex-shrink: 0;
 }
 
@@ -2344,7 +2344,8 @@ const stepOperation = (step: Record<string, unknown>) =>
     }
   }
 
-  .template-grid {
+  /* t-radio-group 内的模板卡片 */
+  :deep(.t-radio-group) {
     display: flex;
     flex-direction: column;
     gap: @space-2;
@@ -2356,24 +2357,10 @@ const stepOperation = (step: Record<string, unknown>) =>
     gap: @space-3;
     padding: @space-3;
     border: 1px solid @color-border;
-    border-radius: @radius-lg;
+    border-radius: @radius-md;
     background: transparent;
-    cursor: pointer;
-    text-align: left;
-    transition: all @duration-fast;
 
-    &:hover {
-      border-color: @primary;
-      background: @primary-light;
-    }
-
-    &.active {
-      border-color: @primary;
-      background: @primary-light;
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-    }
-
-    >t-icon {
+    .tpl-icon {
       font-size: 18px;
       color: @color-text-secondary;
       flex-shrink: 0;
@@ -2397,30 +2384,6 @@ const stepOperation = (step: Record<string, unknown>) =>
         line-height: 1.4;
       }
     }
-  }
-
-  .form-input,
-  .form-textarea {
-    width: 100%;
-    padding: @space-2 @space-3;
-    border: 1px solid @color-border;
-    border-radius: @radius-md;
-    background: @color-bg-surface;
-    font-size: @font-base;
-    color: @color-text;
-    font-family: inherit;
-    outline: none;
-    transition: all @duration-fast;
-
-    &:focus {
-      border-color: @primary;
-      box-shadow: 0 0 0 3px @primary-glow;
-    }
-  }
-
-  .form-textarea {
-    resize: vertical;
-    min-height: 60px;
   }
 }
 </style>

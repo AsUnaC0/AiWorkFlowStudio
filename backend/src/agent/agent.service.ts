@@ -15,6 +15,7 @@ import type {
   ToolDefinition,
 } from '../ai/ai-provider.interface';
 import { parseToolArguments } from '../ai/tool-args.util';
+import { normalizeContentToString } from '../ai/content.util';
 import { toErrorCode } from '../common/error-code.util';
 import { LlmConfigService } from '../llm-config/llm-config.service';
 import { McpService } from '../mcp/mcp.service';
@@ -449,18 +450,24 @@ export class AgentService {
       this.platformAssistant.isPlatformAssistant(agent);
     let chatBackend: AiProvider = this.aiService.getProvider();
     let chatModel = agent.model;
+    // 模型是否支持流式（STREAM）。默认 true：未明确绑定模型（本地 Ollama 等兜底路径）
+    // 一律视为支持流式。仅当用户绑定的模型（含平台助理默认模型）明确缺少 STREAM 能力时，
+    // 才降级为一次性非流式 chat，避免向服务商发起 SSE 请求触发 1212 类限制。
+    let supportsStream = true;
     if (agent.llmModelId) {
       const runtime = await this.llmConfigService.resolveModelRuntime(
         agent.llmModelId,
       );
       chatBackend = runtime.provider;
       chatModel = runtime.modelId;
+      supportsStream = runtime.capabilities.includes('STREAM');
     } else if (isPlatformAssistant) {
       const preferred =
         await this.llmConfigService.resolveUserDefaultChatModel(userId);
       if (preferred) {
         chatBackend = preferred.provider;
         chatModel = preferred.modelName;
+        supportsStream = preferred.capabilities.includes('STREAM');
       }
     }
 
@@ -658,11 +665,18 @@ export class AgentService {
       let fullContent = '';
       const streamStart = Date.now();
       try {
-        for await (const token of chatBackend.streamChat(
-          currentMessages,
-          chatOptions,
-        )) {
-          fullContent += token;
+        if (supportsStream) {
+          for await (const token of chatBackend.streamChat(
+            currentMessages,
+            chatOptions,
+          )) {
+            fullContent += token;
+            yield { type: 'message', content: fullContent };
+          }
+        } else {
+          // 模型不支持流式：改用一次性非流式 chat，避免触发服务商 SSE 限制（如 1212）
+          const res = await chatBackend.chat(currentMessages, chatOptions);
+          fullContent = res.content;
           yield { type: 'message', content: fullContent };
         }
         await this.recordAgentCall(telemetry, chatBackend, {
@@ -736,35 +750,38 @@ export class AgentService {
           yield { type: 'message', content: result.content };
         }
 
-        // 用 streamChat 重新流式输出，用户能看到真正的打字机效果
-        // 把最终 content 逐步累积 yield 给前端
-        let streamedContent = '';
-        const restreamStart = Date.now();
-        try {
-          for await (const token of chatBackend.streamChat(
-            currentMessages,
-            chatOptions,
-          )) {
-            streamedContent += token;
-            yield { type: 'message', content: streamedContent };
+        // 用 streamChat 重新流式输出，用户能看到真正的打字机效果（仅当模型支持流式）。
+        // 不支持流式的模型：直接采用 chatWithTools 已返回的内容，避免二次调用 LLM
+        // 并触发服务商 SSE 限制（如 1212）。
+        let finalContent = result.content;
+        if (supportsStream) {
+          let streamedContent = '';
+          const restreamStart = Date.now();
+          try {
+            for await (const token of chatBackend.streamChat(
+              currentMessages,
+              chatOptions,
+            )) {
+              streamedContent += token;
+              yield { type: 'message', content: streamedContent };
+            }
+            await this.recordAgentCall(telemetry, chatBackend, {
+              model: chatModel,
+              latencyMs: Date.now() - restreamStart,
+              status: 'SUCCESS',
+            });
+          } catch (e) {
+            await this.recordAgentCall(telemetry, chatBackend, {
+              model: chatModel,
+              latencyMs: Date.now() - restreamStart,
+              status: 'FAILED',
+              errorCode: toErrorCode(e),
+              errorMessage: e instanceof Error ? e.message : String(e),
+            });
+            throw e;
           }
-          await this.recordAgentCall(telemetry, chatBackend, {
-            model: chatModel,
-            latencyMs: Date.now() - restreamStart,
-            status: 'SUCCESS',
-          });
-        } catch (e) {
-          await this.recordAgentCall(telemetry, chatBackend, {
-            model: chatModel,
-            latencyMs: Date.now() - restreamStart,
-            status: 'FAILED',
-            errorCode: toErrorCode(e),
-            errorMessage: e instanceof Error ? e.message : String(e),
-          });
-          throw e;
+          finalContent = streamedContent || result.content;
         }
-
-        const finalContent = streamedContent || result.content;
         if (options.sessionId && finalContent) {
           await this.persistAssistantMessage(
             options.sessionId,
@@ -788,7 +805,7 @@ export class AgentService {
           data: {
             sessionId: options.sessionId,
             role: 'assistant',
-            content: result.content || '',
+            content: normalizeContentToString(result.content),
             toolCalls: result.toolCalls as any,
           },
         });
@@ -962,11 +979,15 @@ export class AgentService {
     trail: Array<Record<string, unknown>>,
     files: GeneratedFileRef[],
   ) {
+    // 兜底：模型可能返回「多模态内容块数组」（如图像生成返回 [{ url }]），
+    // 而 content 列是 String，必须归一化后再落库，否则 Prisma 会报
+    // "Argument `content`: Invalid value provided. Expected String, provided Object."
+    const safeContent = normalizeContentToString(content);
     const message = await this.prisma.chatMessage.create({
       data: {
         sessionId,
         role: 'assistant',
-        content,
+        content: safeContent,
         trail: trail.length > 0 ? (trail as any) : undefined,
       },
     });

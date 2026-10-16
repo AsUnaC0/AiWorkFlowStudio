@@ -462,9 +462,10 @@ onBeforeUnmount(() => {
                 members
               </div>
             </div>
-            <button class="ws-delete-btn" @click.stop="openDeleteConfirm(ws)" title="删除 Workspace">
-              <t-icon name="delete" />
-            </button>
+            <t-button variant="text" shape="square" size="small" class="ws-delete-btn"
+              @click.stop="openDeleteConfirm(ws)" title="删除 Workspace">
+              <template #icon><t-icon name="delete" /></template>
+            </t-button>
             <t-icon name="chevron-right" class="row-arrow" />
           </div>
         </div>
@@ -594,15 +595,17 @@ onBeforeUnmount(() => {
                   恢复
                 </t-button>
 
-                <button class="wf-rename-btn" @click.stop="openWfRenameDialog(wf)" title="重命名工作流">
-                  <t-icon name="edit" />
-                </button>
-                <button class="run-btn" @click.stop="openWorkflow(wf)" title="编辑工作流">
-                  <t-icon name="edit-1" />
-                </button>
-                <button class="wf-delete-btn" @click.stop="openWfDeleteConfirm(wf)" title="删除工作流">
-                  <t-icon name="delete" />
-                </button>
+                <t-button variant="text" shape="square" size="small" @click.stop="openWfRenameDialog(wf)"
+                  title="重命名工作流">
+                  <template #icon><t-icon name="edit" /></template>
+                </t-button>
+                <t-button theme="primary" shape="square" size="small" @click.stop="openWorkflow(wf)" title="编辑工作流">
+                  <template #icon><t-icon name="edit-1" /></template>
+                </t-button>
+                <t-button theme="danger" variant="text" shape="square" size="small"
+                  @click.stop="openWfDeleteConfirm(wf)" title="删除工作流">
+                  <template #icon><t-icon name="delete" /></template>
+                </t-button>
                 <t-icon name="chevron-right" class="row-arrow" />
               </div>
             </div>
@@ -642,7 +645,8 @@ onBeforeUnmount(() => {
              带 .prevent 修饰符会因对象上没有 preventDefault 而报错 -->
         <t-form layout="vertical" label-align="top" @submit="handleRenameWorkflow">
           <t-form-item label="Workflow Name">
-            <t-input v-model="wfRenameInput" placeholder="Customer Support AI" :maxlength="100" @enter="handleRenameWorkflow" />
+            <t-input v-model="wfRenameInput" placeholder="Customer Support AI" :maxlength="100"
+              @enter="handleRenameWorkflow" />
           </t-form-item>
           <t-alert v-if="wfRenameError" theme="error" :message="wfRenameError" class="form-alert" />
         </t-form>
@@ -659,8 +663,8 @@ onBeforeUnmount(() => {
       </t-dialog>
 
       <!-- 邀请好友对话框：只需要一个「关闭」，用自带的取消按钮 -->
-      <t-dialog v-model:visible="inviteDialogVisible" header="邀请好友加入 Workspace" :confirm-btn="null"
-        cancel-btn="关闭" width="480px">
+      <t-dialog v-model:visible="inviteDialogVisible" header="邀请好友加入 Workspace" :confirm-btn="null" cancel-btn="关闭"
+        width="480px">
         <div class="invite-dialog-body">
           <t-loading :loading="friendsLoading" text="加载中..." :delay="200">
             <t-alert v-if="acceptedFriends.length === 0" theme="warning" :message="'还没有已接受的好友，先去好友页面添加吧'" />
@@ -692,46 +696,19 @@ onBeforeUnmount(() => {
 <style scoped lang="less">
 @import "../../styles/variables.less";
 
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: @space-8;
-  animation: fade-slide-up @duration-normal @ease-out;
+/* workspace 特有的 page-back 返回链接 */
+.page-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: @font-sm;
+  color: @color-text-tertiary;
+  cursor: pointer;
+  padding: 4px 0;
+  transition: color @duration-fast;
 
-  .page-header-info {
-    display: flex;
-    flex-direction: column;
-    gap: @space-1;
-  }
-
-  .page-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    font-size: @font-sm;
-    color: @color-text-tertiary;
-    cursor: pointer;
-    padding: 4px 0;
-    transition: color @duration-fast;
-
-    &:hover {
-      color: @primary;
-    }
-  }
-
-  .page-title {
-    font-size: @font-xxl;
-    font-weight: 700;
-    color: @color-text;
-    letter-spacing: -0.01em;
-    margin: 0;
-  }
-
-  .page-subtitle {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    margin: 0;
+  &:hover {
+    color: @primary;
   }
 }
 
@@ -762,10 +739,6 @@ onBeforeUnmount(() => {
       background: @primary-light;
     }
 
-    .ws-delete-btn {
-      opacity: 1;
-    }
-
     .row-arrow {
       opacity: 1;
       transform: translateX(2px);
@@ -774,25 +747,17 @@ onBeforeUnmount(() => {
   }
 
   .ws-delete-btn {
-    width: 32px;
-    height: 32px;
-    border: none;
-    background: transparent;
-    border-radius: @radius-md;
-    color: @color-text-tertiary;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
     opacity: 0;
-    transition: all 180ms @ease-standard;
+    transition: opacity 180ms @ease-standard;
     flex-shrink: 0;
 
     &:hover {
-      background: lighten(@color-error, 42%);
       color: @color-error;
     }
+  }
+
+  &:hover .ws-delete-btn {
+    opacity: 1;
   }
 
   .ws-icon {
@@ -854,14 +819,6 @@ onBeforeUnmount(() => {
     .wf-icon {
       background: @primary-light;
       color: @primary;
-    }
-
-    .run-btn {
-      opacity: 1;
-    }
-
-    .wf-delete-btn {
-      opacity: 1;
     }
 
     .row-arrow {
@@ -933,7 +890,7 @@ onBeforeUnmount(() => {
     gap: 6px;
 
     .status-badge {
-      font-size: 11px;
+      font-size: @font-xs;
       font-weight: 600;
       padding: 2px @space-2;
       border-radius: @radius-pill;
@@ -957,7 +914,7 @@ onBeforeUnmount(() => {
     }
 
     .version-badge {
-      font-size: 11px;
+      font-size: @font-xs;
       font-weight: 600;
       padding: 2px 6px;
       border-radius: @radius-pill;
@@ -986,70 +943,6 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: @space-2;
     flex-shrink: 0;
-
-    .run-btn {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background: @primary;
-      color: #fff;
-      border-radius: @radius-md;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      /* 常驻可见：藏在 hover 后面时用户根本发现不了行内还有操作 */
-      opacity: 1;
-      transition: all 180ms @ease-standard;
-
-      &:hover {
-        background: @primary-hover;
-        color: @primary;
-      }
-    }
-
-    .wf-rename-btn {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background: transparent;
-      color: @color-text-tertiary;
-      border-radius: @radius-md;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      opacity: 1;
-      transition: all 180ms @ease-standard;
-
-      &:hover {
-        background: @primary-light;
-        color: @primary;
-      }
-    }
-
-    .wf-delete-btn {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background: transparent;
-      color: @color-text-tertiary;
-      border-radius: @radius-md;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      opacity: 1;
-      transition: all 180ms @ease-standard;
-
-      &:hover {
-        background: lighten(@color-error, 42%);
-        color: @color-error;
-      }
-    }
   }
 }
 
@@ -1060,43 +953,6 @@ onBeforeUnmount(() => {
   transform: translateX(-2px);
   transition: all 180ms @ease-standard;
   font-size: 16px;
-}
-
-/* ========== 空状态 ========== */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: @space-16 @space-8;
-  text-align: center;
-  animation: fade-slide-up @duration-normal @ease-out;
-
-  .empty-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: @radius-card;
-    background: @color-bg-hover;
-    color: @color-text-tertiary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: @space-5;
-  }
-
-  .empty-title {
-    font-size: @font-lg;
-    font-weight: 600;
-    color: @color-text;
-    margin: 0 0 @space-2;
-  }
-
-  .empty-desc {
-    font-size: @font-sm;
-    color: @color-text-secondary;
-    max-width: 360px;
-    margin: 0 0 @space-6;
-  }
 }
 
 /* ========== 删除确认对话框 ========== */
@@ -1117,13 +973,6 @@ onBeforeUnmount(() => {
 }
 
 /* ========== 成员展示区 ========== */
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: @space-3;
-  flex-shrink: 0;
-}
-
 .members-bar {
   display: flex;
   align-items: center;

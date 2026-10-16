@@ -6,9 +6,15 @@ import {
   getDocuments,
   removeDocument,
   uploadDocument,
+  getEmbeddingVersions,
+  createEmbeddingVersion,
+  startReEmbed,
+  activateEmbeddingVersion,
+  removeEmbeddingVersion,
   type DocumentItem,
 } from "@/api/knowledge";
-import { MessagePlugin } from "tdesign-vue-next";
+import { getLlmModels, type LlmModel } from "@/api/provider";
+import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
 
 const route = useRoute();
 const router = useRouter();
@@ -42,6 +48,173 @@ const loadKBInfo = async () => {
   } finally {
     kbLoading.value = false;
   }
+};
+
+// ===========================================================================
+// 向量模型配置 / 重新向量化
+//
+// 切换模型不会直接改现有向量：建新版本 → 后台重新向量化 → 校验通过后手动激活，
+// 旧版本保留可回滚，保证「配置里的模型」和「实际参与检索的向量」始终一致。
+// ===========================================================================
+
+interface EmbeddingVersionItem {
+  id: string;
+  knowledgeBaseId: string;
+  modelId: string;
+  llmModelId: string | null;
+  dimensions: number;
+  vectorTable: string;
+  status: string;
+  isActive: boolean;
+  chunkTotal: number;
+  chunkDone: number;
+  chunkFailed: number;
+  error: string | null;
+  activatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const versions = ref<EmbeddingVersionItem[]>([]);
+const versionsLoading = ref(false);
+const embeddingModels = ref<LlmModel[]>([]);
+const targetModelId = ref("");
+const creatingVersion = ref(false);
+const startingReEmbed = ref(false);
+
+const activeVersion = computed(
+  () => versions.value.find((v) => v.isActive) ?? null,
+);
+
+const versionStatusMeta: Record<
+  string,
+  { text: string; theme: "default" | "primary" | "success" | "warning" | "danger" }
+> = {
+  PENDING: { text: "待处理", theme: "warning" },
+  PROCESSING: { text: "处理中", theme: "primary" },
+  READY: { text: "就绪", theme: "success" },
+  FAILED: { text: "有失败项", theme: "danger" },
+  ARCHIVED: { text: "已归档", theme: "default" },
+};
+
+const versionProgress = (v: EmbeddingVersionItem) =>
+  v.chunkTotal > 0 ? Math.round((v.chunkDone / v.chunkTotal) * 100) : 0;
+
+const embeddingModelOptions = computed(() =>
+  embeddingModels.value.map((m) => ({
+    value: m.id,
+    label: `${m.displayName || m.modelId}${
+      m.embeddingDimensions ? ` · ${m.embeddingDimensions} 维` : ""
+    }`,
+  })),
+);
+
+const versionColumns = [
+  { colKey: "modelId", title: "模型", width: 220 },
+  { colKey: "dimensions", title: "维度", width: 90 },
+  { colKey: "status", title: "状态", width: 110 },
+  { colKey: "progress", title: "向量化进度", width: 220 },
+  { colKey: "isActive", title: "生效", width: 90 },
+  { colKey: "activatedAt", title: "激活时间", width: 170 },
+  { colKey: "actions", title: "操作", width: 220 },
+];
+
+const loadVersions = async () => {
+  versionsLoading.value = true;
+  try {
+    versions.value = await getEmbeddingVersions(kbId.value);
+  } catch {
+    versions.value = [];
+  } finally {
+    versionsLoading.value = false;
+  }
+};
+
+const loadEmbeddingModels = async () => {
+  try {
+    embeddingModels.value = await getLlmModels("EMBEDDING");
+  } catch {
+    embeddingModels.value = [];
+  }
+};
+
+/** 建目标版本（不生效），随后由用户点「开始重新向量化」 */
+const onCreateTargetVersion = async () => {
+  if (!targetModelId.value) {
+    MessagePlugin.warning("请选择目标向量模型");
+    return;
+  }
+  creatingVersion.value = true;
+  try {
+    await createEmbeddingVersion(kbId.value, {
+      llmModelId: targetModelId.value,
+    });
+    MessagePlugin.success("目标版本已创建，请点击「开始重新向量化」");
+    await loadVersions();
+  } catch {
+    /* 错误提示由拦截器处理 */
+  } finally {
+    creatingVersion.value = false;
+  }
+};
+
+const onStartReEmbed = async (v: EmbeddingVersionItem, retryFailedOnly = false) => {
+  startingReEmbed.value = true;
+  try {
+    await startReEmbed(kbId.value, v.id, retryFailedOnly);
+    MessagePlugin.success("已提交后台任务，完成后才能激活该版本");
+    await Promise.all([loadVersions(), startVersionPolling()]);
+  } catch {
+    /* 错误提示由拦截器处理 */
+  } finally {
+    startingReEmbed.value = false;
+  }
+};
+
+const onActivateVersion = (v: EmbeddingVersionItem) => {
+  const dialog = DialogPlugin.confirm({
+    header: "切换到该向量版本",
+    body: `确定切换到「${v.modelId} · ${v.dimensions} 维」？切换后检索将使用该版本，旧版本保留可回滚。`,
+    confirmBtn: { content: "切换", theme: "primary" },
+    onConfirm: async () => {
+      await activateEmbeddingVersion(kbId.value, v.id);
+      MessagePlugin.success("已切换生效");
+      dialog.destroy();
+      await Promise.all([loadVersions(), loadKBInfo()]);
+    },
+  });
+};
+
+const onDeleteVersion = (v: EmbeddingVersionItem) => {
+  const dialog = DialogPlugin.confirm({
+    header: "删除向量版本",
+    body: `确定删除版本「${v.modelId} · ${v.dimensions} 维」？其向量数据会一并删除，且无法回滚到该版本。`,
+    confirmBtn: { content: "删除", theme: "danger" },
+    onConfirm: async () => {
+      await removeEmbeddingVersion(kbId.value, v.id);
+      MessagePlugin.success("已删除该版本");
+      dialog.destroy();
+      await loadVersions();
+    },
+  });
+};
+
+let versionTimer: number | null = null;
+const startVersionPolling = () => {
+  if (versionTimer !== null) return;
+  versionTimer = window.setInterval(async () => {
+    await loadVersions();
+    const running = versions.value.some(
+      (v) => v.status === "PROCESSING" || v.status === "PENDING",
+    );
+    if (!running) {
+      if (versionTimer !== null) {
+        clearInterval(versionTimer);
+        versionTimer = null;
+      }
+      await loadKBInfo();
+    }
+  }, 3000);
 };
 
 // ===========================================================================
@@ -216,12 +389,21 @@ const columns = [
 // ===========================================================================
 
 onMounted(async () => {
-  await Promise.all([loadKBInfo(), loadDocuments()]);
+  await Promise.all([
+    loadKBInfo(),
+    loadDocuments(),
+    loadVersions(),
+    loadEmbeddingModels(),
+  ]);
   startPolling();
 });
 
 onBeforeUnmount(() => {
   stopPolling();
+  if (versionTimer !== null) {
+    clearInterval(versionTimer);
+    versionTimer = null;
+  }
 });
 </script>
 
@@ -270,6 +452,127 @@ onBeforeUnmount(() => {
               <div class="stat-num">{{ kbInfo.embeddingDimension }}</div>
               <div class="stat-label">向量维度</div>
             </div>
+          </div>
+        </div>
+
+        <!-- 向量模型配置 / 重新向量化 -->
+        <div class="vector-config">
+          <div class="vc-header">
+            <span class="section-title">向量模型配置</span>
+            <span class="vc-sub">切换模型不会改动现有向量：建新版本 → 后台重新向量化 → 校验通过后手动激活，旧版本保留可回滚</span>
+          </div>
+
+          <!-- 当前生效版本 -->
+          <div class="vc-active" v-if="activeVersion">
+            <div class="vc-active-left">
+              <t-icon name="check-circle" class="vc-active-icon" />
+              <div>
+                <div class="vc-active-title">当前生效版本</div>
+                <div class="vc-active-meta">{{ activeVersion.modelId }} · {{ activeVersion.dimensions }} 维</div>
+              </div>
+            </div>
+            <div class="vc-active-right">
+              <t-tag :theme="versionStatusMeta[activeVersion.status].theme" variant="light" size="small">
+                {{ versionStatusMeta[activeVersion.status].text }}
+              </t-tag>
+              <span class="vc-active-progress">已向量化 {{ activeVersion.chunkDone }} / {{ activeVersion.chunkTotal }} 块</span>
+            </div>
+          </div>
+          <div class="vc-active vc-active-warning" v-else>
+            <div class="vc-active-left">
+              <t-icon name="error-circle" class="vc-active-icon" />
+              <div>
+                <div class="vc-active-title">尚未有生效版本</div>
+                <div class="vc-active-meta">请在下方创建并激活一个向量版本，否则检索不可用</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 新建目标版本 -->
+          <div class="vc-create">
+            <span class="vc-create-label">切换为其他向量模型：</span>
+            <t-select
+              v-model="targetModelId"
+              :options="embeddingModelOptions"
+              placeholder="选择目标向量模型（需在「模型管理」中已验证、含「向量化」能力）"
+              filterable
+              class="vc-select"
+            />
+            <t-button theme="primary" :loading="creatingVersion" :disabled="!targetModelId" @click="onCreateTargetVersion">
+              创建目标版本
+            </t-button>
+          </div>
+
+          <!-- 版本列表 -->
+          <div class="vc-versions">
+            <t-table
+              :data="versions"
+              :columns="versionColumns"
+              row-key="id"
+              hover
+              size="medium"
+              :loading="versionsLoading"
+            >
+              <template #modelId="{ row }">
+                <div class="vc-model-cell">
+                  <span class="vc-model-name">{{ row.modelId }}</span>
+                  <span v-if="row.error" class="vc-model-err" :title="row.error">⚠ {{ row.error }}</span>
+                </div>
+              </template>
+
+              <template #dimensions="{ row }">{{ row.dimensions }} 维</template>
+
+              <template #status="{ row }">
+                <t-tag :theme="versionStatusMeta[row.status].theme" variant="light" size="small">
+                  {{ versionStatusMeta[row.status].text }}
+                </t-tag>
+              </template>
+
+              <template #progress="{ row }">
+                <div class="vc-progress-cell">
+                  <t-progress :percentage="versionProgress(row)" :bar-height="6" />
+                  <span class="vc-progress-text">
+                    {{ row.chunkDone }}/{{ row.chunkTotal }} 块
+                    <template v-if="row.chunkFailed"> · 失败 {{ row.chunkFailed }}</template>
+                  </span>
+                </div>
+              </template>
+
+              <template #isActive="{ row }">
+                <t-tag v-if="row.isActive" theme="success" variant="light" size="small">生效中</t-tag>
+                <span v-else class="placeholder">-</span>
+              </template>
+
+              <template #activatedAt="{ row }">
+                {{ row.activatedAt ? formatDate(row.activatedAt) : '-' }}
+              </template>
+
+              <template #actions="{ row }">
+                <t-button
+                  v-if="row.status === 'READY' && !row.isActive"
+                  variant="text" size="small" theme="primary"
+                  @click="onActivateVersion(row)"
+                >激活</t-button>
+                <t-button
+                  v-if="row.status !== 'READY' || row.chunkFailed > 0"
+                  variant="text" size="small"
+                  :loading="startingReEmbed && row.status !== 'READY'"
+                  @click="onStartReEmbed(row, row.chunkFailed > 0)"
+                >{{ row.status === 'READY' ? '重试失败项' : '重新向量化' }}</t-button>
+                <t-button
+                  v-if="!row.isActive"
+                  variant="text" size="small" status="danger"
+                  @click="onDeleteVersion(row)"
+                >删除</t-button>
+              </template>
+            </t-table>
+
+            <t-empty
+              v-if="!versionsLoading && versions.length === 0"
+              type="default"
+              title="还没有向量版本"
+              description="知识库尚未初始化向量数据，请在「切换为其他向量模型」中选择并创建版本"
+            />
           </div>
         </div>
 
@@ -489,6 +792,137 @@ onBeforeUnmount(() => {
       font-size: var(--font-md);
       font-weight: 600;
       color: var(--color-text);
+    }
+  }
+}
+
+// 向量模型配置
+.vector-config {
+  background: var(--color-bg-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+
+  .vc-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: var(--space-4);
+
+    .section-title {
+      font-size: var(--font-md);
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .vc-sub {
+      font-size: var(--font-sm);
+      color: var(--color-text-tertiary);
+    }
+  }
+
+  .vc-active {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-4);
+    background: var(--primary-light);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+
+    .vc-active-left {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+
+      .vc-active-icon {
+        font-size: 22px;
+        color: var(--primary);
+      }
+
+      .vc-active-title {
+        font-size: var(--font-sm);
+        font-weight: 600;
+        color: var(--color-text);
+      }
+
+      .vc-active-meta {
+        font-size: var(--font-sm);
+        color: var(--color-text-tertiary);
+        margin-top: 2px;
+      }
+    }
+
+    .vc-active-right {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+
+      .vc-active-progress {
+        font-size: var(--font-sm);
+        color: var(--color-text-tertiary);
+      }
+    }
+
+    &.vc-active-warning {
+      background: var(--color-warning-light, #fff7e6);
+
+      .vc-active-icon {
+        color: var(--color-warning, #fa8c16);
+      }
+    }
+  }
+
+  .vc-create {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+
+    .vc-create-label {
+      font-size: var(--font-sm);
+      color: var(--color-text);
+      white-space: nowrap;
+    }
+
+    .vc-select {
+      flex: 1;
+      max-width: 420px;
+    }
+  }
+
+  .vc-versions {
+    .vc-model-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+
+      .vc-model-name {
+        font-size: var(--font-sm);
+        font-weight: 500;
+        color: var(--color-text);
+      }
+
+      .vc-model-err {
+        font-size: 11px;
+        color: var(--color-error);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 200px;
+      }
+    }
+
+    .vc-progress-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+
+      .vc-progress-text {
+        font-size: 11px;
+        color: var(--color-text-tertiary);
+      }
     }
   }
 }

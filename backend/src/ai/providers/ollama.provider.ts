@@ -11,6 +11,7 @@ import {
   ToolChatResult,
 } from '../ai-provider.interface';
 import { stringifyToolArguments, parseToolArguments } from '../tool-args.util';
+import { normalizeContentToString } from '../content.util';
 
 const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434';
 
@@ -58,12 +59,12 @@ export class OllamaProvider implements AiProvider {
     }
 
     const data = (await response.json()) as {
-      message?: { content?: string };
+      message?: { content?: unknown };
       eval_count?: number;
       prompt_eval_count?: number;
     };
 
-    const content = data.message?.content ?? '';
+    const content = normalizeContentToString(data.message?.content);
     const promptTokens = data.prompt_eval_count;
     const completionTokens = data.eval_count;
 
@@ -128,11 +129,14 @@ export class OllamaProvider implements AiProvider {
         for (const line of lines) {
           if (!line.trim()) continue;
           const data = JSON.parse(line) as {
-            message?: { content?: string };
+            message?: { content?: unknown };
             done?: boolean;
           };
           const content = data.message?.content;
-          if (content) yield content;
+          if (content != null) {
+            const text = normalizeContentToString(content);
+            if (text) yield text;
+          }
         }
 
         if (done) break;
@@ -202,7 +206,7 @@ export class OllamaProvider implements AiProvider {
 
     const data = (await response.json()) as {
       message?: {
-        content?: string;
+        content?: unknown;
         tool_calls?: Array<{
           id?: string;
           type: 'function';
@@ -226,7 +230,7 @@ export class OllamaProvider implements AiProvider {
     }));
 
     return {
-      content: data.message?.content ?? '',
+      content: normalizeContentToString(data.message?.content),
       toolCalls,
       model: options.model,
       usage:

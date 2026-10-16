@@ -29,6 +29,12 @@ const MODEL_SELECT = {
   modelId: true,
   displayName: true,
   capabilities: true,
+  inputModalities: true,
+  outputModalities: true,
+  embeddingDimensions: true,
+  maxInputTokens: true,
+  isVerified: true,
+  verifiedAt: true,
   isDefault: true,
   enabled: true,
   createdAt: true,
@@ -409,12 +415,15 @@ export class LlmConfigService {
     provider: AiProvider;
     modelId: string;
     providerType: LlmProviderType;
+    /** 模型能力；供调用方判断是否走流式（未包含 STREAM 则应使用非流式 chat） */
+    capabilities: ModelCapability[];
   }> {
     const model = await this.prisma.llmModel.findUniqueOrThrow({
       where: { id: modelId },
       select: {
         id: true,
         modelId: true,
+        capabilities: true,
         config: {
           select: { provider: true, baseUrl: true, encryptedApiKey: true },
         },
@@ -431,7 +440,12 @@ export class LlmConfigService {
       apiKey: plainKey,
     });
 
-    return { provider, modelId: model.modelId, providerType };
+    return {
+      provider,
+      modelId: model.modelId,
+      providerType,
+      capabilities: (model.capabilities ?? []) as ModelCapability[],
+    };
   }
 
   /**
@@ -480,6 +494,7 @@ export class LlmConfigService {
     llmModelId: string;
     modelName: string;
     provider: AiProvider;
+    capabilities: ModelCapability[];
   } | null> {
     const model = await this.prisma.llmModel.findFirst({
       where: {
@@ -498,6 +513,7 @@ export class LlmConfigService {
         llmModelId: model.id,
         modelName: model.modelId,
         provider: runtime.provider,
+        capabilities: runtime.capabilities,
       };
     } catch {
       return null;
@@ -522,9 +538,95 @@ export class LlmConfigService {
           ? { capabilities: dto.capabilities }
           : {}),
         ...(dto.enabled !== undefined ? { enabled: dto.enabled } : {}),
+        ...(dto.inputModalities !== undefined
+          ? { inputModalities: dto.inputModalities }
+          : {}),
+        ...(dto.outputModalities !== undefined
+          ? { outputModalities: dto.outputModalities }
+          : {}),
+        ...(dto.embeddingDimensions !== undefined
+          ? { embeddingDimensions: dto.embeddingDimensions }
+          : {}),
+        ...(dto.maxInputTokens !== undefined
+          ? { maxInputTokens: dto.maxInputTokens }
+          : {}),
       },
       select: MODEL_SELECT,
     });
+  }
+
+  /**
+   * 实测模型能力 —— 不靠模型名猜。
+   *
+   * - 含 EMBEDDING：跑一次真实 embedding，把**实际输出维度**写回 embeddingDimensions；
+   * - 其它：跑一次极短 chat，确认可调用；
+   * - 成功则 isVerified = true / verifiedAt = now()。
+   */
+  async verifyModel(userId: string, modelId: string) {
+    const model = await this.prisma.llmModel.findUnique({
+      where: { id: modelId },
+      select: { id: true, configId: true, modelId: true, capabilities: true },
+    });
+    if (!model) throw new NotFoundException('模型不存在');
+    await this.assertModelOwner(model.configId, userId);
+
+    const { provider } = await this.resolveModelRuntime(modelId);
+    const started = Date.now();
+
+    try {
+      if (model.capabilities.includes('EMBEDDING')) {
+        const res = await provider.embedding(['维度校验'], {
+          model: model.modelId,
+        });
+        const dim = res.embeddings?.[0]?.length ?? 0;
+        if (!dim) {
+          throw new Error('未返回任何向量，无法确定输出维度');
+        }
+        await this.prisma.llmModel.update({
+          where: { id: modelId },
+          data: {
+            embeddingDimensions: dim,
+            isVerified: true,
+            verifiedAt: new Date(),
+          },
+        });
+        return {
+          ok: true,
+          dimensions: dim,
+          latencyMs: Date.now() - started,
+          checked: ['embedding'],
+        };
+      }
+
+      await provider.complete('ping', {
+        model: model.modelId,
+        maxTokens: 16,
+      });
+      await this.prisma.llmModel.update({
+        where: { id: modelId },
+        data: { isVerified: true, verifiedAt: new Date() },
+      });
+      return {
+        ok: true,
+        dimensions: null,
+        latencyMs: Date.now() - started,
+        checked: ['chat'],
+      };
+    } catch (err) {
+      await this.prisma.llmModel.update({
+        where: { id: modelId },
+        data: { isVerified: false },
+      });
+      return {
+        ok: false,
+        dimensions: null,
+        latencyMs: Date.now() - started,
+        checked: model.capabilities.includes('EMBEDDING')
+          ? ['embedding']
+          : ['chat'],
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   /** 设置某模型为用户的默认模型（同一 owner 仅一个默认） */
