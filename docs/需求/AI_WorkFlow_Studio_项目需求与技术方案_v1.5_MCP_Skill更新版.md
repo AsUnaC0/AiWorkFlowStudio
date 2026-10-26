@@ -4,22 +4,22 @@
 
 > 本文档是 AI WorkFlow Studio 的项目主文档。后续开发、讨论、代码生成、架构调整和功能迭代均应以本文档为主要上下文；若需求发生变化，应优先更新本文档中的对应章节。
 >
- > **v1.5 更新说明（MCP / Skill / Agent 交付物）**：新增 Skill 与 MCP 的统一能力接入设计：聊天页面可选择并启用，Workflow 的 LLM 节点可按节点配置授权使用；Agent 可依据任务调用 Skill 与 MCP 工具。报告不再作为独立产品功能或核心资源，统一作为 Agent 的动态输出结果；报告、表格、图表由 Skill 指导组织内容，必要时调用 MCP 工具获取数据或执行生成操作，并在聊天结果区直接渲染，支持可选导出。
+> **v1.5 更新说明（MCP / Skill / Agent 交付物）**：新增 Skill 与 MCP 的统一能力接入设计：聊天页面可选择并启用，Workflow 的 LLM 节点可按节点配置授权使用；Agent 可依据任务调用 Skill 与 MCP 工具。报告不再作为独立产品功能或核心资源，统一作为 Agent 的动态输出结果；报告、表格、图表由 Skill 指导组织内容，必要时调用 MCP 工具获取数据或执行生成操作，并在聊天结果区直接渲染，支持可选导出。
 >
->   v1.4 更新说明：   RAG 节点重新定位为   RAG 节点（完整管线节点）  ，内部集成 Embedding + 向量检索 + LLM 生成，配置项独立且精细（可单独指定 Embedding 模型、检索策略、生成参数等）。同时 LLM 节点的内置知识库配置（简单模式快捷方式）保留不变。两种模式的关系：
+> v1.4 更新说明：   RAG 节点重新定位为   RAG 节点（完整管线节点）  ，内部集成 Embedding + 向量检索 + LLM 生成，配置项独立且精细（可单独指定 Embedding 模型、检索策略、生成参数等）。同时 LLM 节点的内置知识库配置（简单模式快捷方式）保留不变。两种模式的关系：
 >
-> | 模式       | 节点形态          | 适用场景                                                         |
-> | -------- | ------------- | ------------------------------------------------------------ |
-> |   简单模式   | LLM 节点勾选知识库配置 | 快速搭建，使用默认 Embedding 模型和检索参数                                  |
-> |   高级模式   | 独立 RAG 节点     | 精细控制完整 RAG 管线——可独立配置 Embedding 模型、Top K、相似度阈值、检索模式、LLM 生成参数等 |
+> | 模式   | 节点形态          | 适用场景                                                         |
+> | ---- | ------------- | ------------------------------------------------------------ |
+> | 简单模式 | LLM 节点勾选知识库配置 | 快速搭建，使用默认 Embedding 模型和检索参数                                  |
+> | 高级模式 | 独立 RAG 节点     | 精细控制完整 RAG 管线——可独立配置 Embedding 模型、Top K、相似度阈值、检索模式、LLM 生成参数等 |
 >
 > 两种模式式式共享底层 KnowledgeRetrievalService式式。RAG 节点本身就是完整的知识问答节点，执行完 Embedding → 检索 → LLM 生成后直接输出最终答案。
 >
->   v1.3 更新说明：   RAG 能力双模式设计（Retrieval 纯检索节点 + LLM 内置 RAG）。
+> v1.3 更新说明：   RAG 能力双模式设计（Retrieval 纯检索节点 + LLM 内置 RAG）。
 >
->   v1.1.1 更新说明：   将"知识库"从 Workflow 中独立的 RAG 节点，重新定位为 LLM 大模型节点的内置配置项。
+> v1.1.1 更新说明：   将"知识库"从 Workflow 中独立的 RAG 节点，重新定位为 LLM 大模型节点的内置配置项。
 >
->   v1.1.0 更新说明：   明确 Workspace → Workflow 列表 → Workflow Editor 的页面层级；增加好友、Workspace 邀请、公开 Workspace / Workflow 机制；将 Agent 调用已发布 Workflow 确定为后续核心应用链路；重新定位 AI Report 为 Agent 的一种输出能力。
+> v1.1.0 更新说明：   明确 Workspace → Workflow 列表 → Workflow Editor 的页面层级；增加好友、Workspace 邀请、公开 Workspace / Workflow 机制；将 Agent 调用已发布 Workflow 确定为后续核心应用链路；重新定位 AI Report 为 Agent 的一种输出能力。
 
 ***
 
@@ -27,11 +27,7 @@
 
 ### 1.1 项目名称
 
-
-
 AI WorkFlow Studio
-
-
 
 中文名称：：：AI 智能工作流平台：：
 
@@ -43,7 +39,7 @@ AI WorkFlow Studio 是一个面向个人及企业用户的 AI 工作流编排与
 
 核心目标：
 
->   让用户通过拖拽节点的方式，把 AI 能力组合成可重复执行的业务流程。  
+> 让用户通过拖拽节点的方式，把 AI 能力组合成可重复执行的业务流程。
 
 典型使用方式分为两条链路：
 
@@ -128,19 +124,19 @@ AI 分析 / 决策
 
 ## 2.1 前端
 
-| 技术               | 用途             |
-| ---------------- | -------------- |
-| Vue 3            | 前端框架           |
-| Vite             | 构建工具           |
-| TypeScript       | 类型系统           |
-| Less             | CSS 预处理        |
-| Vue Router       | 路由             |
-| Pinia            | 状态管理           |
-| Axios            | HTTP 请求        |
-| TDesign Vue Next | UI 组件          |
-| Vue Flow         | Workflow 可视化画布 |
-| ECharts          | 数据可视化          |
-| Markdown         | AI 文本 / 报告内容展示 |
+| 技术               | 用途                |
+| ---------------- | ----------------- |
+| Vue 3            | 前端框架              |
+| Vite             | 构建工具              |
+| TypeScript       | 类型系统              |
+| Less             | CSS 预处理           |
+| Vue Router       | 路由                |
+| Pinia            | 状态管理              |
+| Axios            | HTTP 请求           |
+| TDesign Vue Next | UI 组件             |
+| Vue Flow         | Workflow 可视化画布    |
+| ECharts          | 数据可视化             |
+| Markdown         | AI 文本 / 报告内容展示    |
 | ECharts          | Agent 结果区图表渲染（复用） |
 
 ### 前端原则
@@ -218,11 +214,7 @@ AI 能力：
 
 优先使用：
 
-
-
 PostgreSQL + pgvector
-
-
 
 用于：
 
@@ -428,10 +420,10 @@ LLM（将 RAG 答案润色成报表格式）
 Report
 ```
 
->   v1.4 双模式说明：   两种模式的核心差异在于   配置的精细程度  ：
+> v1.4 双模式说明：   两种模式的核心差异在于   配置的精细程度  ：
 >
-> -   简单模式  ：在 LLM 节点勾选知识库 → 使用默认 Embedding 模型 + 默认检索参数，快速搭建
-> -   高级模式  ：独立 RAG 节点 → 可独立选择 Embedding 模型、检索模式、Top K、相似度阈值、LLM 模型、Prompt 等全链路参数
+> - 简单模式  ：在 LLM 节点勾选知识库 → 使用默认 Embedding 模型 + 默认检索参数，快速搭建
+> - 高级模式  ：独立 RAG 节点 → 可独立选择 Embedding 模型、检索模式、Top K、相似度阈值、LLM 模型、Prompt 等全链路参数
 > - 两者底层都调用 KnowledgeRetrievalService，执行的完整管线相同
 
 Workflow 由：
@@ -512,9 +504,9 @@ interface WorkflowNode {
 - 分类
 - 信息提取
 - 改写
--   RAG 增强问答（简单模式，推荐新手使用）  
+- RAG 增强问答（简单模式，推荐新手使用）
 
->   v1.3 双模式提示：   本节介绍的是   简单模式  ——在 LLM 节点中直接勾选知识库即可获得 RAG 能力。对于需要精细控制检索流程的高级场景（如检索结果对接 Condition / 多个 LLM 等），请使用独立的   RAG 节点  （见 5.4 节）。两种模式共享同一底层检索服务。
+> v1.3 双模式提示：   本节介绍的是   简单模式  ——在 LLM 节点中直接勾选知识库即可获得 RAG 能力。对于需要精细控制检索流程的高级场景（如检索结果对接 Condition / 多个 LLM 等），请使用独立的   RAG 节点  （见 5.4 节）。两种模式共享同一底层检索服务。
 
 配置：
 
@@ -613,11 +605,11 @@ AI Agent 不作为第一阶段 Workflow 的核心节点。
 
 ## 5.4 RAG 节点（高级模式）
 
->   v1.4 重写：   RAG 节点是是是完整的知识问答节点是是，内部集成 Embedding → 向量检索 → LLM 生成的完整管线。与 LLM 节点的内置知识库配置（简单模式）相比，RAG 节点提供独立且精细的配置面板，适合需要精细控制 RAG 全流程的高级场景。
+> v1.4 重写：   RAG 节点是是是完整的知识问答节点是是，内部集成 Embedding → 向量检索 → LLM 生成的完整管线。与 LLM 节点的内置知识库配置（简单模式）相比，RAG 节点提供独立且精细的配置面板，适合需要精细控制 RAG 全流程的高级场景。
 
 ### 定位
 
-RAG 节点 =   Embedding + 向量检索 + LLM 生成（完整管线）  
+RAG 节点 =   Embedding + 向量检索 + LLM 生成（完整管线）
 
 ```text
 用户问题
@@ -689,13 +681,9 @@ LLM 生成（可独立指定生成模型、Prompt、Temperature 等）
 
 ### 输入 / 输出
 
-
-
 输入：
 
 &#x20;从上游节点获取查询文本（如 `{{input}}`、`{{llm_1.output}}`）
-
-
 
 输出：
 
@@ -739,11 +727,7 @@ Embedding（使用指定的 embeddingModel）
 
 ### 典型编排示例
 
-
-
 示例 1：RAG 独立使用（最简单的知识问答）
-
-
 
 ```text
 Input
@@ -753,11 +737,7 @@ RAG（产品知识库，默认配置）
 Output
 ```
 
-
-
 示例 2：RAG + Condition（无知识时兜底）
-
-
 
 ```text
 Input
@@ -771,17 +751,17 @@ Condition（RAG 输出是否包含"暂未找到"？）
 
 ### 与 LLM 内置 RAG 的选择建议
 
-| 维度               | LLM 内置 RAG（简单模式）              | RAG 独立节点（高级模式）                    |
-| ---------------- | ----------------------------- | --------------------------------- |
-|   学习成本           | 极低，在 LLM 节点勾选即可               | 中，需要理解独立配置面板                      |
-|   Embedding 模型   | 自动使用知识库绑定模型                   | 可独立选择 Embedding 模型                |
-|   检索参数           | 统一默认值（Top K=5, Threshold=0.7） | 精细可配（Top K、Threshold、模式、Token 上限） |
-|   LLM 生成         | 复用 LLM 节点已配置的模型/Prompt        | 在 RAG 面板独立配置，与上游 LLM 解耦           |
-|   适用场景           | 快速原型、简单问答                     | 精细调优 Embedding / 检索 / 生成各环节       |
-|   共享底层           | KnowledgeRetrievalService     | KnowledgeRetrievalService         |
-|   推荐用户           | 新手 / 简单场景                     | 高级用户 / 需要调优 RAG 管线                |
+| 维度           | LLM 内置 RAG（简单模式）              | RAG 独立节点（高级模式）                    |
+| ------------ | ----------------------------- | --------------------------------- |
+| 学习成本         | 极低，在 LLM 节点勾选即可               | 中，需要理解独立配置面板                      |
+| Embedding 模型 | 自动使用知识库绑定模型                   | 可独立选择 Embedding 模型                |
+| 检索参数         | 统一默认值（Top K=5, Threshold=0.7） | 精细可配（Top K、Threshold、模式、Token 上限） |
+| LLM 生成       | 复用 LLM 节点已配置的模型/Prompt        | 在 RAG 面板独立配置，与上游 LLM 解耦           |
+| 适用场景         | 快速原型、简单问答                     | 精细调优 Embedding / 检索 / 生成各环节       |
+| 共享底层         | KnowledgeRetrievalService     | KnowledgeRetrievalService         |
+| 推荐用户         | 新手 / 简单场景                     | 高级用户 / 需要调优 RAG 管线                |
 
->   技术职责清晰划分：   RAG 节点是 all-in-one 的知识问答节点（Embedding → 检索 → LLM 生成都在里面完成），输出最终答案。LLM 内置 RAG 是同一条管线的简化封装——用默认参数替用户省去配置步骤，但底层调用完全一致。
+> 技术职责清晰划分：   RAG 节点是 all-in-one 的知识问答节点（Embedding → 检索 → LLM 生成都在里面完成），输出最终答案。LLM 内置 RAG 是同一条管线的简化封装——用默认参数替用户省去配置步骤，但底层调用完全一致。
 
 ***
 
@@ -871,10 +851,10 @@ contains
 └────────────┴───────────────────────────────┴──────────────────────┘
 ```
 
->   v1.3 双模式说明：  
+> v1.3 双模式说明：
 >
-> -   RAG 节点   作为独立节点出现在节点面板中（高级模式，精细控制检索流程）
-> -   LLM 节点属性面板   中仍内置 "Knowledge Base" 配置区域（简单模式，快速启用 RAG）
+> - RAG 节点   作为独立节点出现在节点面板中（高级模式，精细控制检索流程）
+> - LLM 节点属性面板   中仍内置 "Knowledge Base" 配置区域（简单模式，快速启用 RAG）
 > - 两种模式共享底层 KnowledgeRetrievalService
 
 必须支持：
@@ -966,10 +946,10 @@ contains
 }
 ```
 
->   v1.4 双模式说明：   两种模式并存：
+> v1.4 双模式说明：   两种模式并存：
 >
-> -   简单模式：   `type: "llm"` 的 config 中含 `enableRag` + `knowledgeBaseIds` 等字段，LLM 内部自动调用检索 → 拼接上下文 → 调用生成（调用 KnowledgeRetrievalService）
-> -   高级模式：   独立的 `type: "rag"` 节点，包含完整管线（Embedding → 检索 → LLM 生成），可独立配置 Embedding 模型、检索参数和生成参数，输出最终答案
+> - 简单模式：   `type: "llm"` 的 config 中含 `enableRag` + `knowledgeBaseIds` 等字段，LLM 内部自动调用检索 → 拼接上下文 → 调用生成（调用 KnowledgeRetrievalService）
+> - 高级模式：   独立的 `type: "rag"` 节点，包含完整管线（Embedding → 检索 → LLM 生成），可独立配置 Embedding 模型、检索参数和生成参数，输出最终答案
 >
 > Workflow 引擎在执行时，会根据节点 `type` 分别路由到 `LLMNodeHandler` 或 `RAGNodeHandler`，但两者都依赖同一后端 KnowledgeRetrievalService。
 
@@ -1244,12 +1224,12 @@ interface ParseResult {
 }
 ```
 
-| 格式 | 实现 | 依赖库 |
-|------|------|--------|
-| PDF | `PdfParser` | `pdf-parse` / `pdfjs-dist` |
-| DOCX | `DocxParser` | `mammoth` |
-| TXT | `TxtParser` | `node:fs` 直接读取 |
-| Markdown | `MarkdownParser` | `node:fs` 直接读取 |
+| 格式       | 实现               | 依赖库                        |
+| -------- | ---------------- | -------------------------- |
+| PDF      | `PdfParser`      | `pdf-parse` / `pdfjs-dist` |
+| DOCX     | `DocxParser`     | `mammoth`                  |
+| TXT      | `TxtParser`      | `node:fs` 直接读取             |
+| Markdown | `MarkdownParser` | `node:fs` 直接读取             |
 
 `DocumentParserService` 作为 Parser 路由器，根据文件扩展名自动选择实现。
 
@@ -1269,12 +1249,12 @@ interface ParseResult {
 
 ### Chunk Size
 
-默认 **500 Token / Chunk**（约 300~400 中文字），可按知识库配置调整。
+默认 **500 Token / Chunk**（约 300\~400 中文字），可按知识库配置调整。
 过大影响检索精度，过小丢失上下文。
 
 ### Overlap
 
-相邻 Chunk 之间 **重叠 10%~15%**（默认 80 Token），防止关键信息恰好落在切割边界。
+相邻 Chunk 之间 **重叠 10%\~15%**（默认 80 Token），防止关键信息恰好落在切割边界。
 
 ### Metadata
 
@@ -1300,10 +1280,10 @@ interface ParseResult {
 
 ### Embedding Model
 
-| 模型 | 维度 | 备注 |
-|------|------|------|
-| `nomic-embed-text` (Ollama) | 768 | 中文友好，本地可跑 |
-| `text-embedding-3-small` (OpenAI) | 1536 | 通用，成本低 |
+| 模型                                | 维度   | 备注        |
+| --------------------------------- | ---- | --------- |
+| `nomic-embed-text` (Ollama)       | 768  | 中文友好，本地可跑 |
+| `text-embedding-3-small` (OpenAI) | 1536 | 通用，成本低    |
 
 每个 `KnowledgeBase` 在创建时指定 `embeddingModel`，该库所有 Chunk 使用同一模型，保证向量空间一致。
 
@@ -1377,14 +1357,17 @@ CREATE INDEX idx_document_chunks_embedding
 内部支持三种策略：
 
 ### Vector Search
+
 用户 Query → Embedding → pgvector `ORDER BY embedding <=> query_vector LIMIT K`。
 适用于语义相近但措辞不同的场景。
 
 ### Keyword Search
+
 PostgreSQL `tsvector` / `tsquery` 全文检索，或 Elasticsearch BM25。
 适用于精确关键词匹配（专有名词、编号）。
 
 ### Hybrid Search
+
 **Vector + Keyword 并发执行 → Reciprocal Rank Fusion (RRF) 融合**。
 
 ```
@@ -1435,7 +1418,7 @@ Agent 是平台的上层智能应用能力，不是第一阶段 Workflow 的核�
 
 Agent 的核心职责：
 
->   根据用户需求进行理解、决策，并选择和调用已经配置好的工具能力，最终生成面向用户的结果。  
+> 根据用户需求进行理解、决策，并选择和调用已经配置好的工具能力，最终生成面向用户的结果。
 
 ### Agent 可以调用的能力
 
@@ -1815,7 +1798,7 @@ workspace:settings:update
 
 核心表：
 
-```text
+````text
 users
 workspaces
 workspace_members
@@ -1915,24 +1898,24 @@ model KnowledgeBase {
 
   @@index([workspaceId])
 }
-```
+````
 
 #### documents
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | string | 主键 |
-| knowledgeBaseId | string | 所属知识库 |
-| fileName | string | 原始文件名 |
-| fileType | string | 文件类型（PDF / DOCX / TXT / MD） |
-| fileSize | number | 文件大小（字节） |
-| storagePath | string | 存储路径 |
-| mimeType | string | MIME 类型 |
-| status | enum | UPLOADED / PROCESSING / COMPLETED / FAILED |
-| errorMessage | string | 失败时的错误信息 |
-| pageCount | number | 页数（PDF/DOCX） |
-| createdAt | datetime | 创建时间 |
-| updatedAt | datetime | 更新时间 |
+| 字段              | 类型       | 说明                                         |
+| --------------- | -------- | ------------------------------------------ |
+| id              | string   | 主键                                         |
+| knowledgeBaseId | string   | 所属知识库                                      |
+| fileName        | string   | 原始文件名                                      |
+| fileType        | string   | 文件类型（PDF / DOCX / TXT / MD）                |
+| fileSize        | number   | 文件大小（字节）                                   |
+| storagePath     | string   | 存储路径                                       |
+| mimeType        | string   | MIME 类型                                    |
+| status          | enum     | UPLOADED / PROCESSING / COMPLETED / FAILED |
+| errorMessage    | string   | 失败时的错误信息                                   |
+| pageCount       | number   | 页数（PDF/DOCX）                               |
+| createdAt       | datetime | 创建时间                                       |
+| updatedAt       | datetime | 更新时间                                       |
 
 示例：
 
@@ -1955,17 +1938,17 @@ model KnowledgeBase {
 
 #### document\_chunks
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | string | 主键 |
-| documentId | string | 所属文档 |
-| content | text | Chunk 文本内容 |
-| chunkIndex | number | 在文档中的顺序 |
-| tokenCount | number | Token 数量 |
-| embedding | vector | 向量嵌入（pgvector / Chroma / Qdrant） |
-| metadata | jsonb | 扩展元数据（页码、章节等） |
-| createdAt | datetime | 创建时间 |
-| updatedAt | datetime | 更新时间 |
+| 字段         | 类型       | 说明                               |
+| ---------- | -------- | -------------------------------- |
+| id         | string   | 主键                               |
+| documentId | string   | 所属文档                             |
+| content    | text     | Chunk 文本内容                       |
+| chunkIndex | number   | 在文档中的顺序                          |
+| tokenCount | number   | Token 数量                         |
+| embedding  | vector   | 向量嵌入（pgvector / Chroma / Qdrant） |
+| metadata   | jsonb    | 扩展元数据（页码、章节等）                    |
+| createdAt  | datetime | 创建时间                             |
+| updatedAt  | datetime | 更新时间                             |
 
 示例：
 
@@ -1985,16 +1968,17 @@ model KnowledgeBase {
 }
 ```
 
-> **为什么保留 `metadata` 字段？** RAG 做引用时非常有用——可以告诉用户「根据《员工手册》第 3 页：员工工作时间为 9:00 - 18:00」，而不是只能说「来源：员工手册.pdf」。后续可扩展的字段包括 `section`（章节）、`heading`（标题）、`bbox`（坐标）等。
+> **为什么保留** **`metadata`** **字段？** RAG 做引用时非常有用——可以告诉用户「根据《员工手册》第 3 页：员工工作时间为 9:00 - 18:00」，而不是只能说「来源：员工手册.pdf」。后续可扩展的字段包括 `section`（章节）、`heading`（标题）、`bbox`（坐标）等。
 
 reports
-report_versions
-report_templates
+report\_versions
+report\_templates
 
 files
-api_keys
-audit_logs
-```
+api\_keys
+audit\_logs
+
+````
 
 ### workflow\_node\_runs 扩展元数据（v1.3 补充）
 
@@ -2015,13 +1999,9 @@ RAG 节点特有的运行元数据：
   "ragRetrievalMs": 120,
   "documents": [ ... ]
 }
-```
-
-
+````
 
 LLM 节点（启用 RAG 时）特有的运行元数据：
-
-
 
 ```json
 {
@@ -2120,12 +2100,15 @@ Argon2 / bcrypt
 
 当 Workflow 中的 LLM 节点（简单模式）或 RAG 节点（高级模式）引用 `knowledgeBaseIds` 时，后端必须在在在两个时机在在校验权限：
 
-1.   保存 Workflow 时  （静态校验）
-   - 检查被引用的 Knowledge Base 是否属于当前 Workspace 或被授权访问
-   - 拒绝引用不存在 / 无权限的 Knowledge Base，前端给出明确提示
-2.   执行 Workflow 时  （动态校验）
-   - 再次校验执行时的权限有效性（防止 Workflow 保存后 Knowledge Base 被删除或权限被撤销）
-   - 校验失败则节点标记 FAILED，不执行检索
+1. 保存 Workflow 时  （静态校验）
+
+- 检查被引用的 Knowledge Base 是否属于当前 Workspace 或被授权访问
+- 拒绝引用不存在 / 无权限的 Knowledge Base，前端给出明确提示
+
+1. 执行 Workflow 时  （动态校验）
+
+- 再次校验执行时的权限有效性（防止 Workflow 保存后 Knowledge Base 被删除或权限被撤销）
+- 校验失败则节点标记 FAILED，不执行检索
 
 ```text
 Workflow 执行 LLM/RAG 节点
@@ -2315,10 +2298,10 @@ src/
 - Embedding
 - pgvector
 - 知识库 CRUD（Workspace 级资源）
--   KnowledgeRetrievalService 共享检索服务  （被 LLM Node / RAG 节点 / Agent 复用）
--   LLM 节点内置 RAG 配置（简单模式：enableRag + knowledgeBaseIds + topK + threshold）  
--   RAG 独立节点（高级模式：独立 RAG 节点、输出最终答案）  
--   前端 LLM 属性面板的知识库配置 UI + RAG 节点的属性面板 UI  
+- KnowledgeRetrievalService 共享检索服务  （被 LLM Node / RAG 节点 / Agent 复用）
+- LLM 节点内置 RAG 配置（简单模式：enableRag + knowledgeBaseIds + topK + threshold）
+- RAG 独立节点（高级模式：独立 RAG 节点、输出最终答案）
+- 前端 LLM 属性面板的知识库配置 UI + RAG 节点的属性面板 UI
 
 ***
 
@@ -2674,8 +2657,8 @@ Agent 选择 Skill（可选）
 14. Skill 与 MCP 必须采用明确的授权白名单；模型不能绕过服务端权限。
 15. MCP 调用必须有输入 Schema 校验、超时、错误处理和可审计日志。
 16. Agent 报告 / 图表使用平台定义的结构化输出 Schema，禁止直接执行模型生成的任意代码。
-14. 不为了“看起来功能很多”而过早引入复杂基础设施。
-15. 每完成一个阶段，应保证项目可以运行。
+17. 不为了“看起来功能很多”而过早引入复杂基础设施。
+18. 每完成一个阶段，应保证项目可以运行。
 
 ***
 
@@ -2683,7 +2666,7 @@ Agent 选择 Skill（可选）
 
 以后将本文档提供给 AI 助手时，应将其视为：
 
->   AI WorkFlow Studio 的项目上下文和技术基线。  
+> AI WorkFlow Studio 的项目上下文和技术基线。
 
 AI 助手在修改代码或设计功能前，应先理解：
 
@@ -2816,9 +2799,9 @@ AI 应用 / Skill + MCP 扩展 / 动态输出能力
 
 最终目标：
 
->   这是一个可以真实运行的 AI SaaS，而不是一个单纯展示 AI Chat 的 Demo。  
+> 这是一个可以真实运行的 AI SaaS，而不是一个单纯展示 AI Chat 的 Demo。
 
----
+***
 
 # 30. 平台助理（Platform Assistant）
 
@@ -2833,32 +2816,32 @@ AI 应用 / Skill + MCP 扩展 / 动态输出能力
 用户用自然语言说「帮我建一个 PDF 摘要工作流」，助理自己决定调哪些工具、按什么顺序调，
 最后把结果（含编辑器链接）汇报给用户。
 
-| 维度 | 普通 Agent | 平台助理 |
-|---|---|---|
-| 身份来源 | 用户自己创建 | 系统内置（`isSystem && isDefault`），全平台唯一 |
-| 工具来源 | 用户绑定（工作流 / 知识库 / MCP） | 后端注册的 17 个平台工具 |
-| 模型绑定 | 绑定在 Agent 记录上 | **不绑定**，按每个用户各自的默认对话模型解析 |
-| 能否改库 | 只能通过绑定资源间接操作 | **能**，但必须走业务 Service 且留审计 |
+| 维度   | 普通 Agent              | 平台助理                                |
+| ---- | --------------------- | ----------------------------------- |
+| 身份来源 | 用户自己创建                | 系统内置（`isSystem && isDefault`），全平台唯一 |
+| 工具来源 | 用户绑定（工作流 / 知识库 / MCP） | 后端注册的 17 个平台工具                      |
+| 模型绑定 | 绑定在 Agent 记录上         | **不绑定**，按每个用户各自的默认对话模型解析            |
+| 能否改库 | 只能通过绑定资源间接操作          | **能**，但必须走业务 Service 且留审计           |
 
 ## 30.2 能力清单（17 个工具）
 
-| 分组 | 工具 | 语义动作 | 风险 |
-|---|---|---|---|
-| 用户 | `get_current_user` | QUERY | LOW |
-| 工作空间 | `list_workspaces` | QUERY | LOW |
-| 工作流 | `list_workflows` / `get_workflow_run_history` / `validate_workflow` | QUERY | LOW |
-| 工作流 | `create_workflow_draft` | CREATE | MEDIUM |
-| 工作流 | `run_workflow` | EXECUTE | MEDIUM |
-| 工作流 | `publish_workflow` | EXECUTE | **HIGH** |
-| 知识库 | `list_knowledge_bases` / `get_document_processing_status` | QUERY | LOW |
-| 知识库 | `create_knowledge_base` / `attach_document_to_knowledge_base` | CREATE | MEDIUM |
-| Agent | `list_agents` | QUERY | LOW |
-| Agent | `create_agent` | CREATE | MEDIUM |
-| 概览 | `list_skills` / `list_mcp_servers` / `get_platform_overview` | QUERY | LOW |
+| 分组    | 工具                                                                  | 语义动作    | 风险       |
+| ----- | ------------------------------------------------------------------- | ------- | -------- |
+| 用户    | `get_current_user`                                                  | QUERY   | LOW      |
+| 工作空间  | `list_workspaces`                                                   | QUERY   | LOW      |
+| 工作流   | `list_workflows` / `get_workflow_run_history` / `validate_workflow` | QUERY   | LOW      |
+| 工作流   | `create_workflow_draft`                                             | CREATE  | MEDIUM   |
+| 工作流   | `run_workflow`                                                      | EXECUTE | MEDIUM   |
+| 工作流   | `publish_workflow`                                                  | EXECUTE | **HIGH** |
+| 知识库   | `list_knowledge_bases` / `get_document_processing_status`           | QUERY   | LOW      |
+| 知识库   | `create_knowledge_base` / `attach_document_to_knowledge_base`       | CREATE  | MEDIUM   |
+| Agent | `list_agents`                                                       | QUERY   | LOW      |
+| Agent | `create_agent`                                                      | CREATE  | MEDIUM   |
+| 概览    | `list_skills` / `list_mcp_servers` / `get_platform_overview`        | QUERY   | LOW      |
 
 ## 30.3 四条不可动摇的安全约束
 
-1. **`userId` 只能来自后端已验证的 JWT** —— 工具的入参 Schema 里不存在 userId 字段，
+1. **`userId`** **只能来自后端已验证的 JWT** —— 工具的入参 Schema 里不存在 userId 字段，
    模型在结构上就无法声明「我是谁」。
 2. **不绕过业务 Service 直接改库** —— 每个工具都复用既有的 Service（自带权限校验），
    不另写一套平行的资源管理。
@@ -2889,10 +2872,10 @@ AI 应用 / Skill + MCP 扩展 / 动态输出能力
 
 ## 30.6 已知边界
 
-| 边界 | 说明 |
-|---|---|
-| 不自动发布 | `publish_workflow` 为 HIGH，必须用户确认 |
+| 边界          | 说明                                                                       |
+| ----------- | ------------------------------------------------------------------------ |
+| 不自动发布       | `publish_workflow` 为 HIGH，必须用户确认                                         |
 | 文档转知识库有格式限制 | 只支持 `pdf / docx / txt / md / markdown`，xlsx 与图片不在知识库支持范围内（聊天附件支持，知识库不支持） |
-| 入队成功 ≠ 处理完成 | 文档入队后还要解析 / 分块 / Embedding，工具返回值会明确区分「已排队」与「已完成」 |
-| 视觉能力取决于模型 | 图片能否被「看到」取决于当前模型是否支持视觉输入 |
+| 入队成功 ≠ 处理完成 | 文档入队后还要解析 / 分块 / Embedding，工具返回值会明确区分「已排队」与「已完成」                         |
+| 视觉能力取决于模型   | 图片能否被「看到」取决于当前模型是否支持视觉输入                                                 |
 
