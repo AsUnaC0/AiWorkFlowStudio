@@ -18,7 +18,7 @@
 | 08 | [MCP-Skill-Storage-其他模块](./08-MCP-Skill-Storage-其他模块.md) | McpService / SkillService / StorageService / Workspace / Dashboard / Friendship | MCP Server 怎么被 LLM 调用？Skill 是什么？七牛云怎么切换？Workspace 权限模型是怎样的？ |
 | 09 | [文件生成模块](./09-文件生成模块.md) | FilesService / FileGeneratorService / FileStorageService / FilePreviewService / 5 个生成器 / word.repair | AI 怎么真的产出可下载的 Word/Excel/PDF？预览数据怎么来的？为什么 Word 打不开生成的 docx？ |
 | 10 | [聊天文件上传模块](./10-聊天文件上传模块.md) | ChatFilesService / FileParserService / FileContextService / 6 个解析器 / BullMQ 解析 Worker | 用户上传的 PDF/Word/Excel/图片怎么变成 AI 上下文？附件为什么不上知识库？Redis 挂了还能用吗？ |
-| 11 | [平台助理](./11-平台助理.md) | PlatformAssistantService / PlatformToolsService / 17 个平台工具 / PlatformOperationLog / 聊天页操作卡片 | 默认聊天 Agent 怎么变成「能操作平台」的？模型生成的 JSON 怎么防止直接落库？userId 为什么不可伪造？审计表为什么和 trail 分开？ |
+| 11 | [平台助理](./11-平台助理.md) | PlatformAssistantService / PlatformToolsService / 19 个平台工具 / PlatformOperationLog / 聊天页操作卡片 | 默认聊天 Agent 怎么变成「能操作平台」的？模型生成的 JSON 怎么防止直接落库？userId 为什么不可伪造？审计表为什么和 trail 分开？ |
 
 ---
 
@@ -60,7 +60,7 @@ Agent 侧 Skill 暂缓未接入），详见 **[后端代码逻辑审查报告](.
 | 3 | 08 - Dashboard | 接口数 7 → **10**（新增 `workflow-runs`、`workflow-runs/:runId`、`model-usage`）；`tokenUsage` 由"恒为 0"改为真实值（新增 `ModelCallLog`）；overview 补 `p95DurationMs` / `failedLast24h` / `modelCalls` |
 | 4 | 新增 10 | `backend/src/chat-files/**` 此前**完全没有文档**，补齐「聊天页上传文件对话」模块（上传 → 解析 → 注入上下文 → AI 对话），含 Redis 降级、越权防护、视觉通道三个关键点 |
 | 5 | 04 | `runStream` 初始化阶段补 `attachmentIds` → `resolveForChat` + `fileContext.build` 的附件处理链路；`ChatMessage` 补 `attachments` 关联 |
-| 6 | 新增 11 | `backend/src/assistant/**` + `backend/src/platform-tools/**` 此前**完全没有文档**，补齐平台助理（识别判据 / 动态上下文 / 17 个工具 / 审计表 / 前端卡片） |
+| 6 | 新增 11 | `backend/src/assistant/**` + `backend/src/platform-tools/**` 此前**完全没有文档**，补齐平台助理（识别判据 / 动态上下文 / 19 个工具 / 审计表 / 前端卡片） |
 | 7 | 08 | MCP 章节**整节重写**：按传输 / 连接 / 工具 / 安全分层，补两种 transport 的握手流程、会话缓存、凭据加密、SSRF+DNS 校验；接口数 6 → **9** |
 | 8 | 04 + 08 + README | **修正硬错误**：此前写「Agent 侧 MCP 未接入运行时」，实际 `AgentService` 已注入 `McpService` / `McpToolService` 并在 `runStream` 里加载 bindings。现统一为「MCP ✅ 已接入 / Skill ❌ 仍为预留」 |
 | 9 | 01 | 表清单补 `GeneratedFile` / `ModelCallLog` / `PlatformOperationLog`，数量 15 → **23**；模块树补 `AssistantModule` |

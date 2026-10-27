@@ -285,12 +285,26 @@ const loadChatFilePolicy = async () => {
   }
 };
 
-// Trail 展开控制
-const expandedTrails = ref<Set<string>>(new Set());
-const toggleTrail = (msgId: string) => {
-  if (expandedTrails.value.has(msgId)) expandedTrails.value.delete(msgId);
-  else expandedTrails.value.add(msgId);
+// 处理过程折叠控制
+// 流式中的消息恒为展开（processExpanded），流结束后自动折叠进 expandedProcesses
+const streamingMsgId = ref<string | null>(null);
+const expandedProcesses = ref<Set<string>>(new Set());
+const toggleProcess = (msgId: string) => {
+  if (expandedProcesses.value.has(msgId)) expandedProcesses.value.delete(msgId);
+  else expandedProcesses.value.add(msgId);
 };
+/** 展开判定：流式中的消息始终展开；已完成消息按用户点击状态 */
+const processExpanded = (msg: ChatMessage) =>
+  streamingMsgId.value === msg.id || expandedProcesses.value.has(msg.id);
+/** 只保留 tool_call + operation（过滤 thinking / tool_result / file） */
+const processSteps = (msg: ChatMessage) =>
+  (msg.trail ?? []).filter(
+    (s) => s.type === "tool_call" || s.type === "operation",
+  );
+const hasProcess = (msg: ChatMessage) => processSteps(msg).length > 0;
+/** 步骤数：只统计工具调用，操作卡片随对应工具出现，避免重复计数 */
+const processStepCount = (msg: ChatMessage) =>
+  processSteps(msg).filter((s) => s.type === "tool_call").length;
 
 // 侧边栏折叠
 const sidebarCollapsed = ref(false);
@@ -744,6 +758,7 @@ const send = async () => {
   });
 
   sending.value = true;
+  streamingMsgId.value = assistantMsgId;
   scrollToBottom();
 
   streamAbort = new AbortController();
@@ -770,6 +785,8 @@ const send = async () => {
   } finally {
     streamAbort = null;
     sending.value = false;
+    streamingMsgId.value = null; // 流结束，恢复普通状态
+    expandedProcesses.value.delete(assistantMsgId); // 拿到最终数据 → 自动折叠
     // 消息会在 SSE 过程中被逐步填充
     // 最后刷新一下会话列表更新 updatedAt
     if (!disposed) {
@@ -905,11 +922,6 @@ const formatToolArgs = (args?: Record<string, unknown>) => {
   } catch {
     return String(args);
   }
-};
-const formatToolResult = (result?: string) => {
-  if (!result) return "";
-  if (result.length > 500) return result.slice(0, 500) + "...";
-  return result;
 };
 
 /** 风险等级展示配置（容错：未知等级按只读处理） */
@@ -1095,75 +1107,61 @@ const stepOperation = (step: Record<string, unknown>) =>
                   <span class="message-time">{{ formatTime(msg.createdAt) }}</span>
                 </div>
 
-                <!-- 执行轨迹 trail（只有 assistant 有） -->
-                <div v-if="msg.trail && msg.trail.length > 0" class="trail">
-                  <div v-for="(step, sIdx) in msg.trail" :key="sIdx" class="trail-step" :class="String(step.type)">
-                    <template v-if="step.type === 'thinking'">
-                      <span class="step-icon">💭</span>
-                      <span class="step-text">{{ (step as any).message }}</span>
-                    </template>
+                <!-- 处理过程：单一气泡内的可折叠区块（只有 assistant 且有过程步骤时显示） -->
+                <div v-if="msg.role === 'assistant' && hasProcess(msg)" class="process">
+                  <button class="process-head" :class="{ expanded: processExpanded(msg) }"
+                    @click="toggleProcess(msg.id)">
+                    <t-icon name="chevron-down" class="process-chevron" />
+                    <span v-if="streamingMsgId === msg.id && !msg.content">正在处理…</span>
+                    <span v-else>⚙️ 处理过程（{{ processStepCount(msg) }} 步）</span>
+                    <span v-if="streamingMsgId === msg.id && !msg.content" class="process-breathing">
+                      <i></i><i></i><i></i>
+                    </span>
+                  </button>
+                  <div v-if="processExpanded(msg)" class="process-body">
+                    <div v-for="(step, sIdx) in processSteps(msg)" :key="sIdx" class="process-step"
+                      :class="String(step.type)">
+                      <template v-if="step.type === 'tool_call'">
+                        <span class="step-icon">🔧</span>
+                        <span class="step-text">调用 <code>{{ (step as any).tool }}</code></span>
+                        <pre v-if="(step as any).args" class="tool-args">{{ formatToolArgs((step as any).args) }}</pre>
+                      </template>
 
-                    <template v-else-if="step.type === 'tool_call'">
-                      <span class="step-icon">🔧</span>
-                      <button class="tool-toggle" @click="toggleTrail(msg.id)">
-                        调用 <code>{{ (step as any).tool }}</code>
-                      </button>
-                      <pre v-if="expandedTrails.has(msg.id)"
-                        class="tool-args">{{ formatToolArgs((step as any).args) }}</pre>
-                    </template>
-
-                    <template v-else-if="step.type === 'tool_result'">
-                      <span class="step-icon">✅</span>
-                      <span class="step-text" v-if="(step as any).durationMs">
-                        返回结果（{{ (step as any).durationMs }}ms）
-                      </span>
-                      <button v-else class="tool-toggle" @click="toggleTrail(msg.id)">返回结果</button>
-                      <pre v-if="expandedTrails.has(msg.id)"
-                        class="tool-result">{{ formatToolResult((step as any).result) }}</pre>
-                    </template>
-
-                    <template v-else-if="step.type === 'file'">
-                      <span class="step-icon">📄</span>
-                      <span class="step-text">
-                        已生成文件 {{ (step as any).file?.fileName }}
-                      </span>
-                    </template>
-
-                    <!-- 平台操作卡片：真实执行结果 + 风险等级 + 目标资源 + 跳转入口 -->
-                    <template v-else-if="step.type === 'operation'">
-                      <div class="operation-card" :class="stepOperation(step).status.toLowerCase()">
-                        <div class="op-head">
-                          <t-icon :name="statusMeta(stepOperation(step).status).icon"
-                            :class="['op-icon', stepOperation(step).status.toLowerCase()]" />
-                          <span class="op-label">{{ stepOperation(step).label }}</span>
-                          <t-tag :theme="riskMeta(stepOperation(step).riskLevel).theme" variant="light" size="small">
-                            {{ riskMeta(stepOperation(step).riskLevel).label }}
-                          </t-tag>
-                          <span class="op-status">{{ statusMeta(stepOperation(step).status).label }}</span>
-                          <span class="op-duration">{{ stepOperation(step).durationMs }}ms</span>
+                      <!-- 平台操作卡片：真实执行结果 + 风险等级 + 目标资源 + 跳转入口 -->
+                      <template v-else-if="step.type === 'operation'">
+                        <div class="operation-card" :class="stepOperation(step).status.toLowerCase()">
+                          <div class="op-head">
+                            <t-icon :name="statusMeta(stepOperation(step).status).icon"
+                              :class="['op-icon', stepOperation(step).status.toLowerCase()]" />
+                            <span class="op-label">{{ stepOperation(step).label }}</span>
+                            <t-tag :theme="riskMeta(stepOperation(step).riskLevel).theme" variant="light" size="small">
+                              {{ riskMeta(stepOperation(step).riskLevel).label }}
+                            </t-tag>
+                            <span class="op-status">{{ statusMeta(stepOperation(step).status).label }}</span>
+                            <span class="op-duration">{{ stepOperation(step).durationMs }}ms</span>
+                          </div>
+                          <div class="op-body">
+                            <span v-if="stepOperation(step).targetName" class="op-target">
+                              目标：{{ stepOperation(step).targetName }}
+                            </span>
+                            <span class="op-summary">{{ stepOperation(step).summary }}</span>
+                          </div>
+                          <button v-if="stepOperation(step).link" class="op-link"
+                            @click="openOperationLink(stepOperation(step).link)">
+                            打开资源
+                            <t-icon name="arrow-right" />
+                          </button>
                         </div>
-                        <div class="op-body">
-                          <span v-if="stepOperation(step).targetName" class="op-target">
-                            目标：{{ stepOperation(step).targetName }}
-                          </span>
-                          <span class="op-summary">{{ stepOperation(step).summary }}</span>
-                        </div>
-                        <button v-if="stepOperation(step).link" class="op-link"
-                          @click="openOperationLink(stepOperation(step).link)">
-                          打开资源
-                          <t-icon name="arrow-right" />
-                        </button>
-                      </div>
-                    </template>
+                      </template>
+                    </div>
                   </div>
                 </div>
 
                 <div class="message-content">
-                  {{ msg.content || (sending && msg.role === "assistant" ? "" : "") }}
-                  <div
-                    v-if="sending && msg.role === 'assistant' && !msg.content && (!msg.trail || msg.trail.length === 0)"
-                    class="typing">
-                    <span></span><span></span><span></span>
+                  {{ msg.content }}
+                  <!-- 无处理过程时：纯聊天等待，内容区显示呼吸 -->
+                  <div v-if="streamingMsgId === msg.id && !msg.content && !hasProcess(msg)" class="content-breathing">
+                    <i></i><i></i><i></i>
                   </div>
                 </div>
 
@@ -1176,7 +1174,7 @@ const stepOperation = (step: Record<string, unknown>) =>
                     <span class="msg-att-name">{{ att.originalName }}</span>
                     <span v-if="att.status !== 'READY'" class="msg-att-status">{{
                       att.status === "FAILED" ? "解析失败" : "解析中"
-                      }}</span>
+                    }}</span>
                     <t-icon v-if="att.status === 'READY'" name="download" class="msg-att-dl" title="下载"
                       @click.stop="handleDownloadAttachment(att)" />
                   </div>
@@ -1954,28 +1952,6 @@ const stepOperation = (step: Record<string, unknown>) =>
     word-break: break-word;
     width: 100%;
     min-height: 20px;
-
-    .typing {
-      display: flex;
-      gap: 4px;
-      padding: @space-2 0;
-
-      span {
-        width: 8px;
-        height: 8px;
-        background: @color-text-tertiary;
-        border-radius: 50%;
-        animation: typing-bounce 1.4s infinite ease-in-out both;
-
-        &:nth-child(1) {
-          animation-delay: -0.32s;
-        }
-
-        &:nth-child(2) {
-          animation-delay: -0.16s;
-        }
-      }
-    }
   }
 
   // 用户消息中的附件展示
@@ -2035,86 +2011,159 @@ const stepOperation = (step: Record<string, unknown>) =>
   }
 }
 
-// Trail 样式（复用）
-.trail {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: @space-2;
-  margin-bottom: @space-1;
-  width: 100%;
+// 处理过程折叠区块（单一气泡内）
+@keyframes process-breathe {
 
-  .trail-step {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.process {
+  width: 100%;
+  margin-bottom: @space-2;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  overflow: hidden;
+
+  .process-head {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 8px;
-    border-radius: 6px;
-    font-size: 12px;
+    width: 100%;
+    padding: @space-1 @space-3;
+    background: @primary-light;
+    color: @primary;
+    font-size: @font-xs;
+    cursor: pointer;
+    border: none;
+    text-align: left;
 
-    &.thinking {
-      color: @color-text-tertiary;
-      background: rgba(0, 0, 0, 0.03);
-    }
-
-    &.tool_call {
-      background: @primary-light;
-      color: @primary;
-    }
-
-    &.tool_result {
-      background: rgba(34, 197, 94, 0.08);
-      color: @color-success;
-    }
-
-    /* 平台操作卡片自己带边框与内边距，这里不要额外的行内样式 */
-    &.operation {
-      display: block;
-      padding: 0;
-      background: transparent;
-    }
-
-    .step-icon {
+    .process-chevron {
+      transition: transform 0.2s;
       font-size: 14px;
       flex-shrink: 0;
     }
 
-    code {
-      font-family: "Menlo", "Consolas", monospace;
-      background: rgba(0, 0, 0, 0.06);
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-size: 11px;
+    &.expanded .process-chevron {
+      transform: rotate(180deg);
     }
+  }
 
-    .tool-toggle {
-      background: transparent;
-      border: none;
-      color: inherit;
-      cursor: pointer;
-      font-size: 12px;
-      padding: 2px 6px;
-      border-radius: 4px;
+  .process-body {
+    padding: @space-2 @space-3;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+    border-top: 1px solid @color-border;
 
-      &:hover {
+    .process-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: @font-xs;
+
+      &.tool_call {
+        background: @primary-light;
+        color: @primary;
+      }
+
+      /* 平台操作卡片自己带边框与内边距，这里不要额外的行内样式 */
+      &.operation {
+        display: block;
+        padding: 0;
+        background: transparent;
+      }
+
+      .step-icon {
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+
+      code {
+        font-family: @font-mono;
         background: rgba(0, 0, 0, 0.06);
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 11px;
+      }
+
+      .tool-args {
+        margin: 2px 0 0 20px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.04);
+        font-size: 11px;
+        font-family: @font-mono;
+        max-height: 250px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        width: 100%;
       }
     }
+  }
+}
 
-    .tool-args,
-    .tool-result {
-      margin: 2px 0 0 20px;
-      padding: 8px 10px;
-      border-radius: 6px;
-      background: rgba(0, 0, 0, 0.04);
-      font-size: 11px;
-      font-family: "Menlo", "Consolas", monospace;
-      max-height: 250px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
-      width: 100%;
+// 呼吸动画指示（处理头部 / 内容区等待）
+.process-breathing {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: @space-1;
+
+  i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: @primary;
+    animation: process-breathe 1.2s ease-in-out infinite;
+
+    &:nth-child(2) {
+      animation-delay: 0.2s;
     }
+
+    &:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+  }
+}
+
+.content-breathing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: @space-2;
+
+  i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: @color-text-tertiary;
+    animation: process-breathe 1.2s ease-in-out infinite;
+
+    &:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    &:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+  }
+
+  span {
+    color: @color-text-tertiary;
+    font-size: @font-xs;
   }
 }
 

@@ -29,16 +29,15 @@ export interface PlatformOperationRecord {
 
 /** 入参落库前的脱敏 / 截断：单条记录不允许被超长 JSON 撑爆 */
 const MAX_PARAM_CHARS = 4000;
-const REDACTED_KEYS = [
-  'apikey',
-  'api_key',
-  'token',
-  'password',
-  'secret',
-  'credential',
-  'credentials',
-  'authorization',
-];
+/**
+ * 命中即脱敏的 key 片段。
+ *
+ * 用**子串**匹配而不是全等匹配：只按 ['apikey','token','secret'…] 全等匹配会漏掉
+ * `bearerToken` / `accessToken` / `x-api-key` / `apiKeyValue` 这些常见变体，
+ * 而漏掉的代价是密钥明文进审计表（不可逆）。
+ */
+const SENSITIVE_KEY_PATTERN =
+  /(api[-_]?key|token|secret|passw|credential|authorization|cookie|session[-_]?id)/i;
 
 function sanitizeParams(
   params: Record<string, unknown> | undefined,
@@ -53,7 +52,7 @@ function sanitizeParams(
       for (const [key, val] of Object.entries(
         value as Record<string, unknown>,
       )) {
-        out[key] = REDACTED_KEYS.includes(key.toLowerCase())
+        out[key] = SENSITIVE_KEY_PATTERN.test(key)
           ? '***'
           : scrub(val, depth + 1);
       }

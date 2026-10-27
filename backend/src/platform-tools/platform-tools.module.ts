@@ -6,6 +6,8 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { WorkflowsModule } from '../workflows/workflows.module';
 import { ChatFilesModule } from '../chat-files/chat-files.module';
 import { LlmConfigModule } from '../llm-config/llm-config.module';
+import { McpModule } from '../mcp/mcp.module';
+import { SkillModule } from '../skill/skill.module';
 import { PlatformToolsService } from './platform-tools.service';
 import { PlatformOperationLogService } from './platform-operation-log.service';
 import { UserTools } from './tools/user.tools';
@@ -33,6 +35,7 @@ import { SkillMcpTools } from './tools/skill-mcp.tools';
  *
  * 注意：这里刻意**不依赖 AgentModule**，避免
  *   AgentModule → AssistantModule → PlatformToolsModule → AgentModule 的循环依赖。
+ * 新增的 McpModule / SkillModule 都是叶子模块（只依赖 PrismaModule），不会形成环。
  */
 @Module({
   imports: [
@@ -42,6 +45,9 @@ import { SkillMcpTools } from './tools/skill-mcp.tools';
     WorkflowsModule,
     ChatFilesModule,
     LlmConfigModule,
+    // 创建 MCP Server / Skill 需要复用业务 Service，而不是工具层直接写 Prisma
+    McpModule,
+    SkillModule,
     // 文档处理队列（把聊天附件加入知识库时投递解析任务）
     BullModule.registerQueue({ name: 'document-processing' }),
   ],

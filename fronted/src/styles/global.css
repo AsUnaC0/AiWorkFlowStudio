@@ -333,15 +333,7 @@ body {
   gap: var(--space-4);
   margin-bottom: var(--space-8);
   animation: fade-slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1);
-  /* 左侧：标题组 */
   /* 右侧：操作按钮组 */
-}
-.page-header > div:first-child,
-.page-header .page-header-info,
-.page-header .header-left {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
 }
 .page-header .page-header-actions,
 .page-header .header-right {

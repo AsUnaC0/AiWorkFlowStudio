@@ -3,6 +3,7 @@ import type {
   CallMcpToolRequest,
   CallMcpToolResult,
   CreateMcpServerRequest,
+  McpCapabilities,
   McpServer,
   McpTool,
   TestConnectionResult,
@@ -12,6 +13,14 @@ import type {
 // ===========================================================================
 // MCP Servers —— 独立资源，owner 权限模型
 // ===========================================================================
+
+/**
+ * 传输能力（stdio 是否启用 + 允许的命令白名单）。
+ * 注意这个路由必须排在 `/mcp-servers/:id` 之前（后端已保证声明顺序）。
+ */
+export const getMcpCapabilities = (): Promise<McpCapabilities> => {
+  return request.get("/mcp-servers/capabilities");
+};
 
 /** 创建 MCP Server */
 export const createMcpServer = (data: CreateMcpServerRequest): Promise<McpServer> => {

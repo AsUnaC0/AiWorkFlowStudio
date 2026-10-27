@@ -23,6 +23,12 @@
   StorageService / Prisma）。工具由后端注册，用户无法通过聊天消息临时定义。
 - 安全红线：`userId` 只来自已验证 JWT（工具入参 Schema 里没有 userId）；`workspaceId` 后端重新校验成员关系；
   **模型生成的 JSON 一律先校验再落库**（`workflow-definition.util.ts`，节点类型白名单来自 NodeExecutorRegistry）。
+- **密钥绝不经过聊天**：`create_mcp_server` 的 Schema 里没有 apiKey / bearerToken，模型硬塞就返回 FAILED；
+  需要认证的 Server 只建配置（`McpService.createPendingCredentials()`，credentials 留空、status=DISCONNECTED），
+  凭据只能由用户在 /mcp 页面填。审计 `sanitizeParams()` 必须用**子串正则**匹配敏感 key ——
+  早期用 key 全等匹配，`bearerToken` 会漏，密钥明文进审计表。
+- 目前 19 个平台工具（skill-mcp 组 5 个：list_skills / list_mcp_servers / get_platform_overview /
+  create_mcp_server / create_skill）。仍**没有** update_agent，所以已有 Agent 的 MCP 绑定改不了。
 - 上下文注入只给元信息（我是谁 / 当前空间 / 可访问空间 / 能力清单），业务数据一律按需工具查询。
 - 平台助理默认不绑定固定模型，运行时走 `LlmConfigService.resolveUserDefaultChatModel(userId)`；
   但 `llmModelId` 一旦有值就优先按它解析（用户可在 Agent 配置页指定），此时对该实例下所有用户生效。

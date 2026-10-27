@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import {
   createMcpServer,
+  getMcpCapabilities,
   getMcpServers,
   updateMcpServer,
   removeMcpServer,
@@ -9,7 +10,27 @@ import {
   refreshMcpTools,
 } from "@/api/mcp";
 import { MessagePlugin } from "tdesign-vue-next";
-import type { McpServer, TestConnectionResult } from "@/types/mcp";
+import type {
+  McpCapabilities,
+  McpServer,
+  McpTransportKind,
+  TestConnectionResult,
+} from "@/types/mcp";
+
+// ========== 传输能力（stdio 默认关闭，关闭时不出现在选项里） ==========
+const capabilities = ref<McpCapabilities | null>(null);
+const stdioEnabled = ref(false);
+
+const fetchCapabilities = async () => {
+  try {
+    const caps = await getMcpCapabilities();
+    capabilities.value = caps;
+    stdioEnabled.value = caps.stdio.enabled;
+  } catch {
+    // 拿不到能力就按最保守的来：只显示远程传输
+    stdioEnabled.value = false;
+  }
+};
 
 // ========== MCP Server 列表 ==========
 const servers = ref<McpServer[]>([]);
@@ -37,12 +58,18 @@ const formError = ref("");
 const formData = ref({
   name: "",
   description: "",
-  transport: "STREAMABLE_HTTP" as "SSE" | "STREAMABLE_HTTP",
+  transport: "STREAMABLE_HTTP" as McpTransportKind,
   serverUrl: "",
+  // stdio 专用：args / env 在表单里按「一行一项」「KEY=VALUE」编辑，提交时再解析
+  command: "",
+  argsText: "",
+  envText: "",
   authType: "NONE" as "NONE" | "API_KEY" | "BEARER_TOKEN",
   apiKey: "",
   bearerToken: "",
 });
+
+const isStdio = () => formData.value.transport === "STDIO";
 
 const resetForm = () => {
   formData.value = {
@@ -50,6 +77,9 @@ const resetForm = () => {
     description: "",
     transport: "STREAMABLE_HTTP",
     serverUrl: "",
+    command: "",
+    argsText: "",
+    envText: "",
     authType: "NONE",
     apiKey: "",
     bearerToken: "",
@@ -69,7 +99,11 @@ const openEditDialog = (server: McpServer) => {
     name: server.name,
     description: server.description || "",
     transport: server.transport,
-    serverUrl: server.serverUrl,
+    serverUrl: server.serverUrl || "",
+    command: server.command || "",
+    argsText: Array.isArray(server.args) ? server.args.join("\n") : "",
+    // 环境变量的「值」后端不会返回，这里只回显键名，留空表示不修改
+    envText: (server.envKeys ?? []).map((k) => `${k}=`).join("\n"),
     authType: server.authType,
     apiKey: "",
     bearerToken: "",
@@ -78,18 +112,51 @@ const openEditDialog = (server: McpServer) => {
   createDialogVisible.value = true;
 };
 
+/** 把 textarea 里的多行参数解析成数组（忽略空行与首尾空格） */
+const parseArgs = (text: string): string[] =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+/** 把 KEY=VALUE 多行解析成对象；值为空的行忽略（编辑时用来保留原值） */
+const parseEnv = (text: string): Record<string, string> => {
+  const env: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const index = trimmed.indexOf("=");
+    if (index <= 0) continue;
+    const key = trimmed.slice(0, index).trim();
+    const value = trimmed.slice(index + 1).trim();
+    if (key && value) env[key] = value;
+  }
+  return env;
+};
+
 const submitForm = async () => {
   const name = formData.value.name.trim();
   if (!name) {
     formError.value = "请输入 MCP Server 名称";
     return;
   }
+
+  const stdio = isStdio();
   const url = formData.value.serverUrl.trim();
-  if (!url) {
+  const command = formData.value.command.trim();
+
+  if (stdio) {
+    if (!command) {
+      formError.value = "本地进程（stdio）需要填写启动命令，例如 npx";
+      return;
+    }
+  } else if (!url) {
     formError.value = "请输入 Server URL";
     return;
   }
+
   if (
+    !stdio &&
     formData.value.authType === "API_KEY" &&
     !formData.value.apiKey &&
     !editingServer.value
@@ -98,6 +165,7 @@ const submitForm = async () => {
     return;
   }
   if (
+    !stdio &&
     formData.value.authType === "BEARER_TOKEN" &&
     !formData.value.bearerToken &&
     !editingServer.value
@@ -109,15 +177,28 @@ const submitForm = async () => {
   formSaving.value = true;
   formError.value = "";
   try {
-    const payload = {
-      name,
-      description: formData.value.description.trim() || undefined,
-      transport: formData.value.transport,
-      serverUrl: url,
-      authType: formData.value.authType,
-      apiKey: formData.value.apiKey || undefined,
-      bearerToken: formData.value.bearerToken || undefined,
-    };
+    const payload = stdio
+      ? {
+          name,
+          description: formData.value.description.trim() || undefined,
+          transport: formData.value.transport,
+          command,
+          args: parseArgs(formData.value.argsText),
+          // 只有填了值才提交 env；全空表示不修改（避免编辑时把已有变量清掉）
+          ...(() => {
+            const env = parseEnv(formData.value.envText);
+            return Object.keys(env).length > 0 ? { env } : {};
+          })(),
+        }
+      : {
+          name,
+          description: formData.value.description.trim() || undefined,
+          transport: formData.value.transport,
+          serverUrl: url,
+          authType: formData.value.authType,
+          apiKey: formData.value.apiKey || undefined,
+          bearerToken: formData.value.bearerToken || undefined,
+        };
 
     if (editingServer.value) {
       await updateMcpServer(editingServer.value.id, payload);
@@ -128,8 +209,13 @@ const submitForm = async () => {
     }
     createDialogVisible.value = false;
     fetchServers();
-  } catch {
-    formError.value = editingServer.value ? "更新失败，请稍后重试" : "创建失败，请稍后重试";
+  } catch (err: unknown) {
+    // 后端的校验信息（白名单 / 未启用 stdio / SSRF）比通用文案有用得多
+    const message =
+      (err as { response?: { data?: { message?: string } } })?.response?.data
+        ?.message ||
+      (editingServer.value ? "更新失败，请稍后重试" : "创建失败，请稍后重试");
+    formError.value = Array.isArray(message) ? message.join("；") : message;
   } finally {
     formSaving.value = false;
   }
@@ -230,11 +316,22 @@ const getToolCount = (server: McpServer): number => {
 };
 
 const getTransportLabel = (transport: string) => {
+  if (transport === "STDIO") return "STDIO";
   return transport === "SSE" ? "SSE" : "HTTP";
+};
+
+/** 列表里展示的「地址」：远程是 URL，stdio 是「命令 + 参数」 */
+const getEndpointLabel = (server: McpServer): string => {
+  if (server.serverUrl) return server.serverUrl;
+  const args = Array.isArray(server.args) && server.args.length > 0
+    ? ` ${server.args.join(" ")}`
+    : "";
+  return `${server.command || "（未配置命令）"}${args}`;
 };
 
 onMounted(() => {
   fetchServers();
+  fetchCapabilities();
 });
 </script>
 
@@ -272,7 +369,7 @@ onMounted(() => {
             <!-- 主信息 -->
             <div class="server-main" @click="openEditDialog(server)">
               <div class="server-name">{{ server.name }}</div>
-              <div class="server-url">{{ server.serverUrl }}</div>
+              <div class="server-url">{{ getEndpointLabel(server) }}</div>
               <div v-if="server.description" class="server-desc">
                 {{ server.description }}
               </div>
@@ -366,28 +463,49 @@ onMounted(() => {
           <t-radio-group v-model="formData.transport">
             <t-radio value="STREAMABLE_HTTP">Streamable HTTP</t-radio>
             <t-radio value="SSE">SSE</t-radio>
+            <t-radio v-if="stdioEnabled" value="STDIO">Local process (stdio)</t-radio>
           </t-radio-group>
         </t-form-item>
-        <t-form-item label="Server URL">
-          <t-input v-model="formData.serverUrl" placeholder="https://example.com/mcp" />
-        </t-form-item>
-        <t-form-item label="Authentication">
-          <t-select v-model="formData.authType" :style="{ width: '200px' }">
-            <t-option value="NONE" label="None" />
-            <t-option value="API_KEY" label="API Key" />
-            <t-option value="BEARER_TOKEN" label="Bearer Token" />
-          </t-select>
-        </t-form-item>
-        <t-form-item v-if="formData.authType === 'API_KEY'" label="API Key">
-          <t-input v-model="formData.apiKey" type="password"
-            :placeholder="editingServer ? 'Enter new key to update' : 'Your API key'" />
-        </t-form-item>
-        <t-form-item v-if="formData.authType === 'BEARER_TOKEN'" label="Bearer Token">
-          <t-input v-model="formData.bearerToken" type="password"
-            :placeholder="editingServer ? 'Enter new token to update' : 'Your bearer token'" />
-        </t-form-item>
-        <t-alert v-if="editingServer && editingServer.hasCredentials" theme="info" class="form-alert"
-          :message="`已保存凭据：${editingServer.credentialPreview || '****'}（留空表示不修改）`" />
+
+        <!-- 本地进程：command + args + env，没有 URL，也没有 HTTP 认证 -->
+        <template v-if="isStdio()">
+          <t-form-item label="Command">
+            <t-input v-model="formData.command" placeholder="npx" maxlength="500" />
+          </t-form-item>
+          <t-form-item label="Arguments (one per line)">
+            <t-textarea v-model="formData.argsText" placeholder="-y&#10;fetcher-mcp"
+              :autosize="{ minRows: 2, maxRows: 6 }" />
+          </t-form-item>
+          <t-form-item label="Environment (KEY=VALUE, one per line)">
+            <t-textarea v-model="formData.envText" placeholder="GITHUB_TOKEN=ghp_xxx"
+              :autosize="{ minRows: 2, maxRows: 6 }" />
+          </t-form-item>
+          <t-alert theme="warning" class="form-alert"
+            :message="`本地进程会在服务器上直接执行命令。允许的命令：${(capabilities?.stdio.allowedCommands || []).join(' / ') || '—'}；密钥请填在环境变量里，不要写在参数中。`" />
+        </template>
+
+        <template v-else>
+          <t-form-item label="Server URL">
+            <t-input v-model="formData.serverUrl" placeholder="https://example.com/mcp" />
+          </t-form-item>
+          <t-form-item label="Authentication">
+            <t-select v-model="formData.authType" :style="{ width: '200px' }">
+              <t-option value="NONE" label="None" />
+              <t-option value="API_KEY" label="API Key" />
+              <t-option value="BEARER_TOKEN" label="Bearer Token" />
+            </t-select>
+          </t-form-item>
+          <t-form-item v-if="formData.authType === 'API_KEY'" label="API Key">
+            <t-input v-model="formData.apiKey" type="password"
+              :placeholder="editingServer ? 'Enter new key to update' : 'Your API key'" />
+          </t-form-item>
+          <t-form-item v-if="formData.authType === 'BEARER_TOKEN'" label="Bearer Token">
+            <t-input v-model="formData.bearerToken" type="password"
+              :placeholder="editingServer ? 'Enter new token to update' : 'Your bearer token'" />
+          </t-form-item>
+          <t-alert v-if="editingServer && editingServer.hasCredentials" theme="info" class="form-alert"
+            :message="`已保存凭据：${editingServer.credentialPreview || '****'}（留空表示不修改）`" />
+        </template>
         <t-alert v-if="formError" theme="error" :message="formError" class="form-alert" />
       </t-form>
     </t-dialog>

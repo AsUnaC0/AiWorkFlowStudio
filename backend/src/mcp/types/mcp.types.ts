@@ -31,10 +31,19 @@ export const MCP_MAX_TOOL_PAGES = 20;
 // 枚举
 // ===========================================================================
 
-export type McpTransportKind = 'STREAMABLE_HTTP' | 'SSE';
+export type McpTransportKind = 'STREAMABLE_HTTP' | 'SSE' | 'STDIO';
 export type McpAuthType = 'NONE' | 'API_KEY' | 'BEARER_TOKEN';
 export type McpConnectionStatus =
   'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'ERROR';
+
+/** 远程传输（有 URL） */
+export type McpRemoteTransportKind = 'STREAMABLE_HTTP' | 'SSE';
+
+export const MCP_TRANSPORT_KINDS: McpTransportKind[] = [
+  'STREAMABLE_HTTP',
+  'SSE',
+  'STDIO',
+];
 
 // ===========================================================================
 // JSON-RPC 2.0
@@ -145,15 +154,37 @@ export interface McpServerRuntimeConfig {
   /** 数据库主键；工作流/Agent 链路会带上，用于会话缓存 key */
   id?: string;
   transport: string;
+  /**
+   * 远程传输的目标地址。
+   *
+   * STDIO 传输没有 URL，这里放一个仅用于日志 / 缓存 key / 展示的合成标识
+   * （`stdio://<command>`）—— 它**不会**被任何网络请求使用，
+   * 也不会进 SSRF 校验（HTTP 传输根本不会拿到 STDIO 配置）。
+   */
   serverUrl: string;
   authType: string;
   credentials: unknown;
+  /** STDIO 专用：可执行文件（如 npx / node / uvx） */
+  command?: string;
+  /** STDIO 专用：命令行参数（不含可执行文件本身） */
+  args?: string[];
+  /** STDIO 专用：额外环境变量（已解密；与进程白名单环境合并后传给子进程） */
+  env?: Record<string, string>;
   /**
    * 上次连接成功后缓存的工具列表。
    * 有缓存时优先复用（避免每次模型调用都重新握手），
    * 需要最新列表时由用户点「刷新工具」或调用 listTools 实时发现。
    */
   cachedTools?: McpTool[];
+}
+
+/** STDIO 运行时配置的展示 / 缓存标识（不参与网络请求） */
+export function stdioEndpointLabel(
+  command: string,
+  args?: string[] | null,
+): string {
+  const tail = Array.isArray(args) && args.length > 0 ? ` ${args.join(' ')}` : '';
+  return `stdio://${command}${tail}`.slice(0, 200);
 }
 
 /** 握手成功后的会话快照 */

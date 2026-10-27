@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { McpUrlGuardService } from './mcp-url-guard.service';
 import { StreamableHttpTransport } from './transports/streamable-http.transport';
 import { SseTransport } from './transports/sse.transport';
+import { StdioTransport } from './transports/stdio.transport';
 import {
   DEFAULT_TRANSPORT_LIMITS,
   type McpTransport,
@@ -159,7 +160,13 @@ export class McpConnectionService {
       limits: DEFAULT_TRANSPORT_LIMITS,
       validateUrl: (url: string) => this.urlGuard.assertSafeUrl(url),
     };
-    // 两种传输的连接流程 / 响应处理 / 会话管理不同，必须走各自实现
+    // 三种传输的连接流程 / 消息分帧 / 会话管理完全不同，必须走各自实现：
+    //   STDIO           → spawn 子进程，换行分隔 JSON，进程即会话
+    //   SSE             → 旧版 HTTP + 长连接事件流
+    //   STREAMABLE_HTTP → 单端点 POST，响应可能是 json 也可能是 sse
+    if (server.transport === 'STDIO') {
+      return new StdioTransport(context);
+    }
     return server.transport === 'SSE'
       ? new SseTransport(context)
       : new StreamableHttpTransport(context);
@@ -179,8 +186,11 @@ export class McpConnectionService {
   }
 
   /**
-   * 缓存 key 由连接语义决定：Server 身份 + 传输方式 + URL + 认证方式 + 凭据指纹。
+   * 缓存 key 由连接语义决定：Server 身份 + 传输方式 + 地址/命令 + 认证方式 + 凭据指纹。
    * 任一项变化都会得到新 key，从而不会复用错误会话。
+   *
+   * STDIO 的「地址」是 command + args（同一台机器上 `npx -y a` 与 `npx -y b` 是两个
+   * 完全不同的进程），所以必须把 args 也纳入指纹，否则会错误复用别人的子进程。
    */
   private cacheKey(server: McpServerRuntimeConfig): string {
     const fingerprint = createHash('sha256')
@@ -189,6 +199,8 @@ export class McpConnectionService {
           id: server.id ?? '',
           transport: server.transport,
           serverUrl: server.serverUrl,
+          command: server.command ?? null,
+          args: server.args ?? null,
           authType: server.authType,
           credentials: server.credentials ?? null,
         }),

@@ -183,13 +183,6 @@ const toggleCollapsed = () => emit("toggle");
     }
   }
 
-  /* 折叠按钮区 */
-  .sidebar-operations {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
   /* === 穿透 t-menu 内部样式 —— 统一 active 态和视觉 === */
   :deep(.t-menu) {
     &__item.is-active {

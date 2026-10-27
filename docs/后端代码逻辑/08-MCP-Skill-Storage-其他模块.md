@@ -33,7 +33,8 @@ backend/src/mcp/
 │   ├── mcp-transport.interface.ts # 传输抽象：connect / listTools / callTool / close
 │   ├── mcp-http.util.ts           # 受限 fetch、SSE 增量解析、JSON-RPC 响应解析
 │   ├── streamable-http.transport.ts  # Streamable HTTP（2025-06-18 / 2025-03-26）
-│   └── sse.transport.ts           # 旧版 HTTP + SSE（2024-11-05）
+│   ├── sse.transport.ts           # 旧版 HTTP + SSE（2024-11-05）
+│   └── stdio.transport.ts         # 本地子进程（换行分隔 JSON-RPC，默认关闭）
 ├── dto/                           # create / update / call-tool
 └── types/mcp.types.ts             # JSON-RPC + MCP 协议类型、错误类型
 ```
@@ -58,8 +59,11 @@ model McpServer {
   ownerId        String
   name           String
   description    String?
-  transport      String   @default("STREAMABLE_HTTP")  // "SSE" | "STREAMABLE_HTTP"
-  serverUrl      String                                 // MCP Server 地址
+  transport      String   @default("STREAMABLE_HTTP")  // "SSE" | "STREAMABLE_HTTP" | "STDIO"
+  serverUrl      String?                                // 远程传输才有；STDIO 为 null
+  command        String?   // STDIO：可执行文件（npx / node / uvx …）
+  args           Json?     // STDIO：命令行参数数组
+  envCipher      Json?     // STDIO：环境变量，✅ 加密存储（可能含 API Key）
   authType       String   @default("NONE")              // "NONE" | "API_KEY" | "BEARER_TOKEN"
   credentials    Json?    // ✅ 已加密：{ v: 2, cipher: "<iv:tag:data>" }（AES-256-GCM）
   availableTools Json?    // [{ name, description, inputSchema, ... }]，连接成功后缓存
@@ -124,6 +128,39 @@ model McpServer {
 
 - endpoint 可能是相对路径，会基于 SSE URL 解析，并且**单独再做一次安全校验**（可能指向另一个主机）；
 - 服务端反向发起的请求（server → client）目前不支持，会回 `Method not found` 避免对端挂起。
+
+#### 本地子进程 stdio（`stdio.transport.ts`）★
+
+用于「只提供 npm 包 / 本地可执行文件、没有 URL」的 MCP（如 `fetcher-mcp`、各种 `uvx` 工具）。
+**默认关闭**，需要 `MCP_STDIO_ENABLED=true` 才开放。
+
+```
+① spawn(command, args)  → 子进程的 stdin/stdout 就是 MCP 通道
+② 写 {"jsonrpc":"2.0","id":1,"method":"initialize",...}\n
+③ 从 stdout 按 \n 切分，逐行 JSON.parse，按 id 匹配挂起的 Promise
+④ 写 notifications/initialized（无响应）
+⑤ tools/list / tools/call 同一条通道
+⑥ close() → 杀进程树（Windows: taskkill /T /F；POSIX: SIGTERM → SIGKILL）
+```
+
+四个必须记住的实现细节：
+
+| 点 | 说明 |
+|---|---|
+| **分帧** | MCP stdio 是**换行分隔的单行 JSON**（不是 LSP 的 Content-Length）。必须自己维护缓冲区、处理半行；stdout 里的非 JSON 日志要容忍并留痕，不能直接崩 |
+| **会话 = 进程** | 进程退出即连接断开，所有挂起请求要立即 reject 并带上 stderr 尾部（`stderrSuffix()`），否则调用方会一直等到超时 |
+| **环境变量白名单** | **绝不能用 `{ ...process.env }`**。后端 .env 里有 `JWT_SECRET` / `LLM_CONFIG_ENCRYPTION_KEY` / 数据库密码 / 对象存储密钥，第三方 MCP 本质是任意代码，继承就等于全给。`buildChildEnv()` 只放运行时必需项 + 代理变量，用户自定义 env 单独合并 |
+| **Windows 的 .cmd** | `npx` / `uvx` / `pnpm` 在 Windows 上都是 `.cmd`，`spawn(..., {shell:false})` **执行不了**。`resolveSpawnTarget()` 按 PATH 找到真实文件：`.exe/.com` 直接跑，`.cmd/.bat` 用 `cmd.exe /d /s /c` 包一层并对每个参数转义（拒绝 CR/LF/`^`） |
+
+安全闸门（三道，都在 `McpService`）：
+
+1. `MCP_STDIO_ENABLED=true` —— 总开关，默认关。stdio 等于在服务器上执行任意命令，比 SSRF 严重一个量级；
+2. `MCP_STDIO_ALLOWED_COMMANDS` —— 命令名白名单，默认 `npx,node,uvx,python,python3,deno,bun`，挡住 `curl` / `bash -c` / `powershell`；
+3. **平台助理不能创建 stdio** —— `createPendingCredentials()` 显式拒绝，自然语言入口不给「让模型在服务器上执行命令」的能力，只能由用户在 `/mcp` 页面手配。
+
+> 校验只在**写入时**和**每次连接前**做（`runConnectionTest` 里再查一遍），所以关掉开关后历史 stdio 配置也不会再被启动。
+
+> ⚠️ Windows 会额外注入 `HOMEDRIVE / HOMEPATH / LOGONSERVER / SYSTEMDRIVE / SYSTEMROOT / TEMP / USERDOMAIN / USERNAME / USERPROFILE / WINDIR`，这是 Node/系统行为，不是白名单失效；它们都不含密钥。
 
 ### 与 LLMNodeExecutor / AgentService 的集成
 

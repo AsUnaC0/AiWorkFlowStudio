@@ -7,7 +7,7 @@ export interface McpTool {
   annotations?: Record<string, unknown>;
 }
 
-export type McpTransportKind = "SSE" | "STREAMABLE_HTTP";
+export type McpTransportKind = "SSE" | "STREAMABLE_HTTP" | "STDIO";
 export type McpAuthType = "NONE" | "API_KEY" | "BEARER_TOKEN";
 export type McpConnectionStatus = "DISCONNECTED" | "CONNECTED" | "ERROR";
 
@@ -17,7 +17,14 @@ export interface McpServer {
   name: string;
   description: string | null;
   transport: McpTransportKind;
-  serverUrl: string;
+  /** 远程传输才有；stdio 为 null */
+  serverUrl: string | null;
+  /** stdio：可执行文件 */
+  command: string | null;
+  /** stdio：命令行参数 */
+  args: string[] | null;
+  /** stdio：已配置的环境变量键名（值不会返回前端） */
+  envKeys: string[];
   authType: McpAuthType;
   status: McpConnectionStatus;
   lastError: string | null;
@@ -37,11 +44,26 @@ export interface McpServer {
   updatedAt: string;
 }
 
+/** 传输能力：决定表单里是否出现「本地进程」选项 */
+export interface McpCapabilities {
+  transports: McpTransportKind[];
+  stdio: {
+    enabled: boolean;
+    allowedCommands: string[];
+  };
+}
+
 export interface CreateMcpServerRequest {
   name: string;
   description?: string;
   transport?: McpTransportKind;
-  serverUrl: string;
+  /** 远程必填 */
+  serverUrl?: string;
+  /** stdio 必填 */
+  command?: string;
+  /** stdio 可选 */
+  args?: string[];
+  env?: Record<string, string>;
   authType?: McpAuthType;
   apiKey?: string;
   bearerToken?: string;
@@ -52,6 +74,9 @@ export interface UpdateMcpServerRequest {
   description?: string;
   transport?: McpTransportKind;
   serverUrl?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
   authType?: McpAuthType;
   apiKey?: string;
   bearerToken?: string;

@@ -41,6 +41,17 @@ export class McpController {
     return this.mcpService.findAll(user.id);
   }
 
+  /**
+   * 传输能力：前端据此决定是否展示「本地进程（stdio）」选项。
+   *
+   * ⚠️ 必须声明在 `@Get(':id')` **之前** —— Nest 按声明顺序匹配路由，
+   * 放到后面的话 'capabilities' 会被 :id 捕获，再被 ParseUUIDPipe 拒成 400。
+   */
+  @Get('capabilities')
+  capabilities() {
+    return this.mcpService.getCapabilities();
+  }
+
   /** 获取单个 MCP Server */
   @Get(':id')
   findOne(

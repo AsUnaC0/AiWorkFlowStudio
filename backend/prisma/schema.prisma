@@ -626,13 +626,20 @@ model McpServer {
   name        String
   description String?
 
-  // 传输方式：SSE / STREAMABLE_HTTP
+  // 传输方式：SSE / STREAMABLE_HTTP（远程） | STDIO（本地子进程）
   transport   String   @default("STREAMABLE_HTTP")
 
-  // MCP Server URL
-  serverUrl   String
+  // MCP Server URL —— 仅远程传输有值；STDIO 为 null
+  serverUrl   String?
 
-  // 认证方式：NONE / API_KEY / BEARER_TOKEN
+  // STDIO 专用：可执行文件 + 参数（等价于 Claude Desktop 的 command / args）
+  command     String?
+  args        Json?
+
+  // STDIO 专用：额外环境变量（加密存储，形如 { v: 2, cipher }，可能含 API Key）
+  envCipher   Json?
+
+  // 认证方式：NONE / API_KEY / BEARER_TOKEN（仅远程传输使用）
   authType    String   @default("NONE")
 
   // 凭证（API Key / Bearer Token 值，生产环境应加密存储）

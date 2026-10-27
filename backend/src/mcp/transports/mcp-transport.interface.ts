@@ -2,6 +2,7 @@ import type {
   McpServerRuntimeConfig,
   McpTool,
   McpToolCallResult,
+  McpTransportKind,
   McpTransportLimits,
   McpTransportSession,
 } from '../types/mcp.types';
@@ -10,12 +11,12 @@ import type {
  * MCP 传输层抽象。
  *
  * 上层（McpConnectionService / McpToolService）只依赖这个接口，
- * 不关心底下是 Streamable HTTP 还是旧版 HTTP + SSE —— 两者的
- * 连接流程、响应解析和会话管理完全不同，因此各自独立实现。
+ * 不关心底下是 Streamable HTTP、旧版 HTTP + SSE 还是本地 stdio 子进程 ——
+ * 三者的连接流程、消息分帧、响应解析和会话管理完全不同，因此各自独立实现。
  */
 export interface McpTransport {
   /** 传输类型标识，用于日志与错误信息 */
-  readonly kind: 'STREAMABLE_HTTP' | 'SSE';
+  readonly kind: McpTransportKind;
 
   /**
    * 建立连接并完成协议握手：
@@ -43,8 +44,9 @@ export interface McpTransportContext {
   limits: McpTransportLimits;
   /**
    * URL 安全校验（含 DNS 解析）。
-   * 由 McpUrlGuardService 提供，传输层在发起每个请求前调用，
+   * 由 McpUrlGuardService 提供，**远程传输**在发起每个请求前调用，
    * 从而覆盖「重定向到内网」「DNS 重绑定」等场景。
+   * STDIO 传输不使用它（没有 URL），它的安全边界是命令白名单与环境变量隔离。
    */
   validateUrl: (url: string) => Promise<void>;
 }
