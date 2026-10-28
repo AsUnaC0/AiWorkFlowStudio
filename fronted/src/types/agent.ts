@@ -120,6 +120,11 @@ export interface AgentStreamMeta {
   provider: string;
   /** 是否为平台助理（系统默认 Agent） */
   isPlatformAssistant?: boolean;
+  /**
+   * 人格名（如「小蝶」）。
+   * Agent.name 固定为「平台助理」作为系统标识，展示层用人格名。
+   */
+  personaName?: string;
 }
 
 export interface AgentStreamThinking {

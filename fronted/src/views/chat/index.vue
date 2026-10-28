@@ -112,6 +112,29 @@ const isPlatformAssistant = computed(() =>
   isPlatformAssistantAgent(currentAgent.value),
 );
 
+/**
+ * 界面上展示的名字。
+ *
+ * 平台助理的 Agent.name 是「平台助理」（系统标识，ensure() 每次启动会纠偏），
+ * 但用户感知到的是人格名（默认「小蝶」）—— 改人格名后这里自动跟着变。
+ */
+const agentDisplayName = computed(() => {
+  if (!currentAgent.value) return "";
+  if (isPlatformAssistant.value && platformInfo.value?.displayName) {
+    return platformInfo.value.displayName;
+  }
+  return currentAgent.value.name;
+});
+
+/**
+ * 记忆 / 人格都收在「Agent 配置」页里（只在平台助理的配置页出现），
+ * 所以这里带 tab query 跳过去，一次点击直达对应面板。
+ */
+const goMemory = () =>
+  router.push({ path: `/agents/${currentAgentId.value}`, query: { tab: "memory" } });
+const goPersona = () =>
+  router.push({ path: `/agents/${currentAgentId.value}`, query: { tab: "persona" } });
+
 /** 当前工作空间（仅平台助理有意义；后端仍会重新校验） */
 const currentWorkspaceId = computed(
   () => platformInfo.value?.currentWorkspaceId ?? undefined,
@@ -522,7 +545,16 @@ watch(
 // ===========================================================================
 
 const createNewSession = async () => {
-  if (!currentAgentId.value) return;
+  if (!currentAgentId.value || sending.value) return;
+
+  // 当前会话本来就是空的 → 不重复建，直接聚焦输入框
+  // （否则连点几下就攒出一堆空的「新对话」）
+  const current = sessions.value.find((s) => s.id === currentSessionId.value);
+  if (current && current._count?.messages === 0) {
+    inputRef.value?.focus();
+    return;
+  }
+
   try {
     const session = await createSession(currentAgentId.value, "新对话");
     currentSessionId.value = session.id;
@@ -865,6 +897,10 @@ const refreshAfterActivate = async () => {
 
   // 轻量校准会话列表。正在流式输出时不动，避免与 send 的 finally 重复刷新
   if (currentAgentId.value && !sending.value) await loadSessions();
+
+  // 人格名 / 记忆开关可能在「人格设置」页被改过，切回来要重新取一次，
+  // 否则标题还停留在旧的人格名上
+  if (isPlatformAssistant.value) void loadPlatformAssistant();
 };
 
 onActivated(() => {
@@ -981,15 +1017,20 @@ const stepOperation = (step: Record<string, unknown>) =>
         </t-menu-group>
 
         <!-- 分组 2: 会话（只有选中 agent 且未折叠时显示） -->
+        <!--
+          注意：这里只能传 title 属性，不要用 #title 插槽。
+          tdesign 的 MenuGroup 是 renderTNodeJSX('title', { silent: false })，没传 slotFirst，
+          而 useTNodeJSX 的逻辑是「prop 显式设置就优先返回 prop」——
+          只要 title="会话" 还在，插槽内容会被**静默丢弃**，连报错都没有。
+          所以「新建会话」按钮必须放在默认插槽里（跟会话列表同级）。
+        -->
         <t-menu-group v-if="currentAgent && !sidebarCollapsed" title="会话">
-          <template #title>
-            <div class="section-header">
-              <span>会话</span>
-              <t-button variant="text" shape="square" size="small" @click="createNewSession">
-                <template #icon><t-icon name="add" /></template>
-              </t-button>
-            </div>
-          </template>
+          <li class="session-new-row">
+            <button class="session-new-btn" title="新建会话" :disabled="sending" @click="createNewSession">
+              <t-icon name="add" />
+              <span>新建会话</span>
+            </button>
+          </li>
           <t-menu-item v-for="session in sessions" :key="'session-' + session.id" :value="'session-' + session.id"
             :class="{ 'is-active': session.id === currentSessionId }">
             <div class="session-item" :class="{ active: session.id === currentSessionId }">
@@ -1005,7 +1046,7 @@ const stepOperation = (step: Record<string, unknown>) =>
             </div>
           </t-menu-item>
           <li v-if="sessions.length === 0 && !loadingSessions" class="session-empty">
-            暂无会话，开始你的第一条消息吧
+            <p>还没有会话</p>
           </li>
         </t-menu-group>
       </t-menu>
@@ -1021,7 +1062,7 @@ const stepOperation = (step: Record<string, unknown>) =>
           </div> -->
           <div class="agent-meta">
             <h2 class="agent-title">
-              {{ currentAgent.name }}
+              {{ agentDisplayName }}
               <t-tag v-if="isPlatformAssistant" theme="primary" variant="dark" size="small">
                 平台助理
               </t-tag>
@@ -1057,7 +1098,20 @@ const stepOperation = (step: Record<string, unknown>) =>
             <span>操作记录</span>
           </button>
 
-          <button v-if="currentSessionId" class="new-chat-btn" @click="createNewSession">
+          <!-- 记忆：助理记得什么，看得见 -->
+          <button v-if="isPlatformAssistant" class="new-chat-btn" @click="goMemory">
+            <t-icon name="share" />
+            <span>记忆</span>
+          </button>
+
+          <!-- 人格：改名字 / 语气 / 音色 -->
+          <button v-if="isPlatformAssistant" class="new-chat-btn" @click="goPersona">
+            <t-icon name="user-circle" />
+            <span>人格</span>
+          </button>
+
+          <!-- 新对话：只要选了 Agent 就该能建，不该依赖「当前已有会话」 -->
+          <button v-if="currentAgent" class="new-chat-btn" :disabled="sending" @click="createNewSession">
             <t-icon name="add" />
             <span>新对话</span>
           </button>
@@ -1069,7 +1123,7 @@ const stepOperation = (step: Record<string, unknown>) =>
         <div class="hero-section">
           <div class="hero-content">
             <div class="hero-logo">✦</div>
-            <h1 class="hero-title">与 {{ currentAgent?.name }} 对话</h1>
+            <h1 class="hero-title">与 {{ agentDisplayName }} 对话</h1>
             <p class="hero-subtitle">
               {{ currentAgent?.description || "输入问题开始对话" }}
             </p>
@@ -1102,7 +1156,7 @@ const stepOperation = (step: Record<string, unknown>) =>
               <div class="message-body">
                 <div class="message-meta">
                   <span class="message-role">
-                    {{ msg.role === "user" ? "你" : currentAgent?.name }}
+                    {{ msg.role === "user" ? "你" : agentDisplayName }}
                   </span>
                   <span class="message-time">{{ formatTime(msg.createdAt) }}</span>
                 </div>
@@ -1174,7 +1228,7 @@ const stepOperation = (step: Record<string, unknown>) =>
                     <span class="msg-att-name">{{ att.originalName }}</span>
                     <span v-if="att.status !== 'READY'" class="msg-att-status">{{
                       att.status === "FAILED" ? "解析失败" : "解析中"
-                    }}</span>
+                      }}</span>
                     <t-icon v-if="att.status === 'READY'" name="download" class="msg-att-dl" title="下载"
                       @click.stop="handleDownloadAttachment(att)" />
                   </div>
@@ -1356,10 +1410,16 @@ const stepOperation = (step: Record<string, unknown>) =>
     }
 
     .t-menu-group__title {
-      padding: 0;
+      // 分组标题用的是 title 属性（纯文本），左右 12px 让标题和会话标题文字对齐
+      padding: @space-2 @space-3;
       background: transparent;
+      font-size: 11px;
+      font-weight: 600;
+      color: @color-text-tertiary;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
 
-      // 折叠态那条分隔线不需要，由 .section-header 自己呈现
+      // 折叠态那条分隔线不需要
       &::after {
         display: none;
       }
@@ -1412,24 +1472,6 @@ const stepOperation = (step: Record<string, unknown>) =>
     }
 
 
-  }
-}
-
-// 分组标题（「我的 Agent」/「会话」）：由 slot 里的 .section-header 自己撑起留白，
-// 因此上面已把 .t-menu-group__title 的 padding 清零
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  box-sizing: border-box;
-
-  >span {
-    font-size: 11px;
-    font-weight: 600;
-    color: @color-text-tertiary;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 }
 
@@ -1657,10 +1699,72 @@ const stepOperation = (step: Record<string, unknown>) =>
 }
 
 .session-empty {
-  padding: @space-4;
+  padding: @space-4 @space-4 @space-2;
   text-align: center;
   font-size: 12px;
   color: @color-text-tertiary;
+  list-style: none;
+
+  p {
+    margin: 0;
+  }
+}
+
+// 新建会话：放在会话列表最上面，跟会话项同宽
+// （不能放 t-menu-group 的 #title 插槽 —— title 属性会把它顶掉，见模板里的注释）
+.session-new-row {
+  list-style: none;
+  margin-bottom: @space-1;
+}
+
+.session-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: @space-1;
+  width: 100%;
+  height: 32px;
+  padding: 0 @space-3;
+  box-sizing: border-box;
+  border: 1px dashed @color-border-strong;
+  border-radius: @radius-md;
+  background: transparent;
+  color: @color-text-secondary;
+  font-family: inherit;
+  font-size: @font-sm;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: color @duration-fast, background @duration-fast,
+    border-color @duration-fast;
+
+  .t-icon {
+    font-size: 15px;
+  }
+
+  &:hover {
+    color: @primary;
+    background: @primary-light;
+    border-color: @primary;
+    border-style: solid;
+  }
+
+  &:active {
+    transform: scale(0.99);
+  }
+
+  // 正在流式输出时不让新建，否则新会话会把还没写完的回复从界面上顶掉
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+
+    &:hover {
+      color: @color-text-secondary;
+      background: transparent;
+      border-color: @color-border-strong;
+      border-style: dashed;
+    }
+  }
 }
 
 // ===========================================================================
@@ -1739,6 +1843,15 @@ const stepOperation = (step: Record<string, unknown>) =>
 
     &:hover {
       background: @primary-hover;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+
+      &:hover {
+        background: @primary;
+      }
     }
   }
 }

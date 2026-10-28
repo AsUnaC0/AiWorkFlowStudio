@@ -83,6 +83,15 @@ const router = createRouter({
           component: () => import("@/views/agents/detail.vue"),
           meta: { title: "Agent 配置" },
         },
+        // 记忆 3D 可视化网络（全屏视图）。
+        // 入口只在「Agent 配置 → 平台助理 → 记忆」Tab 的「全屏」按钮上，
+        // 侧边栏不再放独立菜单 —— 记忆是平台助理的上下文资产，不是独立功能模块。
+        {
+          path: "memory",
+          name: "MemoryGraph",
+          component: () => import("@/views/memory/index.vue"),
+          meta: { title: "记忆" },
+        },
         // 模型管理（LLM Providers）
         {
           path: "providers",

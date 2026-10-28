@@ -28,6 +28,10 @@ import { ToolRegistry } from './tool-registry.service';
 import type { GeneratedFileRef } from './tools/agent-tool.interface';
 import { PlatformAssistantService } from '../assistant/platform-assistant.service';
 import type { PlatformAssistantContext } from '../assistant/platform-assistant.context';
+import type { MemoryRecallItem } from '../assistant/platform-assistant.context';
+import { PersonaService } from '../persona/persona.service';
+import { MemoryService } from '../memory/memory.service';
+import { MemoryWriterService } from '../memory/memory-writer.service';
 import type { PlatformToolContext } from '../platform-tools/platform-tool.interface';
 import type { PlatformOperationPayload } from '../platform-tools/platform-tools.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
@@ -50,6 +54,12 @@ export type AgentStreamEvent =
       provider: string;
       /** 是否为平台助理（前端据此渲染「平台助理」标识） */
       isPlatformAssistant?: boolean;
+      /**
+       * 人格名（如「小蝶」）。
+       * 平台助理的 Agent.name 固定为「平台助理」作为系统标识，
+       * 界面上要展示的是人格名 —— 这里直接给前端，省一次额外请求。
+       */
+      personaName?: string;
     }
   | { type: 'thinking'; message: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
@@ -163,6 +173,12 @@ export class AgentService {
     private readonly mcpToolService: McpToolService,
     /** 平台助理（默认系统 Agent 的专属 Prompt / 平台工具 / 审计） */
     private readonly platformAssistant: PlatformAssistantService,
+    /** 平台助理的人格表达层 */
+    private readonly personaService: PersonaService,
+    /** 记忆召回 */
+    private readonly memoryService: MemoryService,
+    /** 记忆沉淀（对话结束后异步触发） */
+    private readonly memoryWriter: MemoryWriterService,
   ) {}
 
   /** 把 GeneratedFileRef 转成可 JSON 序列化的 SSE 载荷 */
@@ -486,6 +502,39 @@ export class AgentService {
       );
     }
 
+    // 2.1.1 人格表达层 + 记忆召回（只对平台助理生效）
+    //
+    // 人格只影响「怎么说」，因此这里只取表达相关字段传给 Prompt 装配；
+    // 记忆召回失败必须降级为「不注入」，绝不能让整轮对话挂掉。
+    let persona: Awaited<
+      ReturnType<PersonaService['resolveForAgent']>
+    > | undefined;
+    let memories: MemoryRecallItem[] | undefined;
+    if (isPlatformAssistant) {
+      try {
+        persona = await this.personaService.resolveForAgent(agent.id);
+      } catch (e) {
+        this.logger.warn(
+          `读取人格配置失败，本轮按默认语气回答：${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+      try {
+        memories = await this.memoryService.recall(
+          userId,
+          agent.id,
+          options.input,
+        );
+      } catch (e) {
+        this.logger.warn(
+          `记忆召回失败，本轮不注入记忆：${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      }
+    }
+
     // 2.2 模型调用遥测上下文 —— Agent 聊天链路不经过 AIService，需要自己归属调用记录，
     //     否则仪表盘的「AI 模型调用监控」只能看到工作流 LLM 节点的调用，
     //     而用户日常用自定义模型（DeepSeek / OpenAI 等）聊天时一条记录都不会产生。
@@ -537,7 +586,17 @@ export class AgentService {
     //    因此这里覆盖库里存的静态 systemPrompt。
     const messages: ChatMessage[] = [];
     const systemPrompt = assistantContext
-      ? this.platformAssistant.buildSystemPrompt(assistantContext)
+      ? this.platformAssistant.buildSystemPrompt(assistantContext, {
+          // 人格只取表达相关字段；voiceId / 频率 / 感知开关是客户端参数，模型不需要知道
+          persona: persona
+            ? {
+                name: persona.name,
+                tags: persona.tags,
+                systemPrompt: persona.systemPrompt,
+              }
+            : undefined,
+          memories,
+        })
       : agent.systemPrompt;
     if (systemPrompt) {
       messages.push({ role: 'system', content: systemPrompt });
@@ -649,6 +708,25 @@ export class AgentService {
       model: chatModel,
       provider: chatBackend.name,
       isPlatformAssistant,
+      personaName: persona?.name,
+    };
+
+    /**
+     * 记忆沉淀：fire-and-forget，**绝不 await**。
+     *
+     * 对话已经答完，用户不该为「助理记笔记」再多等一次模型调用。
+     * maybeCapture 内部自带开关检查、冷却、敏感过滤与异常兜底。
+     */
+    const triggerMemoryCapture = () => {
+      if (!isPlatformAssistant || !options.sessionId) return;
+      void this.memoryWriter.maybeCapture({
+        userId,
+        agentId: agent.id,
+        sessionId: options.sessionId,
+        provider: chatBackend,
+        model: chatModel,
+        telemetry,
+      });
     };
 
     // 5. ReAct 循环
@@ -702,6 +780,7 @@ export class AgentService {
           allTrailSteps,
           runFiles,
         );
+        triggerMemoryCapture();
       }
       return;
     }
@@ -741,20 +820,21 @@ export class AgentService {
         status: 'SUCCESS',
       });
 
-      // LLM 直接回答 —— 用 streamChat 做最终流式输出
+      // LLM 直接回答（本轮没有工具调用）
       if (result.toolCalls.length === 0) {
-        // 如果 result.content 已有内容（LLM 直接给了答案），先快速 chunk 推送
-        // 再用 streamChat 做真正的 token 级流式（体验更流畅）
-        if (result.content) {
-          // 立刻推送已有的 content（chunk 化模拟首次输出）
-          yield { type: 'message', content: result.content };
-        }
-
-        // 用 streamChat 重新流式输出，用户能看到真正的打字机效果（仅当模型支持流式）。
-        // 不支持流式的模型：直接采用 chatWithTools 已返回的内容，避免二次调用 LLM
-        // 并触发服务商 SSE 限制（如 1212）。
+        // ⚠️ 这里**不能**再用 streamChat 重新生成一遍。
+        // 早期实现是「先推 chatWithTools 的完整 content，再用 streamChat 从头流式一遍」，
+        // 想靠第二次调用拿真正的打字机效果，但代价很糟：
+        //   1. 同一轮多花一次完整的模型调用（费用、延迟都翻倍）
+        //   2. 两次生成内容不保证一致 —— 前端会看到气泡里的字「突变」成另一段话
+        //   3. 第二次是「全量累积」协议，长度从 0 重新涨，前端按累积覆盖就会看到长度回退
+        //      （桌宠客户端踩过：气泡先显示一段完整介绍，几秒后被换成一句更短的招呼）
+        // 既然 content 已经是完整答案，直接对它做分块推送即可，效果一样而成本减半。
         let finalContent = result.content;
-        if (supportsStream) {
+        if (finalContent) {
+          yield* streamAsTypewriter(finalContent);
+        } else if (supportsStream) {
+          // 兜底：模型给了空回答（拒绝/异常），才退回真流式再试一次
           let streamedContent = '';
           const restreamStart = Date.now();
           try {
@@ -780,7 +860,7 @@ export class AgentService {
             });
             throw e;
           }
-          finalContent = streamedContent || result.content;
+          finalContent = streamedContent;
         }
         if (options.sessionId && finalContent) {
           await this.persistAssistantMessage(
@@ -789,6 +869,7 @@ export class AgentService {
             allTrailSteps,
             runFiles,
           );
+          triggerMemoryCapture();
         }
         return;
       }
@@ -1036,4 +1117,33 @@ export class AgentService {
       return m;
     });
   }
+}
+
+/**
+ * 把一段已完成的文本切成小片推送，模拟打字机效果。
+ *
+ * 为什么不用真流式：调用方（ReAct 循环）已经通过 chatWithTools 拿到了完整回答，
+ * 再调一次 streamChat 只会多花钱、多等一轮，而且两次生成内容不一致会导致前端气泡突变。
+ *
+ * 分片粒度 3 个字符，并按总长度反推每片间隔，让整段大约在 600ms 内「打完」：
+ * 短回答有节奏感，长回答也不会拖太久（延迟夹在 0~35ms，长文本基本是连发）。
+ */
+async function* streamAsTypewriter(
+  content: string,
+): AsyncGenerator<{ type: 'message'; content: string }> {
+  const CHUNK = 3;
+  const total = content.length;
+  if (total === 0) return;
+
+  const steps = Math.ceil(total / CHUNK);
+  const delay = Math.min(35, Math.max(0, Math.round(600 / steps)));
+
+  for (let i = CHUNK; i < total; i += CHUNK) {
+    yield { type: 'message', content: content.slice(0, i) };
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  // 最后一片必须是完整文本，避免长度不整除时漏掉尾巴
+  yield { type: 'message', content };
 }

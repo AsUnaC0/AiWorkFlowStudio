@@ -1,0 +1,17 @@
+{
+  "name": "xiaodie-desktop-pet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "平台助理「小蝶」的桌面桌宠客户端（Electron，透明置顶窗口）",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  },
+  "dependencies": {
+    "msedge-tts": "^2.1.1"
+  }
+}

@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    
+    <title>小蝶</title>
+    <link rel="stylesheet" href="file:///C:/Users/meibus/Desktop/AI WorkFlow Studio/desktop/src/renderer/style.css" />
+  <style>html,body{width:340px;height:480px;overflow:hidden}body{position:relative}</style></head>
+  <body>
+    <div class="stage" id="stage">
+      <!-- 右上角常驻控件：语音开关 + 设置（登录后才有） -->
+      <div class="top-controls" id="topControls" hidden>
+        <button class="icon-btn voice-btn" id="voiceBtn" title="语音播报">
+          <svg
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M11 5 6 9H3v6h3l5 4z" />
+            <g class="voice-wave">
+              <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+              <path d="M18.5 6a9 9 0 0 1 0 12" />
+            </g>
+            <line class="voice-slash" x1="3" y1="3" x2="21" y2="21" />
+          </svg>
+        </button>
+        <button class="icon-btn settings-btn" id="settingsBtn" title="设置 / 音色">
+          <svg
+            viewBox="0 0 24 24"
+            width="17"
+            height="17"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="3.2" />
+            <path
+              d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.11a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.11a1.7 1.7 0 0 0 1.55-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.11a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.11a1.7 1.7 0 0 0-1.49 1z"
+            />
+          </svg>
+        </button>
+      </div>
+
+      <!-- 对话气泡 -->
+      <div class="bubble hit" id="bubble" hidden>
+        <div class="bubble-text" id="bubbleText"></div>
+        <button class="bubble-close" id="bubbleClose" title="收起">×</button>
+      </div>
+
+      <!-- 形象 -->
+      <div class="pet-wrap hit" id="petWrap">
+        <svg class="pet-svg" viewBox="0 0 200 200" aria-label="小蝶">
+          <defs>
+            <linearGradient id="hairGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#6B4557" />
+              <stop offset="100%" stop-color="#3E2735" />
+            </linearGradient>
+            <linearGradient id="dressGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#FFC2D8" />
+              <stop offset="100%" stop-color="#FF87B5" />
+            </linearGradient>
+            <radialGradient id="faceGrad" cx="50%" cy="38%" r="65%">
+              <stop offset="0%" stop-color="#FFF0E9" />
+              <stop offset="100%" stop-color="#FFDCCF" />
+            </radialGradient>
+            <radialGradient id="shadowGrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="rgba(120,60,90,0.28)" />
+              <stop offset="100%" stop-color="rgba(120,60,90,0)" />
+            </radialGradient>
+          </defs>
+
+          <!-- 地面投影 -->
+          <ellipse cx="100" cy="192" rx="44" ry="6" fill="url(#shadowGrad)" />
+
+          <g class="pet-root">
+            <!-- 后发 -->
+            <ellipse cx="100" cy="86" rx="58" ry="60" fill="url(#hairGrad)" />
+            <!-- 两侧垂发 -->
+            <path
+              d="M46 78 C 40 108, 42 136, 50 154 C 56 134, 56 106, 58 82 Z"
+              fill="url(#hairGrad)"
+            />
+            <path
+              d="M154 78 C 160 108, 158 136, 150 154 C 144 134, 144 106, 142 82 Z"
+              fill="url(#hairGrad)"
+            />
+
+            <!-- 身体 -->
+            <g class="body">
+              <path
+                d="M100 118 C 90 118, 84 126, 82 142 C 78 162, 72 178, 70 190
+                   L 130 190 C 128 178, 122 162, 118 142 C 116 126, 110 118, 100 118 Z"
+                fill="url(#dressGrad)"
+              />
+              <!-- 裙摆高光 -->
+              <path
+                d="M100 118 C 92 118, 86 124, 83 134 C 90 130, 95 129, 100 129
+                   C 105 129, 110 130, 117 134 C 114 124, 108 118, 100 118 Z"
+                fill="rgba(255,255,255,0.55)"
+              />
+              <!-- 领口 -->
+              <path
+                d="M88 120 C 94 128, 106 128, 112 120 C 106 124, 94 124, 88 120 Z"
+                fill="#FFF3F7"
+              />
+              <!-- 领结 -->
+              <path d="M100 128 L 92 122 L 92 134 Z" fill="#FF6B9D" />
+              <path d="M100 128 L 108 122 L 108 134 Z" fill="#FF6B9D" />
+              <circle cx="100" cy="128" r="2.4" fill="#FF9EC0" />
+              <!-- 小手 -->
+              <ellipse cx="67" cy="176" rx="5.5" ry="6.5" fill="#FFDCCF" />
+              <ellipse cx="133" cy="176" rx="5.5" ry="6.5" fill="#FFDCCF" />
+            </g>
+
+            <!-- 脖子 -->
+            <rect x="94" y="108" width="12" height="16" rx="5" fill="#F5C9BA" />
+
+            <!-- 头 -->
+            <g class="head">
+              <ellipse cx="100" cy="72" rx="52" ry="48" fill="url(#faceGrad)" />
+
+              <!-- 刘海：齐刘海，下沿几乎齐平，只压住眼睛顶部一点点 -->
+              <path
+                d="M48 76 C 48 26, 70 16, 100 16 C 130 16, 152 26, 152 76
+                   C 150 64, 140 61.5, 128 61.5 C 116 64.5, 84 64.5, 72 61.5
+                   C 60 61.5, 50 64, 48 76 Z"
+                fill="url(#hairGrad)"
+              />
+
+              <!-- 眼睛 -->
+              <g class="eyes">
+                <g class="eye">
+                  <ellipse cx="80" cy="80" rx="9" ry="11.5" fill="#6B4660" />
+                  <ellipse cx="80" cy="85" rx="6.4" ry="6.6" fill="#8E5F7C" />
+                  <circle cx="83" cy="75.5" r="3.4" fill="#FFFFFF" />
+                  <circle cx="77" cy="84" r="1.7" fill="rgba(255,255,255,0.75)" />
+                </g>
+                <g class="eye">
+                  <ellipse cx="120" cy="80" rx="9" ry="11.5" fill="#6B4660" />
+                  <ellipse cx="120" cy="85" rx="6.4" ry="6.6" fill="#8E5F7C" />
+                  <circle cx="123" cy="75.5" r="3.4" fill="#FFFFFF" />
+                  <circle cx="117" cy="84" r="1.7" fill="rgba(255,255,255,0.75)" />
+                </g>
+              </g>
+
+              <!-- 腮红 -->
+              <ellipse cx="58" cy="94" rx="10" ry="5.5" fill="#FFAFC4" opacity="0.6" />
+              <ellipse cx="142" cy="94" rx="10" ry="5.5" fill="#FFAFC4" opacity="0.6" />
+
+              <!-- 嘴 -->
+              <path
+                class="mouth"
+                d="M95 98 Q 100 103.5 105 98"
+                stroke="#B5657F"
+                stroke-width="2.2"
+                fill="none"
+                stroke-linecap="round"
+              />
+
+              <!-- 蝴蝶结发饰 -->
+              <g class="bow">
+                <path d="M66 36 L 51 26 L 51 46 Z" fill="#FF6B9D" />
+                <path d="M66 36 L 81 26 L 81 46 Z" fill="#FF6B9D" />
+                <circle cx="66" cy="36" r="4.6" fill="#FF9EC0" />
+              </g>
+            </g>
+          </g>
+        </svg>
+      </div>
+
+      <!-- 输入条 -->
+      <form class="inputbar hit" id="inputbar" hidden>
+        <input
+          id="input"
+          type="text"
+          maxlength="500"
+          placeholder="和小蝶说点什么…"
+          autocomplete="off"
+        />
+        <button type="submit" class="send" id="sendBtn" title="发送">↵</button>
+      </form>
+    </div>
+
+    <!-- 设置 / 登录面板 -->
+    <div class="panel hit" id="panel" hidden>
+      <header class="panel-head">
+        <span id="panelTitle">设置</span>
+        <button class="panel-close" id="panelClose" title="关闭">×</button>
+      </header>
+
+      <div class="panel-body">
+        <!-- 未登录 -->
+        <section id="loginSection">
+          <label class="field">
+            <span>服务地址</span>
+            <input id="baseUrl" type="text" placeholder="http://localhost:3000" />
+          </label>
+          <label class="field">
+            <span>邮箱</span>
+            <input id="email" type="email" placeholder="you@example.com" autocomplete="username" />
+          </label>
+          <label class="field">
+            <span>密码</span>
+            <input id="password" type="password" placeholder="••••••••" autocomplete="current-password" />
+          </label>
+          <button class="primary" id="loginBtn">登录</button>
+          <p class="tip" id="loginTip">
+            账号与网页版是同一个。桌宠只保存 token，不保存密码。
+          </p>
+        </section>
+
+        <!-- 已登录 -->
+        <section id="accountSection" hidden>
+          <div class="row">
+            <span class="label">当前账号</span>
+            <span class="value" id="accountEmail">-</span>
+          </div>
+          <div class="row">
+            <span class="label">人格</span>
+            <span class="value" id="personaName">-</span>
+          </div>
+          <div class="row">
+            <span class="label">桌宠开关</span>
+            <span class="value" id="petEnabledText">-</span>
+          </div>
+          <label class="switch-row">
+            <span>鼠标穿透（透明区域可点穿）</span>
+            <input type="checkbox" id="clickThrough" />
+          </label>
+          <p class="tip">
+            拖不动小蝶、或点不到她的时候，把鼠标穿透关掉。
+          </p>
+
+          <label class="switch-row">
+            <span>语音播报（Edge TTS）</span>
+            <input type="checkbox" id="voiceToggle" />
+          </label>
+          <label class="field">
+            <span>音色</span>
+            <select id="voiceSelect">
+              <option value="zh-CN-XiaoyiNeural">甜美女声</option>
+              <option value="zh-CN-XiaoxiaoNeural">温柔女声</option>
+              <option value="zh-CN-liaoning-XiaobeiNeural">东北女声</option>
+              <option value="zh-CN-shaanxi-XiaoniNeural">陕西女声</option>
+            </select>
+          </label>
+          <p class="tip">
+            关掉后只出气泡不出声（静音模式）；音色默认跟随网页版人格设置。
+          </p>
+          <div class="actions">
+            <button class="ghost" id="refreshBtn">重新连接</button>
+            <button class="ghost danger" id="logoutBtn">退出登录</button>
+          </div>
+        </section>
+
+        <p class="error" id="panelError" hidden></p>
+      </div>
+    </div>
+
+    
+<script>
+  // 模拟已登录 + 语音开启，用来确认右上角语音浮标的可见性
+  window.pet = {
+    getState: async () => ({
+      baseUrl: 'http://localhost:3000',
+      email: 'me@example.com',
+      loggedIn: true,
+      displayName: '小蝶',
+      clickThrough: true,
+      voiceEnabled: window.__VOICE__ !== false,
+      voiceId: 'zh-CN-XiaoyiNeural',
+      assistant: { persona: { desktopPetEnabled: true, voiceId: 'zh-CN-XiaoyiNeural' } },
+    }),
+    onChatEvent: () => () => {},
+    onVoiceState: () => () => {},
+    speak: async () => ({ ok: false }),
+    setVoice: () => {},
+    saveSettings: async () => ({}),
+    setIgnoreMouse: () => {},
+    dragStart: () => {},
+    dragMove: () => {},
+    dragEnd: () => {},
+    focusInput: () => {},
+    hide: () => {},
+    quit: () => {},
+    openExternal: () => {},
+    login: async () => ({ ok: true }),
+    logout: async () => ({ ok: true }),
+    refreshAssistant: async () => ({ ok: true }),
+    send: async () => ({ ok: true }),
+  };
+</script>
+<script src="file:///C:/Users/meibus/Desktop/AI WorkFlow Studio/desktop/src/renderer/pet.js"></script>
+  
+<script>
+  setTimeout(() => {
+    // pet.js 是普通脚本，函数声明挂在全局，可以直接调
+    if (location.hash === '#panel' && typeof openPanel === 'function') openPanel();
+    if (location.hash === '#muted' && typeof setVoiceUI === 'function') setVoiceUI(false);
+    const el = document.getElementById('voiceBtn');
+    const box = document.createElement('pre');
+    box.style.cssText =
+      'position:fixed;left:0;bottom:0;z-index:9999;margin:0;padding:4px;' +
+      'font:11px/1.4 monospace;background:#ffe;color:#333;';
+    if (!el) {
+      box.textContent = 'voiceBtn: NOT FOUND';
+    } else {
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      box.textContent =
+        'hidden=' + el.hidden +
+        ' display=' + cs.display +
+        ' opacity=' + cs.opacity +
+        ' z=' + cs.zIndex +
+        ' rect=' + [r.left, r.top, r.width, r.height].map(Math.round).join(',');
+    }
+    document.body.appendChild(box);
+  }, 900);
+</script>
+</body>
+</html>

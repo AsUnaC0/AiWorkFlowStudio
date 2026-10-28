@@ -39,6 +39,25 @@
 - 模块依赖方向：`AgentModule → AssistantModule → PlatformToolsModule`（单向）。
   `create_agent` 工具直接用 Prisma 就是为了避免反向依赖，其默认值需与 `AgentService.create` 手工同步。
 
+### 人格与记忆（`backend/src/persona/` + `backend/src/memory/`）
+- **人格存独立表 `AgentPersona`，不塞进 `Agent` 的 JSON 字段**：`AgentService.update` 对系统 Agent 只放开
+  `llmModelId / model / temperature`（`SYSTEM_AGENT_EDITABLE_FIELDS`），塞 Agent 上会被 400 拒掉。
+- Prompt 四段式装配（顺序不可调换）：平台职责 → 人格表达层 → 记忆片段 → 动态上下文
+  （`composeSystemPromptWithExtras`）。人格段前后由服务端追加 `PERSONA_BOUNDARY_HEADER / PERSONA_SAFETY_TAIL`，
+  保证「不承认自己是程序」只作用于表达层，不削弱身份判定与审计。
+- `Agent.name` 保持「平台助理」作为系统标识；界面展示 `persona.name`（`displayName`），
+  `AgentService` 的 `meta` 事件带 `personaName`。
+- **记忆向量用 `Float[]` + 应用层余弦，不引 pgvector**：用户换 Embedding 模型会改维度，
+  固定维度列要重建；单用户记忆量级小，应用层算足够。知识库那套「每版本一张向量表」的复杂度不值得复制。
+- 记忆召回在对话关键路径上，必须能降级：`tryEmbed` 失败一次就熔断 5 分钟走关键词召回，
+  否则 Ollama 没起时每轮对话都要等 embedding 超时。
+- 记忆沉淀是 fire-and-forget（`void memoryWriter.maybeCapture`），同会话 3 分钟冷却；
+  模型输出的 JSON 必须逐字段校验后才落库；命中敏感信息整条丢弃。
+- `MemoryModule → KnowledgeModule`（只为拿 `EmbeddingService`）是单向的，`AgentModule` 可安全 import 两者。
+- **人格 / 记忆的入口收在 Agent 配置页**（`views/agents/detail.vue` 的 Tabs，仅 `isSystem && isDefault` 显示），
+  不做侧边栏菜单 —— 它们是平台助理这个 Agent 的属性，不是独立功能模块。Tab 状态写回 `?tab=` 便于深链。
+  面板组件：`views/agents/components/PersonaPanel.vue`、`components/memory/MemoryPanel.vue`（embedded / 全屏共用）。
+
 ### 模型调用监控（ModelCallLog / Dashboard）
 - 所有模型调用记录的唯一写入口是 `AIService.recordModelCall(telemetry, meta)`；
   **要求 `telemetry.workspaceId` 非空**（表字段 NOT NULL），无归属上下文的调用一律不记录。
@@ -56,6 +75,38 @@
   平台助理校验空间 → 平台助理首个可访问空间 → `agent.workspaceId` → 前端传入 → 用户首个可见空间。
 - 流式调用拿不到 `usage`，Token 记为 0 但调用次数正常；Dashboard 的模型图按 Token 排序时
   要用 `calls` 兜底，否则「有调用没 Token」的模型会被挤到看不见。
+
+### 桌宠客户端（`desktop/`，Electron）
+- 独立 Electron 工程，MVP 子集：透明置顶窗口 + 托盘 + 拖拽 + 内联 SVG 形象 + 文字气泡 + SSE 对话。
+  不含 Live2D / TTS / 截屏感知。
+- **所有网络请求必须在主进程**：后端 `main.ts` 没开 `enableCors()`，渲染进程是 `file://` 源（`Origin: null`）。
+  附带好处是 token 只存在主进程，用 `safeStorage`（Windows DPAPI）加密落盘。
+- **鼠标穿透必须用坐标命中**：`setIgnoreMouseEvents(true, { forward: true })` 转发的 mousemove 不做命中测试，
+  `e.target` 是 `<html>`，`closest()` 永远判不到；要用 `clientX/Y` 比 `getBoundingClientRect()`。
+- **SSE 结束靠空闲兜底**：Electron 主进程读 `text/event-stream` 时 `end` / `close` / `aborted` 都不触发
+  （后端已 `response.end()`）。分档 90s（思考/调工具）/ 5s（已出字），阈值给小了会把首 token 延迟误判成结束。
+- 后端 `agent.service.ts` 分支 B 不再二次调 `streamChat`，改 `streamAsTypewriter(result.content)` 切片推送：
+  少一次模型调用（2.8s vs 5.9s），也避免两次生成不一致导致前端气泡**突变**、累积长度**回退**。
+- **启动方式**：网页 Header 右上角小圆脸 → `POST /api/desktop-pet/launch` → 后端在本机 `spawn` Electron。
+  浏览器不允许网页起本地程序，这是唯一能通的路；后端必须与用户同机，否则返回 503。
+  `DesktopPetService` 靠**探测** `desktop/package.json`（cwd 与 `__dirname` 各往上 6 层）而不是写死相对路径。
+- **本机必须关 GPU**：`app.commandLine.appendSwitch` 三连 `no-sandbox` / `disable-gpu` / **`in-process-gpu`**
+  + `app.disableHardwareAcceleration()`。少了 `in-process-gpu` 会 `GPU process exited unexpectedly` 连崩后直接退出，
+  表现是 `npm start` 一闪而过。
+- **登录态靠「一次性交接文件」传递，点开即登录**：后端写 `%TEMP%/xiaodie-handoff-<uuid>.json`
+  （token/baseUrl/userId/email/expiresAt，0600，60s TTL），只把**路径**放进 `env.XIAODIE_HANDOFF`；
+  token 绝不走命令行或 env（进程命令行同机任何用户可见）。桌宠读完立即删除。
+- **交接文件必须在拿单实例锁之前读**：桌宠已开着时第二个进程 `requestSingleInstanceLock()` 失败就退出，
+  **它的 env 传不到第一个实例**。要先读文件，再用 `requestSingleInstanceLock({ handoff })` →
+  `second-instance` 第 4 个参数交给第一个实例。否则文件烂在临时目录 60 秒（含完整 token）且换账号失效。
+- **语音必须「边读边出字」**：`message` 事件按 `[。！？!?\n]` 切句 → 逐句「合成 → 播放 → 写到哪句显示哪句」；
+  打字机进度用 `AudioBuffer.duration` + `Date.now()` 算（**不要**每次 tick 累加固定字数，setInterval 会漂移）。
+  `tts:speak` 走 `ipcMain.handle` **直接 return base64 音频**，不要用事件推送 —— 事件拿不到「这句播完」的时序。
+- **登录后必须留有进设置面板的路**：`onPetClick()` 在登录态只会弹输入框，所以面板入口单独给
+  （右上角齿轮 / 右键小蝶 / 托盘「设置…」）。否则面板里的开关用户永远看不见 —— 语音开关就踩过这个坑。
+- **`t-menu-group` 的 `title` 属性会顶掉 `#title` 插槽**：`renderTNodeJSX('title', {silent:false})`
+  没传 `slotFirst`，`isPropExplicitlySet` 为真时直接返回 prop 字符串，插槽被**静默丢弃**（无警告）。
+  要自定义标题必须同时删掉 `title` 属性；只想加操作按钮，就把按钮放进**默认插槽**（和菜单项同级）。
 
 ### 数据库迁移
 - **不要用 `prisma migrate dev`**（会把 pgvector 的 IVFFlat 索引当多余对象删掉）。
@@ -76,3 +127,10 @@
 - Agent 侧 Skill（`Agent.skillIds`）仍未接入运行时（只有工作流 LLM 节点会注入 Skill instructions）。
 - MCP OAuth 未实现，目前只支持 NONE / API_KEY / BEARER_TOKEN。
 - 工作流 HTTP 节点的 `SsrfCheckService` 与 MCP 的 `McpUrlGuardService` 是两套独立实现，前者不做 DNS 校验、会跟随重定向。
+
+
+### 文档同步基线（2026-10-28 实测，写文档前先核对）
+- 接口 **141** / Controller **20** / 数据表 **31** / 迁移 **25** / 后端 `.ts` **181** / `schema.prisma` **1029 行** / 注册模块 **21** / 平台工具 **19** / MCP 传输 **3 种**（Streamable HTTP / SSE / STDIO）。
+- 统计接口数的正确姿势：`grep -rhoE "^\s*@(Get|Post|Put|Patch|Delete|All)\(" src`（**行首**匹配，否则会命中注释里的 `@Get(':id')` 多算 1 个）。
+- `backend/src/tts/`：**零依赖**模块，`POST /tts/synthesize`（`msedge-tts` v2 令牌，返回 base64 mp3），是桌宠「边读边出字」的后端兜底；`voice` 限 `VOICE_IDS` 白名单（`persona/persona.prompt.ts`）。文档见 08 第九节 / 教程 00 §3.16 / 教程 08 §6.10。
+- `desktop/`（Electron 桌宠）与 `backend/src/{persona,memory,desktop-pet,tts}` 目前**均未 git 提交**（untracked），文档已按工作区实况写好。

@@ -5,9 +5,27 @@ import type { AgentOperation } from "@/types/agent";
 // 平台助理
 // ===========================================================================
 
+export interface PlatformPersonaSummary {
+  name: string;
+  tags: string[];
+  avatar: string | null;
+  voiceEnabled: boolean;
+  voiceId: string;
+  proactiveChatEnabled: boolean;
+  proactiveChatFrequency: string;
+  desktopPetEnabled: boolean;
+  screenPerceptionEnabled: boolean;
+  screenPerceptionInterval: number;
+  personaVersion: number;
+}
+
 export interface PlatformAssistantInfo {
   id: string;
+  /** 系统标识名，固定为「平台助理」 */
   name: string;
+  /** 界面展示名 = 人格名（默认「小蝶」）；改人格名时这里跟着变 */
+  displayName: string;
+  persona: PlatformPersonaSummary;
   description: string | null;
   isPlatformAssistant: boolean;
   /** 后端解析后的当前工作空间（可能为空） */

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>会话区「新建会话」预览</title>
+    <link rel="stylesheet" href="chat.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #f7f8fa;
+        font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        color: #18181b;
+      }
+      .wrap {
+        display: flex;
+        gap: 16px;
+        padding: 16px;
+      }
+      .sidebar {
+        width: 260px;
+        background: #fff;
+        border-radius: 10px;
+        border: 1px solid #e8eaf0;
+        padding: 8px;
+        box-sizing: border-box;
+      }
+      /* 复刻 :deep(.t-menu-group__title) 的覆盖（浏览器会丢弃 :deep 规则） */
+      .t-menu-group__title {
+        padding: 8px 12px;
+        position: relative;
+        font-size: 11px;
+        font-weight: 600;
+        color: #a1a1aa;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .t-menu-group__title + * {
+        margin-top: 4px;
+      }
+      .t-menu__item {
+        display: block;
+      }
+      .t-menu__content {
+        display: block;
+      }
+      .session-delete {
+        border: 0;
+        background: transparent;
+        color: #a1a1aa;
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
+        cursor: pointer;
+        flex-shrink: 0;
+        margin-right: 4px;
+        font-size: 13px;
+        line-height: 1;
+      }
+      .session-delete:hover {
+        color: #d54941;
+        background: #f4f4f5;
+      }
+      .label {
+        font-size: 11px;
+        color: #c4c4cc;
+        padding: 0 4px 8px;
+        letter-spacing: 0.06em;
+      }
+      ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      svg {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <!-- 有会话 -->
+      <div class="sidebar">
+        <div class="label">有会话时</div>
+        <div class="t-menu-group__title">会话</div>
+        <ul>
+          <li class="session-new-row">
+            <button class="session-new-btn" title="新建会话">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+                stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              <span>新建会话</span>
+            </button>
+          </li>
+          <li class="t-menu__item">
+            <div class="t-menu__content">
+              <div class="session-item active">
+                <button class="session-main">
+                  <span class="session-title">新对话</span>
+                  <span class="session-time">16:35</span>
+                </button>
+                <button class="session-delete">✕</button>
+              </div>
+            </div>
+          </li>
+          <li class="t-menu__item">
+            <div class="t-menu__content">
+              <div class="session-item">
+                <button class="session-main">
+                  <span class="session-title">桌宠对话</span>
+                  <span class="session-time">16:22</span>
+                </button>
+                <button class="session-delete">✕</button>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- 没有会话 -->
+      <div class="sidebar">
+        <div class="label">没有会话时</div>
+        <div class="t-menu-group__title">会话</div>
+        <ul>
+          <li class="session-new-row">
+            <button class="session-new-btn" title="新建会话">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+                stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              <span>新建会话</span>
+            </button>
+          </li>
+          <li class="session-empty">
+            <p>还没有会话</p>
+          </li>
+        </ul>
+      </div>
+
+      <!-- 正在回答（禁用） -->
+      <div class="sidebar">
+        <div class="label">正在回答时（禁用）</div>
+        <div class="t-menu-group__title">会话</div>
+        <ul>
+          <li class="session-new-row">
+            <button class="session-new-btn" title="新建会话" disabled>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+                stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              <span>新建会话</span>
+            </button>
+          </li>
+          <li class="t-menu__item">
+            <div class="t-menu__content">
+              <div class="session-item active">
+                <button class="session-main">
+                  <span class="session-title">新对话</span>
+                  <span class="session-time">16:35</span>
+                </button>
+                <button class="session-delete">✕</button>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

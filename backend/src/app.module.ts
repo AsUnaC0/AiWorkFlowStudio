@@ -11,10 +11,14 @@ import { FriendshipModule } from './friendship/friendship.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { LlmConfigModule } from './llm-config/llm-config.module';
 import { McpModule } from './mcp/mcp.module';
+import { MemoryModule } from './memory/memory.module';
+import { PersonaModule } from './persona/persona.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueuesModule } from './queues/queues.module';
 import { SkillModule } from './skill/skill.module';
 import { StorageModule } from './storage/storage.module';
+import { TtsModule } from './tts/tts.module';
+import { DesktopPetModule } from './desktop-pet/desktop-pet.module';
 import { WorkspacesModule } from './workspaces/workspaces.module';
 import { WorkflowsModule } from './workflows/workflows.module';
 
@@ -40,9 +44,13 @@ import { WorkflowsModule } from './workflows/workflows.module';
     QueuesModule,
     AgentModule,
     AssistantModule,
+    PersonaModule,
+    MemoryModule,
     SkillModule,
     McpModule,
     StorageModule,
+    TtsModule,
+    DesktopPetModule,
   ],
 })
 export class AppModule {}

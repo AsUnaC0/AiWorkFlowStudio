@@ -1,0 +1,590 @@
+/* ==========================================================================
+   小蝶桌宠 —— 渲染进程样式
+   窗口本身是透明的，所以 body / html 都不能有背景色。
+   ========================================================================== */
+
+:root {
+  --pink: #ff6b9d;
+  --pink-soft: #ffc2d8;
+  --pink-deep: #e04b80;
+  --ink: #4a2f3d;
+  --ink-soft: #8a6b78;
+  --paper: rgba(255, 255, 255, 0.96);
+  --line: rgba(74, 47, 61, 0.12);
+  --shadow: 0 10px 30px rgba(74, 47, 61, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-user-drag: none;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  user-select: none;
+  cursor: default;
+}
+
+input {
+  user-select: text;
+  font-family: inherit;
+}
+
+/* ---------- 舞台：所有内容贴底排 ---------- */
+
+.stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 6px 10px 2px;
+  gap: 6px;
+}
+
+/* ---------- 右上角常驻控件（语音开关 / 设置） ---------- */
+
+.top-controls {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+}
+
+.top-controls[hidden] {
+  display: none;
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1.5px solid var(--pink-soft);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--pink-deep);
+  box-shadow: 0 4px 14px rgba(74, 47, 61, 0.2);
+  cursor: pointer;
+  transition: color 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.icon-btn:hover {
+  transform: scale(1.08);
+  border-color: var(--pink);
+}
+
+.voice-btn .voice-slash {
+  display: none;
+}
+
+.voice-btn.muted {
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.voice-btn.muted .voice-wave {
+  display: none;
+}
+
+.voice-btn.muted .voice-slash {
+  display: block;
+}
+
+/* ---------- 对话气泡 ---------- */
+
+.bubble {
+  position: relative;
+  /* flex-shrink 让气泡在「气泡 + 输入条」同时出现时自动让位，不把形象挤出窗口 */
+  flex: 0 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 11px 30px 11px 13px;
+  background: var(--paper);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  line-height: 1.62;
+  word-break: break-word;
+  animation: bubble-in 0.22s ease-out;
+}
+
+/* 气泡下方的小尖角，指向形象 */
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  background: var(--paper);
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
+.bubble[hidden] {
+  display: none;
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.bubble-text {
+  white-space: pre-wrap;
+}
+
+.bubble-text .cursor {
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--pink);
+  border-radius: 2px;
+  animation: caret 0.9s steps(1) infinite;
+}
+
+@keyframes caret {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.bubble-close {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.bubble-close:hover {
+  background: rgba(74, 47, 61, 0.08);
+  color: var(--ink);
+}
+
+/* ---------- 形象 ---------- */
+
+.pet-wrap {
+  flex: 0 0 auto;
+  width: 220px;
+  height: 220px;
+  cursor: grab;
+}
+
+.pet-wrap:active {
+  cursor: grabbing;
+}
+
+.pet-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  transition: transform 0.25s ease;
+  filter: drop-shadow(0 6px 12px rgba(74, 47, 61, 0.18));
+}
+
+.pet-wrap:hover .pet-svg {
+  transform: translateY(-3px) scale(1.025);
+}
+
+/* 呼吸（整体轻微起伏） */
+.pet-root {
+  transform-box: view-box;
+  transform-origin: 100px 190px;
+  animation: breathe 3.6s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(0.994, 1.018);
+  }
+}
+
+/* 头部轻微摆动 */
+.head {
+  transform-box: view-box;
+  transform-origin: 100px 110px;
+  animation: sway 5.4s ease-in-out infinite;
+}
+
+@keyframes sway {
+  0%,
+  100% {
+    transform: rotate(-1.4deg);
+  }
+  50% {
+    transform: rotate(1.4deg);
+  }
+}
+
+/* 眨眼 */
+.eyes {
+  transform-box: view-box;
+  transform-origin: 100px 80px;
+  animation: blink 5.2s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+  94%,
+  96% {
+    transform: scaleY(0.06);
+  }
+}
+
+/* 说话时嘴部动起来 */
+.pet-root.talking .mouth {
+  transform-box: view-box;
+  transform-origin: 100px 100px;
+  animation: talk 0.26s ease-in-out infinite alternate;
+}
+
+@keyframes talk {
+  from {
+    transform: scale(1, 1);
+  }
+  to {
+    transform: scale(1.12, 2.1);
+  }
+}
+
+/* 拖拽中：停掉呼吸，免得抖 */
+.pet-root.dragging {
+  animation: none;
+}
+
+/* 被拎起来的感觉：整体轻微倾斜 */
+.pet-wrap.dragging .pet-svg {
+  transform: rotate(-4deg) scale(1.03);
+  transition: transform 0.18s ease;
+}
+
+/* 思考中：轻微摇摆加快 */
+.pet-root.thinking .head {
+  animation: sway 1.6s ease-in-out infinite;
+}
+
+/* ---------- 输入条 ---------- */
+
+.inputbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+  background: var(--paper);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  animation: bubble-in 0.18s ease-out;
+}
+
+.inputbar[hidden] {
+  display: none;
+}
+
+.inputbar input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.inputbar input::placeholder {
+  color: rgba(138, 107, 120, 0.7);
+}
+
+.send {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pink);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.send:hover {
+  background: var(--pink-deep);
+}
+
+.send:disabled {
+  background: var(--pink-soft);
+  cursor: not-allowed;
+}
+
+/* ---------- 设置面板 ---------- */
+
+.panel {
+  position: absolute;
+  /* 高度由内容决定，不铺满整个窗口 —— 内容少时贴顶显示，像一张卡片 */
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 20;
+  max-height: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  /* 面板里有输入框，必须不透明，否则背后的形象会透上来 */
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: bubble-in 0.2s ease-out;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.panel-close {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.panel-close:hover {
+  background: rgba(74, 47, 61, 0.08);
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  font-size: 12px;
+}
+
+.field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.field input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  font-size: 12px;
+  color: var(--ink);
+  background: #fff;
+}
+
+.field input:focus {
+  border-color: var(--pink);
+}
+
+.field select {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  font-size: 12px;
+  color: var(--ink);
+  background: #fff;
+  cursor: pointer;
+}
+
+.field select:focus {
+  border-color: var(--pink);
+}
+
+.primary {
+  width: 100%;
+  margin-top: 2px;
+  padding: 9px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--pink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary:hover {
+  background: var(--pink-deep);
+}
+
+.primary:disabled {
+  background: var(--pink-soft);
+  cursor: not-allowed;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.row .label {
+  color: var(--ink-soft);
+}
+
+.row .value {
+  font-weight: 600;
+  max-width: 62%;
+  text-align: right;
+  word-break: break-all;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 0 4px;
+  cursor: pointer;
+}
+
+.switch-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--pink);
+  cursor: pointer;
+}
+
+.tip {
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ghost {
+  flex: 1;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ghost:hover {
+  border-color: var(--pink);
+  color: var(--pink-deep);
+}
+
+.ghost.danger:hover {
+  border-color: #e06060;
+  color: #d04747;
+}
+
+.error {
+  margin: 10px 0 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(224, 75, 128, 0.1);
+  color: #c23b6b;
+  font-size: 11px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.error[hidden] {
+  display: none;
+}
+
+/* ---------- 滚动条 ---------- */
+
+.bubble::-webkit-scrollbar,
+.panel-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.bubble::-webkit-scrollbar-thumb,
+.panel-body::-webkit-scrollbar-thumb {
+  background: rgba(74, 47, 61, 0.18);
+  border-radius: 3px;
+}
+
+.bubble::-webkit-scrollbar-track,
+.panel-body::-webkit-scrollbar-track {
+  background: transparent;
+}

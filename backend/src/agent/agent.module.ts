@@ -8,6 +8,8 @@ import { LlmConfigModule } from '../llm-config/llm-config.module';
 import { ChatFilesModule } from '../chat-files/chat-files.module';
 import { McpModule } from '../mcp/mcp.module';
 import { AssistantModule } from '../assistant/assistant.module';
+import { PersonaModule } from '../persona/persona.module';
+import { MemoryModule } from '../memory/memory.module';
 import { AgentController } from './agent.controller';
 import { AgentService } from './agent.service';
 import { ChatSessionService } from './chat-session.service';
@@ -44,6 +46,10 @@ import { GenerateFileTool } from './tools/generate-file.tool';
     ChatFilesModule,
     // 平台助理（默认系统 Agent 的专属 Prompt / 平台工具注册中心 / 操作审计）
     AssistantModule,
+    // 人格表达层（runStream 装配 System Prompt 时读取）
+    PersonaModule,
+    // 对话记忆（召回注入 + 结束后异步沉淀）
+    MemoryModule,
   ],
   controllers: [AgentController],
   providers: [

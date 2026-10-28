@@ -9,6 +9,7 @@ allowBuilds:
   '@prisma/engines': true
   bcrypt: true
   esbuild: true
+  msedge-tts: set this to true or false
   msgpackr-extract: true
   prisma: true
   unrs-resolver: false

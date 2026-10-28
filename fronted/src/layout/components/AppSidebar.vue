@@ -22,6 +22,7 @@ const activeMenu = computed(() => {
   if (route.path.startsWith("/skills")) return "/skills";
   if (route.path.startsWith("/mcp")) return "/mcp";
   if (route.path.startsWith("/agents")) return "/agents";
+  if (route.path.startsWith("/memory")) return "/agents";
   if (route.path.startsWith("/providers")) return "/providers";
   if (route.path.startsWith("/chat")) return "/chat";
   return route.path;

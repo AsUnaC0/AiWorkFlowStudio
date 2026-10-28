@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { useUserStore } from "@/stores/user";
 import { useWorkspace } from "@/composables/useWorkspace";
 import { useClickOutside } from "@/composables/useClickOutside";
+import { launchDesktopPet } from "@/api/desktopPet";
 import { MessagePlugin } from "tdesign-vue-next";
 
 const router = useRouter();
@@ -37,6 +38,29 @@ const handleLogout = () => {
   userStore.logout();
   MessagePlugin.success("已退出登录");
   router.push("/login");
+};
+
+// 打开桌宠
+const launchingPet = ref(false);
+
+/**
+ * 浏览器不能直接启动本地程序（沙箱限制），所以绕一下后端：
+ * POST /desktop-pet/launch → 后端在本机 spawn Electron。
+ *
+ * 桌宠有单实例锁，重复点不会开出第二个，只会把已有窗口叫到前面，
+ * 所以这个按钮的语义就是「确保桌宠出现在屏幕上」。
+ */
+const handleOpenPet = async () => {
+  if (launchingPet.value) return;
+  launchingPet.value = true;
+  try {
+    const res = await launchDesktopPet();
+    MessagePlugin.success(res?.message || "桌宠正在启动");
+  } catch {
+    // 具体原因（找不到 desktop/ 目录、依赖没装）由 request 拦截器统一弹出
+  } finally {
+    launchingPet.value = false;
+  }
 };
 
 onMounted(async () => {
@@ -96,8 +120,31 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 右侧：通知 + 用户 -->
+    <!-- 右侧：桌宠 + 通知 + 用户 -->
     <div class="header-right">
+      <!-- 打开桌宠 -->
+      <button
+        class="icon-btn pet-trigger"
+        :class="{ 'is-launching': launchingPet }"
+        :disabled="launchingPet"
+        title="打开桌宠"
+        @click="handleOpenPet"
+      >
+        <!-- 内联 SVG：小蝶的小圆脸，和桌宠形象呼应；也避免依赖动态图标名 -->
+        <svg class="pet-glyph" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5" />
+          <circle cx="9" cy="10.4" r="1.25" fill="currentColor" />
+          <circle cx="15" cy="10.4" r="1.25" fill="currentColor" />
+          <path
+            d="M8.7 14.5c1 .9 2.1 1.35 3.3 1.35s2.3-.45 3.3-1.35"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+
       <!-- 通知 -->
       <button class="icon-btn" title="Notifications">
         <t-icon name="notification" />
@@ -416,11 +463,22 @@ onMounted(async () => {
   }
 }
 
+/* 打开桌宠按钮 */
+.pet-trigger {
+  .pet-glyph {
+    display: block;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
 /* 用户 Trigger */
 .user-wrapper {
   position: relative;
 }
-
 .user-trigger {
   display: flex;
   align-items: center;

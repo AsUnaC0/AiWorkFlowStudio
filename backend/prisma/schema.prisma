@@ -386,10 +386,180 @@ model Agent {
   workspace           Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
   creator             User?          @relation(fields: [createdBy], references: [id], onDelete: SetNull)
   sessions            ChatSession[]
+  /** 人格配置（仅系统默认助理有，见 AgentPersona） */
+  persona             AgentPersona?
 
   @@index([workspaceId])
   @@index([createdBy])
   @@index([isSystem])
+}
+
+// ---------------------------------------------------------------------------
+// AgentPersona —— 平台助理的「表达层」配置
+//
+// 为什么独立成表而不是塞进 Agent 的 JSON 字段：
+//   AgentService.update() 对系统 Agent 只放开 llmModelId / model / temperature
+//   三个字段（SYSTEM_AGENT_EDITABLE_FIELDS），任何其它字段一律 400。
+//   人格如果存在 Agent 上，要么放开白名单（面过大），要么每次保存都被拒。
+//
+// 另外 personaVersion 让「改了人格 → 效果变差 → 回滚」成为可操作的事。
+// ---------------------------------------------------------------------------
+
+model AgentPersona {
+  id      String @id @default(uuid())
+  agentId String @unique
+
+  /** 人格名字（默认「小蝶」）—— 只影响展示与语气，不改变系统标识 */
+  name String @default("小蝶")
+  tags String[] @default(["仿真", "真人感", "甜美", "粘人"])
+
+  /** 人格提示词：只描述「怎么说」，不得覆盖平台职责与安全约束 */
+  systemPrompt String
+  avatar       String?
+
+  voiceEnabled Boolean @default(true)
+  /** Edge TTS 音色白名单内的 id（见 persona/persona.prompt.ts 的 VOICE_OPTIONS） */
+  voiceId      String  @default("zh-CN-XiaoyiNeural")
+  speechRate   Float   @default(1.0)
+  pitch        Float   @default(1.0)
+
+  desktopPetEnabled      Boolean @default(false)
+  proactiveChatEnabled   Boolean @default(false)
+  /** off / low / medium / high —— 客户端按档位限频，后端只存配置 */
+  proactiveChatFrequency String  @default("low")
+
+  screenPerceptionEnabled  Boolean @default(false)
+  /** 截屏感知间隔（秒），最小 30 */
+  screenPerceptionInterval Int     @default(60)
+
+  /** 人格配置版本号，每次保存自增，便于审计与回滚 */
+  personaVersion Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// DesktopPetSettings —— 桌面桌宠的客户端偏好（按用户，不按 Agent）
+// ---------------------------------------------------------------------------
+
+model DesktopPetSettings {
+  id     String @id @default(uuid())
+  userId String @unique
+
+  enabled                 Boolean @default(false)
+  voiceEnabled            Boolean @default(true)
+  proactiveChatEnabled    Boolean @default(false)
+  screenPerceptionEnabled Boolean @default(false)
+  perceptionInterval      Int     @default(60)
+  autoLaunch              Boolean @default(false)
+
+  positionX Int?
+  positionY Int?
+  scale     Float   @default(1.0)
+
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Memory —— 平台助理的对话记忆
+//
+// 与知识库的区别：知识库是「文档 → 分块 → 向量」的检索资产；
+// 记忆是「对话 → 摘要 → 事实」的上下文资产，归属于单个用户。
+//
+// 向量为什么用 Float[] 而不是 pgvector：
+//   用户随时可能更换 Embedding 模型，维度会变；pgvector 的 vector(N) 是固定维度列，
+//   换模型就要重建列 + 索引。知识库为这一点已经付出「每版本一张物理向量表」的代价，
+//   记忆不该再踩一遍。单用户记忆量级（几十~几千条）在应用层算余弦完全够用。
+// ---------------------------------------------------------------------------
+
+model Memory {
+  id      String @id @default(uuid())
+  userId  String
+  agentId String
+
+  /** PREFERENCE / FACT / TASK / EVENT / EMOTION / OTHER */
+  category String @default("FACT")
+  /** 简要描述（详情面板标题 + 悬停提示 + 召回注入 Prompt 的内容） */
+  summary  String
+  /** 原文（仅在详情面板按需加载） */
+  content  String
+
+  /** 重要度 0~1，映射 3D 节点亮度/大小 */
+  importance Float @default(0.5)
+
+  embedding      Float[]
+  embeddingModel String?
+
+  sourceConversationId String?
+  sourceMessageId      String?
+
+  lastAccessedAt DateTime?
+  accessCount    Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, agentId, createdAt])
+  @@index([userId, category])
+}
+
+// ---------------------------------------------------------------------------
+// MemoryLink —— 记忆间关联（供 3D 网络渲染连线，weight 决定线亮度）
+// ---------------------------------------------------------------------------
+
+model MemoryLink {
+  id       String @id @default(uuid())
+  userId   String
+  sourceId String
+  targetId String
+  weight   Float  @default(1.0)
+
+  @@unique([sourceId, targetId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// MemorySetting —— 记忆的生成 / 召回偏好（按用户）
+// ---------------------------------------------------------------------------
+
+model MemorySetting {
+  id     String @id @default(uuid())
+  userId String @unique
+
+  /** 是否允许对话后自动沉淀记忆（默认开启，用户可关） */
+  autoCaptureEnabled Boolean @default(true)
+  /** 抽取记忆使用的模型（为空则用用户默认对话模型） */
+  captureModelId     String?
+  /** 召回注入对话的条数上限（默认 6，上限 10） */
+  recallLimit        Int     @default(6)
+
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// RefreshToken —— 桌宠客户端的短时效凭证
+//
+// 网页端继续用 7 天长效 JWT（不动既有登录态）；桌宠必须用短 TTL access token，
+// 靠 refresh token 轮换。存 hash 不存明文，使用一次即轮换（旧的立即吊销）。
+// ---------------------------------------------------------------------------
+
+model RefreshToken {
+  id        String @id @default(uuid())
+  userId    String
+  /** sha256(refreshToken)，绝不明文存储 */
+  tokenHash String @unique
+  /** DESKTOP / WEB */
+  scope     String @default("DESKTOP")
+
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 // ---------------------------------------------------------------------------

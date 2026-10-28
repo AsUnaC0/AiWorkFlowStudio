@@ -218,6 +218,7 @@ currentMessages.push({ role: 'tool', content: outcome.text, tool_call_id: id });
 | POST | `/mcp-servers/:id/test` | 测试连接：握手 + tools/list，结果落库 |
 | POST | `/mcp-servers/:id/tools/refresh` | 刷新工具列表（重新握手并覆盖缓存） |
 | GET | `/mcp-servers/:id/tools` | 实时发现工具列表（不落库） |
+| GET | `/mcp-servers/capabilities` | 传输能力：`{ transports, stdio: { enabled, allowedCommands } }`，前端据此决定是否显示 stdio 选项（**须声明在 `:id` 之前**，否则被 `ParseUUIDPipe` 拒成 400） |
 | POST | `/mcp-servers/:id/tools/call` | 调试用：直接调用某个工具 |
 
 `test` / `refresh` 返回 `{ success, status, transport, protocolVersion, serverInfo, instructions, tools, lastConnectedAt, message }`；
@@ -491,3 +492,23 @@ Engine.run() / runStream() 里每步都打日志：
 - `logRunComplete(runId, durationMs)`
 
 日志输出到 console + 可选的持久化（后续可接 ELK/Loki）。runId 贯穿全链路，方便排查"某次工作流为什么失败"。
+
+## 九、TTS 语音合成（★ 新增模块）
+
+**目录**：`backend/src/tts/`，**零依赖**（`TtsModule` 只注册 Controller + Service，不碰 Prisma）。
+
+桌宠「边读边出字」的**后端兜底通道**：桌宠优先用本地 TTS，本地失败或没装时回退到这个后端代理把文本合成 mp3。
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/tts/synthesize` | body `{ text, voice?, rate?, pitch? }` → `{ format: 'mp3', audio: base64 }` |
+
+- `voice` 必须是服务端白名单 `VOICE_IDS`（`persona/persona.prompt.ts` 定义，与桌宠音色一致），否则回落默认 `zh-CN-XiaoyiNeural`；
+- `rate` 默认 `1.0`（可传 `+50%` 这类相对值），`pitch` 默认 `+0Hz`；
+- 用 `msedge-tts` 而不是 `edge-tts`：微软当前要求 Sec-MS-GEC **v2** 令牌（`edge-tts@1.0.x` 只发 v1，直接 403）；`msedge-tts` 已实现 v2 且带时钟偏差校正；
+- `TtsService.synthesize()` 先把文本按句切片（≤800 字/段）逐段合成再 `Buffer.concat` 拼接，单段失败仅 `warn` 跳过，不中断整体；
+- 音频以 base64 包在 JSON 返回，便于桌宠复用既有 JSON 请求通道（不另开二进制流）。
+
+> 与桌宠的关系：桌宠客户端（`desktop/`）自己有本地 TTS，「语音边读边出字」优先本地；本接口是**后端兜底**，保证没装本地语音引擎时桌宠仍能出声。详见 [教程 00 §3.16](../教程/00-总览与技术选型.md)。

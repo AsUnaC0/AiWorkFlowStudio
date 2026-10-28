@@ -12,8 +12,10 @@ import {
   PLATFORM_ASSISTANT_NAME,
 } from './platform-assistant.prompt';
 import {
-  composeSystemPrompt,
+  composeSystemPromptWithExtras,
   toToolContext,
+  type MemoryRecallItem,
+  type PersonaSectionInput,
   type PlatformAssistantContext,
 } from './platform-assistant.context';
 
@@ -283,7 +285,26 @@ export class PlatformAssistantService {
   // Prompt
   // ===========================================================================
 
-  buildSystemPrompt(ctx: PlatformAssistantContext): string {
-    return composeSystemPrompt(PLATFORM_ASSISTANT_BASE_PROMPT, ctx);
+  /**
+   * 装配本次运行的 System Prompt。
+   *
+   * 四段式（顺序不可调换，见 platform-assistant.context.ts）：
+   *   平台职责与安全约束 → 人格表达层 → 记忆片段 → 动态执行上下文
+   *
+   * @param extras.persona  人格表达层（只有平台助理有，普通 Agent 传 undefined）
+   * @param extras.memories 本次召回的记忆摘要（为空时不注入该段）
+   */
+  buildSystemPrompt(
+    ctx: PlatformAssistantContext,
+    extras?: {
+      persona?: PersonaSectionInput;
+      memories?: MemoryRecallItem[];
+    },
+  ): string {
+    return composeSystemPromptWithExtras(
+      PLATFORM_ASSISTANT_BASE_PROMPT,
+      ctx,
+      extras,
+    );
   }
 }

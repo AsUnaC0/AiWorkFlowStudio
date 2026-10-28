@@ -5,11 +5,12 @@ import type { JwtUser } from '../auth/strategies/jwt.strategy';
 import { PlatformAssistantService } from './platform-assistant.service';
 import { PlatformToolsService } from '../platform-tools/platform-tools.service';
 import { PlatformOperationLogService } from '../platform-tools/platform-operation-log.service';
+import { PersonaService } from '../persona/persona.service';
 
 /**
  * 平台助理对外接口。
  *
- *   GET /platform/assistant            — 平台助理基本信息 + 能力清单
+ *   GET /platform/assistant            — 平台助理基本信息 + 人格 + 能力清单
  *   GET /platform/operations           — 当前用户的操作记录（审计）
  *   GET /platform/operations/stats     — 操作统计
  *
@@ -23,16 +24,36 @@ export class AssistantController {
     private readonly platformAssistant: PlatformAssistantService,
     private readonly platformTools: PlatformToolsService,
     private readonly operationLog: PlatformOperationLogService,
+    private readonly persona: PersonaService,
   ) {}
 
   @Get('assistant')
   async getAssistant(@CurrentUser() user: JwtUser) {
     const agent = await this.platformAssistant.ensure();
     const context = await this.platformAssistant.buildContext(user.id);
+    const persona = await this.persona.get(user.id, agent.id);
 
     return {
       id: agent.id,
+      /**
+       * Agent.name 保留「平台助理」作为系统标识（ensure() 每次启动会纠偏它）；
+       * 界面展示走 displayName = 人格名，用户改人格名时界面跟着变。
+       */
       name: agent.name,
+      displayName: persona.name,
+      persona: {
+        name: persona.name,
+        tags: persona.tags,
+        avatar: persona.avatar,
+        voiceEnabled: persona.voiceEnabled,
+        voiceId: persona.voiceId,
+        proactiveChatEnabled: persona.proactiveChatEnabled,
+        proactiveChatFrequency: persona.proactiveChatFrequency,
+        desktopPetEnabled: persona.desktopPetEnabled,
+        screenPerceptionEnabled: persona.screenPerceptionEnabled,
+        screenPerceptionInterval: persona.screenPerceptionInterval,
+        personaVersion: persona.personaVersion,
+      },
       description: agent.description,
       isPlatformAssistant: true,
       currentWorkspaceId: context.currentWorkspaceId ?? null,

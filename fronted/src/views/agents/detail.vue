@@ -13,6 +13,8 @@ import { AGENT_TEMPLATES } from "@/types/agent";
 import { getLlmModels } from "@/api/provider";
 import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin } from "tdesign-vue-next";
+import PersonaPanel from "./components/PersonaPanel.vue";
+import MemoryPanel from "@/components/memory/MemoryPanel.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -97,6 +99,44 @@ watch(() => route.params.id, loadAgent);
 
 const isSystemAgent = computed(() => agent.value?.isSystem ?? false);
 const template = computed(() => AGENT_TEMPLATES.find((t) => t.type === agent.value?.type));
+
+/**
+ * 平台助理（isSystem && isDefault）才有人格与记忆两个 Tab。
+ *
+ * 判据与后端 PlatformAssistantService.isPlatformAssistant 保持一致 ——
+ * 用「系统默认」这个事实，而不是名字（名字可以被人格改掉）。
+ */
+const isPlatformAssistantAgent = computed(
+    () => !!agent.value?.isSystem && !!agent.value?.isDefault,
+);
+
+const TAB_VALUES = ["config", "persona", "memory"] as const;
+type AgentTab = (typeof TAB_VALUES)[number];
+
+/**
+ * 当前 Tab。
+ *
+ * 初值从 ?tab= 读 —— 聊天页的「人格 / 记忆」按钮就是带 query 跳过来的，
+ * 这样点一次就能直接落到对应面板，而不是先到配置页再点一下。
+ */
+const activeTab = ref<AgentTab>(
+    TAB_VALUES.includes(route.query.tab as AgentTab)
+        ? (route.query.tab as AgentTab)
+        : "config",
+);
+
+// Tab 写回 URL：刷新页面、复制链接都能保持当前位置
+watch(activeTab, (tab) => {
+    const query = { ...route.query };
+    if (tab === "config") delete query.tab;
+    else query.tab = tab;
+    void router.replace({ query });
+});
+
+// 切到普通 Agent 时，人格 / 记忆 Tab 不存在，必须退回配置页，否则会渲染空白
+watch(isPlatformAssistantAgent, (isAssistant) => {
+    if (!isAssistant && activeTab.value !== "config") activeTab.value = "config";
+});
 
 const toggleWorkflow = (id: string) => {
     const i = form.value.workflowIds.indexOf(id);
@@ -196,14 +236,17 @@ const goChat = () => {
                     <template #icon><t-icon name="chat" /></template>
                     对话
                 </t-button>
-                <t-button theme="primary" :disabled="!hasChanges" :loading="saving" @click="handleSave">
+                <t-button theme="primary" v-if="activeTab === 'config'" :disabled="!hasChanges" :loading="saving"
+                    @click="handleSave">
                     <template #icon><t-icon name="save" /></template>
                     保存配置
                 </t-button>
             </div>
         </header>
 
-        <div class="detail-body">
+        <t-tabs v-model="activeTab" class="agent-tabs">
+            <t-tab-panel value="config" label="配置">
+                <div class="detail-body">
             <!-- 左侧：基本信息 -->
             <div class="config-main">
                 <!-- 基本信息 -->
@@ -352,10 +395,32 @@ const goChat = () => {
 
                 <section v-if="isSystemAgent" class="config-section compact warning">
                     <t-icon name="info-circle" class="warning-icon" />
-                    <p>这是系统预设 Agent：名称、描述、系统提示词与绑定资源由系统维护，不可修改；<strong>模型配置（模型、温度）可以调整</strong>。</p>
+                    <p>
+                        这是系统预设 Agent：名称、描述、系统提示词与绑定资源由系统维护，不可修改；<strong>模型配置（模型、温度）可以调整</strong>。
+                        <template v-if="isPlatformAssistantAgent">
+                            <br />
+                            想改它的名字、语气、音色与主动行为？那属于<strong>人格</strong>配置，在上面「人格」标签页里维护；
+                            它记得什么，看「记忆」标签页。
+                            <t-button size="small" variant="outline" class="persona-entry" @click="activeTab = 'persona'">
+                                去配置人格
+                            </t-button>
+                        </template>
+                    </p>
                 </section>
             </aside>
-        </div>
+                </div>
+            </t-tab-panel>
+
+            <!-- 人格：平台助理的「表达层」，只改语气/音色/主动行为 -->
+            <t-tab-panel v-if="isPlatformAssistantAgent" value="persona" label="人格">
+                <PersonaPanel :agent-id="agent.id" />
+            </t-tab-panel>
+
+            <!-- 记忆：助理记得什么，看得见 -->
+            <t-tab-panel v-if="isPlatformAssistantAgent" value="memory" label="记忆">
+                <MemoryPanel embedded />
+            </t-tab-panel>
+        </t-tabs>
     </div>
 
     <div v-else-if="loading" class="loading-state">
@@ -491,6 +556,10 @@ const goChat = () => {
             color: #f97316;
             flex-shrink: 0;
             margin-top: 2px;
+        }
+
+        .persona-entry {
+            margin-top: @space-2;
         }
     }
 }
@@ -665,6 +734,17 @@ const goChat = () => {
         font-size: @font-sm;
         color: @color-text;
         font-weight: 500;
+    }
+}
+
+/* ---------- Tab 布局 ----------
+ * 类名已核对 tdesign-vue-next/es/tabs/style/index.css：
+ * 根节点 .t-tabs、导航 .t-tabs__nav、内容 .t-tabs__content。
+ * TDesign 默认导航与内容贴得比较紧，这里补一点间距。
+ */
+.agent-tabs {
+    :deep(.t-tabs__nav) {
+        margin-bottom: @space-5;
     }
 }
 

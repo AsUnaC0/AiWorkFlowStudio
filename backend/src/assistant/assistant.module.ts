@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { PersonaModule } from '../persona/persona.module';
 import { PlatformToolsModule } from '../platform-tools/platform-tools.module';
 import { AssistantController } from './assistant.controller';
 import { PlatformAssistantService } from './platform-assistant.service';
@@ -21,7 +22,7 @@ import { PlatformAssistantService } from './platform-assistant.service';
  * 因此本模块不 import AgentModule。
  */
 @Module({
-  imports: [AuthModule, PlatformToolsModule],
+  imports: [AuthModule, PersonaModule, PlatformToolsModule],
   controllers: [AssistantController],
   providers: [PlatformAssistantService],
   exports: [PlatformAssistantService],
