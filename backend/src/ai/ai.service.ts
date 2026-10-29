@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ChatOptions,
   ChatResult,
+  ChatStreamChunk,
   EmbeddingOptions,
   EmbeddingResult,
   ModelCallTelemetry,
@@ -95,7 +96,7 @@ export class AIService {
   async *streamChat(
     messages: ChatMessage[],
     options: ChatOptions,
-  ): AsyncGenerator<string> {
+  ): AsyncGenerator<ChatStreamChunk> {
     const start = Date.now();
     let failed = false;
     try {

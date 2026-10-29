@@ -697,8 +697,10 @@ export class LlmConfigService {
     baseUrl?: string,
   ): string | null {
     if (baseUrl) return baseUrl;
-    if (provider === 'openai') return DEFAULT_BASE_URL.openai;
-    if (provider === 'deepseek') return DEFAULT_BASE_URL.deepseek;
+    // openai / deepseek 都有默认地址（与 createProvider 的合并分支保持一致）
+    if (provider === 'openai' || provider === 'deepseek') {
+      return DEFAULT_BASE_URL[provider];
+    }
     if (provider === 'openai-compatible') {
       throw new BadRequestException('openai-compatible 必须提供 baseUrl');
     }

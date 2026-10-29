@@ -206,7 +206,10 @@ export class AgentController {
    *   workspaceId    当前工作空间（可选，仅作为意图传入，后端会重新校验）
    *
    * SSE 事件类型：
-   *   meta / thinking / tool_call / tool_result / operation / file / message / error
+   *   meta / thinking / reasoning / tool_call / tool_result / operation / file / message / error
+   *
+   * 注意 `thinking` 与 `reasoning` 不是一回事：前者是后端自造的「思考中...」状态提示，
+   * 后者是模型真实返回的思维链（只有思考型模型才有，累积语义）。
    */
   @Post('agents/:agentId/chat/stream')
   async runStream(

@@ -4,6 +4,7 @@ import {
   ChatMessage,
   ChatOptions,
   ChatResult,
+  ChatStreamChunk,
   EmbeddingOptions,
   EmbeddingResult,
   ToolDefinition,
@@ -59,17 +60,20 @@ export class OllamaProvider implements AiProvider {
     }
 
     const data = (await response.json()) as {
-      message?: { content?: unknown };
+      message?: { content?: unknown; thinking?: unknown };
       eval_count?: number;
       prompt_eval_count?: number;
     };
 
     const content = normalizeContentToString(data.message?.content);
+    // 思考型模型（deepseek-r1 / qwen3 等）会把思维链放在 message.thinking
+    const reasoning = normalizeContentToString(data.message?.thinking);
     const promptTokens = data.prompt_eval_count;
     const completionTokens = data.eval_count;
 
     return {
       content,
+      ...(reasoning ? { reasoning } : {}),
       model: options.model,
       usage:
         promptTokens !== undefined && completionTokens !== undefined
@@ -97,7 +101,7 @@ export class OllamaProvider implements AiProvider {
   async *streamChat(
     messages: ChatMessage[],
     options: ChatOptions,
-  ): AsyncGenerator<string> {
+  ): AsyncGenerator<ChatStreamChunk> {
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -129,13 +133,17 @@ export class OllamaProvider implements AiProvider {
         for (const line of lines) {
           if (!line.trim()) continue;
           const data = JSON.parse(line) as {
-            message?: { content?: unknown };
+            message?: { content?: unknown; thinking?: unknown };
             done?: boolean;
           };
+          // 推理增量先于正文到达，走独立通道（Ollama 的 NDJSON 每行带 thinking）
+          const thinking = normalizeContentToString(data.message?.thinking);
+          if (thinking) yield { type: 'reasoning', text: thinking };
+
           const content = data.message?.content;
           if (content != null) {
             const text = normalizeContentToString(content);
-            if (text) yield text;
+            if (text) yield { type: 'content', text };
           }
         }
 
@@ -207,6 +215,7 @@ export class OllamaProvider implements AiProvider {
     const data = (await response.json()) as {
       message?: {
         content?: unknown;
+        thinking?: unknown;
         tool_calls?: Array<{
           id?: string;
           type: 'function';
@@ -229,8 +238,12 @@ export class OllamaProvider implements AiProvider {
       },
     }));
 
+    // 思考型模型的思维链（message.thinking）
+    const reasoning = normalizeContentToString(data.message?.thinking);
+
     return {
       content: normalizeContentToString(data.message?.content),
+      ...(reasoning ? { reasoning } : {}),
       toolCalls,
       model: options.model,
       usage:

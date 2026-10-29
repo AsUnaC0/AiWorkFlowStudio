@@ -147,7 +147,7 @@ export interface AgentChatStreamRequest {
  * SSE 流式聊天 —— 推事件给前端。
  * 基于 Agent ID 从后端读取配置，不需要前端传模型/知识库等。
  *
- * 事件类型：meta → thinking → tool_call → tool_result → operation → file → message → error
+ * 事件类型：meta → thinking → reasoning → tool_call → tool_result → operation → file → message → error
  *
  * @param signal 可选的中止信号。页面被真正销毁（登出、跳转到独立路由）时
  *               应 abort，避免流继续消费 token 却无人接收。

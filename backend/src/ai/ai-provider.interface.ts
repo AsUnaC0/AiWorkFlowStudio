@@ -41,12 +41,48 @@ export interface ModelCallTelemetry {
 
 export interface ChatResult {
   content: string;
+  /**
+   * 推理过程（思维链），可选。
+   *
+   * 只有「思考型模型」才会返回：DeepSeek reasoner 的 `reasoning_content`、
+   * OpenRouter 等网关的 `reasoning`、Ollama thinking 模型的 `message.thinking`。
+   * 普通模型为 undefined —— 调用方必须容忍缺失。
+   */
+  reasoning?: string;
   model: string;
   usage?: {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
   };
+}
+
+/**
+ * 流式分片 —— 一次流式响应里可能同时存在两条通道。
+ *
+ * - `content`   给用户看的正文，会拼进聊天气泡、写进 ChatMessage.content
+ * - `reasoning` 模型的推理过程，只展示在独立的折叠区，**不能**混进正文
+ *
+ * 之所以做成联合类型而不是「正文里加标记」：推理内容一旦混进 content，
+ * 就会被持久化进聊天记录、被工作流节点当成输出、被桌宠念出来，全都是错的。
+ * 拆成两条通道后，每个消费方自己决定要不要处理 reasoning。
+ */
+export type ChatStreamChunk =
+  | { type: 'content'; text: string }
+  | { type: 'reasoning'; text: string };
+
+/**
+ * 只取正文的便捷迭代器。
+ *
+ * 不关心推理过程的调用方（工作流 LLM 节点、AIService 旧接口等）用它包一层，
+ * 就能把 `AsyncGenerator<ChatStreamChunk>` 降级成 `AsyncGenerator<string>`。
+ */
+export async function* contentOnly(
+  source: AsyncIterable<ChatStreamChunk>,
+): AsyncGenerator<string> {
+  for await (const chunk of source) {
+    if (chunk.type === 'content') yield chunk.text;
+  }
 }
 
 export interface EmbeddingOptions {
@@ -103,6 +139,8 @@ export interface ToolCall {
 /** chatWithTools 的返回：可能有 content、可能有 tool_calls */
 export interface ToolChatResult {
   content: string;
+  /** 推理过程（同 ChatResult.reasoning，思考型模型才有） */
+  reasoning?: string;
   toolCalls: ToolCall[];
   model: string;
   usage?: ChatResult['usage'];
@@ -118,11 +156,16 @@ export interface AiProvider {
   /** 多轮对话 */
   chat(messages: ChatMessage[], options: ChatOptions): Promise<ChatResult>;
 
-  /** 流式对话 */
+  /**
+   * 流式对话。
+   *
+   * 返回的是「分片」而非纯字符串：正文与推理过程走两条通道，
+   * 消费方按 `chunk.type` 分别处理（只要正文就套 `contentOnly()`）。
+   */
   streamChat(
     messages: ChatMessage[],
     options: ChatOptions,
-  ): AsyncGenerator<string>;
+  ): AsyncGenerator<ChatStreamChunk>;
 
   /** 文本向量化 */
   embedding(

@@ -62,6 +62,14 @@ export type AgentStreamEvent =
       personaName?: string;
     }
   | { type: 'thinking'; message: string }
+  /**
+   * 模型的推理过程（思维链）增量快照。
+   *
+   * 与 `message` 一样是**累积**语义：每次推送当前已收到的推理全文，
+   * 前端直接覆盖渲染即可，不用自己拼接、也不会因为丢包错位。
+   * 只有思考型模型（DeepSeek reasoner / Ollama thinking 模型）才会出现。
+   */
+  | { type: 'reasoning'; content: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   | { type: 'tool_result'; tool: string; result: string; durationMs: number }
   /** 平台助理执行了一次平台操作（前端渲染操作卡片：风险等级 / 目标资源 / 跳转链接） */
@@ -735,26 +743,47 @@ export class AgentService {
     const allTrailSteps: Array<Record<string, unknown>> = [];
     const chatOptions = { model: chatModel, temperature: agent.temperature };
 
+    /**
+     * 推理过程落 trail —— 刷新会话后仍能在气泡里看到「深度思考」。
+     *
+     * 只存一份合并后的全文（多轮工具调用会产生多段推理，按段落拼起来），
+     * 不逐段存：前端就是一个折叠面板，多段会让面板变成一堆碎片。
+     */
+    const pushReasoningStep = (reasoning: string) => {
+      const text = reasoning.trim();
+      if (text) allTrailSteps.push({ type: 'reasoning', content: text });
+    };
+
     // 5a. 无工具 → 直接用 streamChat 做 token 级流式（最常见的纯聊天场景）
     if (tools.length === 0) {
       yield { type: 'thinking', message: '思考中...' };
       allTrailSteps.push({ type: 'thinking', message: '思考中...' });
 
       let fullContent = '';
+      let reasoningContent = '';
       const streamStart = Date.now();
       try {
         if (supportsStream) {
-          for await (const token of chatBackend.streamChat(
+          for await (const chunk of chatBackend.streamChat(
             currentMessages,
             chatOptions,
           )) {
-            fullContent += token;
+            if (chunk.type === 'reasoning') {
+              reasoningContent += chunk.text;
+              yield { type: 'reasoning', content: reasoningContent };
+              continue;
+            }
+            fullContent += chunk.text;
             yield { type: 'message', content: fullContent };
           }
         } else {
           // 模型不支持流式：改用一次性非流式 chat，避免触发服务商 SSE 限制（如 1212）
           const res = await chatBackend.chat(currentMessages, chatOptions);
           fullContent = res.content;
+          if (res.reasoning) {
+            reasoningContent = res.reasoning;
+            yield { type: 'reasoning', content: reasoningContent };
+          }
           yield { type: 'message', content: fullContent };
         }
         await this.recordAgentCall(telemetry, chatBackend, {
@@ -774,6 +803,7 @@ export class AgentService {
       }
 
       if (options.sessionId && fullContent) {
+        pushReasoningStep(reasoningContent);
         await this.persistAssistantMessage(
           options.sessionId,
           fullContent,
@@ -786,6 +816,18 @@ export class AgentService {
     }
 
     // 5b. 有工具 → ReAct 循环（先用非流式 chatWithTools 判断 tool_calls）
+    /**
+     * 多轮工具调用会产生多段推理（第 1 轮决定调什么工具、第 2 轮总结结果……）。
+     * 这里合并成一段，前端只渲染一个折叠面板。
+     */
+    let allReasoning = '';
+    const appendReasoning = (text?: string) => {
+      const t = (text ?? '').trim();
+      if (!t) return false;
+      allReasoning = allReasoning ? `${allReasoning}\n\n${t}` : t;
+      return true;
+    };
+
     for (let i = 0; i < maxIters; i++) {
       yield { type: 'thinking', message: `思考中... (第 ${i + 1} 轮)` };
       allTrailSteps.push({
@@ -820,6 +862,11 @@ export class AgentService {
         status: 'SUCCESS',
       });
 
+      // 本轮推理过程（chatWithTools 是非流式，推理一次到位）→ 累积后推给前端
+      if (appendReasoning(result.reasoning)) {
+        yield { type: 'reasoning', content: allReasoning };
+      }
+
       // LLM 直接回答（本轮没有工具调用）
       if (result.toolCalls.length === 0) {
         // ⚠️ 这里**不能**再用 streamChat 重新生成一遍。
@@ -836,14 +883,22 @@ export class AgentService {
         } else if (supportsStream) {
           // 兜底：模型给了空回答（拒绝/异常），才退回真流式再试一次
           let streamedContent = '';
+          let restreamReasoning = '';
           const restreamStart = Date.now();
           try {
-            for await (const token of chatBackend.streamChat(
+            for await (const chunk of chatBackend.streamChat(
               currentMessages,
               chatOptions,
             )) {
-              streamedContent += token;
+              if (chunk.type === 'reasoning') {
+                restreamReasoning += chunk.text;
+                continue;
+              }
+              streamedContent += chunk.text;
               yield { type: 'message', content: streamedContent };
+            }
+            if (appendReasoning(restreamReasoning)) {
+              yield { type: 'reasoning', content: allReasoning };
             }
             await this.recordAgentCall(telemetry, chatBackend, {
               model: chatModel,
@@ -863,6 +918,7 @@ export class AgentService {
           finalContent = streamedContent;
         }
         if (options.sessionId && finalContent) {
+          pushReasoningStep(allReasoning);
           await this.persistAssistantMessage(
             options.sessionId,
             finalContent,
@@ -992,6 +1048,7 @@ export class AgentService {
 
     yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
     if (options.sessionId) {
+      pushReasoningStep(allReasoning);
       await this.persistAssistantMessage(
         options.sessionId,
         '⚠️ Agent 达到最大工具调用次数限制',

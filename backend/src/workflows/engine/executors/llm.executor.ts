@@ -124,8 +124,10 @@ export class LLMNodeExecutor {
     const start = Date.now();
     let failed = false;
     try {
+      // 只取正文：推理过程（reasoning 分片）属于聊天展示层的概念，
+      // 混进节点输出会污染下游变量、被拼进最终结果。
       for await (const chunk of provider.streamChat(messages, options)) {
-        yield chunk;
+        if (chunk.type === 'content') yield chunk.text;
       }
     } catch (e) {
       failed = true;

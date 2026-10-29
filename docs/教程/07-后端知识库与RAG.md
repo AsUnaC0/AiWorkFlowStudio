@@ -631,7 +631,7 @@ const vectors = await this.embeddingService.embedBatch(
 > 好处：768 不再是硬编码常量，**换 1024 / 1536 维的云端模型也不会整批炸**（只要版本维度配置正确），
 > 只是个别不匹配的块被标记失败，可以单独重试（见 §4.10）。
 
-> **⚠️ 「一批 100 条」≠ 一次请求**：`ollama.provider.ts:135-155` 的实际实现是
+> **⚠️ 「一批 100 条」≠ 一次请求**：`ollama.provider.ts:153-177` 的实际实现是
 > ```typescript
 > const embeddings: number[][] = [];
 > for (const text of texts) {                       // ★ 逐条循环
@@ -743,7 +743,7 @@ DocumentChunk（文本块，解析一次永久复用）
 | 1 | 模型管理页给目标模型勾 `EMBEDDING` → 点「验证」，后端实测写入 `embeddingDimensions` | `POST /llm-configs/models/:id/verify` |
 | 2 | 知识库详情页选目标模型 → 「创建目标版本」 | `POST /knowledge-bases/:id/embedding-versions` |
 | 3 | 「开始重新向量化」→ 入队 `knowledge-reembed`，页面每 3s 轮询进度 | `POST .../embedding-versions/:vid/re-embed` |
-| 4 | 进度 100% 且无失败 → 点「激活」（原子切换，旧版本保留可回滚） | `POST .../embedding-versions/:vid/activate` |
+| 4 | 进度 100% 且无失败 → 点「激活」（原子切换，旧版本保留但会变成 `ARCHIVED`） | `POST .../embedding-versions/:vid/activate` |
 
 重新向量化**不重新解析原文件**（那是 `POST /documents/:id/reprocess` 干的事），
 只复用已有文本块重新生成向量，重跑只捞 `PENDING / FAILED` 的 chunk（已 `DONE` 的不动）。
@@ -885,7 +885,7 @@ const rows = await this.prisma.$queryRaw<VectorHit[]>`
 | **SQL 过滤**（`vector-store.service.ts` 内部） | 距离阈值 | **余弦距离** | `1 - scoreThreshold` = **0.8** | 越小越严格 |
 
 `rag.executor.ts:83` 那行 `const scoreThreshold = config.threshold ?? 0.2;` 拿的是**相似度**，
-传到 `knowledge-retrieval.service.ts:84` 才换算成距离：`distanceThreshold = 1 - scoreThreshold`。
+传到 `knowledge-retrieval.service.ts:94` 才换算成距离：`distanceThreshold = 1 - scoreThreshold`。
 
 **所以：**
 
@@ -953,7 +953,7 @@ RRF 只关心「你排第几」，两个检索各给排名分（`1/(60+rank+1)`�
 > 注意：`vectorSearch` 在 hybrid 里传了 `threshold = 1.0`（几乎不筛），
 > 因为融合层已经够保守了，先不要太激进地丢。
 >
-> ⚠️ **旧文档写的是 `topK * 2`，实际代码是 `topK * 4`**（`knowledge-retrieval.service.ts:136-142`）。
+> ⚠️ **旧文档写的是 `topK * 2`，实际代码是 `topK * 4`**（`knowledge-retrieval.service.ts:210-212`）。
 > 也就是说 topK=5 时，两路各召回 **20** 条再融合，最后取前 5。
 > 召回倍数越大，RRF 越不容易漏掉「只在某一路排第 6~20 名」的相关片段，代价是每次多查一些行。
 
@@ -1101,7 +1101,7 @@ SELECT "fileName", "status", "errorMessage" FROM "Document" ORDER BY "createdAt"
 | **★ 检索用哪个模型** | ★ 现在按**每个 KB 各自的生效版本**分别向量化（`searchForQuery()`）；旧的 `resolveEmbedding()` 三档只在「无向量版本」回退时用 |
 | **★ 维度校验** | 以**生效版本的 `dimensions`** 为准逐条校验（`writeVectors()`），不符的 chunk 记 `FAILED` 不中断整批；`EMBEDDING_DIMENSION = 768` 常量**已删除** |
 | **写库** | ★ 写版本物理表 `EmbeddingVector_<versionId>`（upsert）；旧的 `unnest($1,$2)` 批量 UPDATE 仅作兼容回退 |
-| **★ 换模型** | 不能改 `embeddingModel` 字段了事 → 走 **§4.10**：建版本 → 重新向量化 → 激活（原子切换、旧版保留可回滚） |
+| **★ 换模型** | 不能改 `embeddingModel` 字段了事 → 走 **§4.10**：建版本 → 重新向量化 → 激活（原子切换、旧版保留为 `ARCHIVED`） |
 | **向量检索** | `embedding <=> query` 余弦距离，`≤ threshold` 保留，升序取 topK |
 | **关键词检索** | PostgreSQL `to_tsvector('simple') @@ plainto_tsquery` + `ts_rank` |
 | **混合检索** | 两路并跑 + RRF `Σ 1/(60+rank+1)` 融合取 topK |
@@ -1111,6 +1111,6 @@ SELECT "fileName", "status", "errorMessage" FROM "Document" ORDER BY "createdAt"
 
 ---
 
-上一篇把前端五条链路串到底；下一篇是**全书收尾**：把全部 58 个接口逐字段列出 JSON 示例，前后端字段一一对照，顺便复核前面所有文档的准确性。
+上一篇把前端五条链路串到底；下一篇是**全书收尾**：把全部 141 个接口逐字段列出 JSON 示例，前后端字段一一对照，顺便复核前面所有文档的准确性。
 
 → 打开 [`08-前后端数据对照总表.md`](./08-前后端数据对照总表.md)

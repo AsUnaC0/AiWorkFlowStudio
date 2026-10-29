@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="../../../fronted/dist/assets/index-BTk6yCra.css" />
+<link rel="stylesheet" href="../../../fronted/dist/assets/chat-FGa9m9sf.css" />
+<style>
+  html, body { margin: 0; background: #f7f8fa; }
+  .chat-page { height: auto; }
+  .chat-messages { overflow: visible; }
+  .sec-title { font: 12px/1.6 system-ui; color: #a1a1aa; padding: 12px 48px 0; }
+</style>
+</head>
+<body>
+<div class="chat-page" data-v-d08d6994>
+  <div class="chat-messages" data-v-d08d6994>
+
+    <div class="sec-title">① 折叠态（流结束后）</div>
+    <div class="message-item assistant" data-v-d08d6994>
+      <div class="message-avatar" data-v-d08d6994>✦</div>
+      <div class="message-body" data-v-d08d6994>
+        <div class="message-meta" data-v-d08d6994>
+          <span class="message-role" data-v-d08d6994>小蝶</span>
+          <span class="message-time" data-v-d08d6994>16:42</span>
+        </div>
+        <div class="reasoning" data-v-d08d6994>
+          <button class="reasoning-head" data-v-d08d6994>
+            <span class="reasoning-chevron" data-v-d08d6994>⌄</span>
+            <span class="reasoning-label" data-v-d08d6994>已深度思考</span>
+            <span class="reasoning-hint" data-v-d08d6994>点击展开</span>
+          </button>
+        </div>
+        <div class="message-content" data-v-d08d6994>两打一共是 24 个。</div>
+      </div>
+    </div>
+
+    <div class="sec-title">② 展开态（流式进行中）</div>
+    <div class="message-item assistant" data-v-d08d6994>
+      <div class="message-avatar" data-v-d08d6994>✦</div>
+      <div class="message-body" data-v-d08d6994>
+        <div class="message-meta" data-v-d08d6994>
+          <span class="message-role" data-v-d08d6994>小蝶</span>
+          <span class="message-time" data-v-d08d6994>16:42</span>
+        </div>
+        <div class="reasoning" data-v-d08d6994>
+          <button class="reasoning-head expanded" data-v-d08d6994>
+            <span class="reasoning-chevron" data-v-d08d6994>⌄</span>
+            <span class="reasoning-label" data-v-d08d6994>深度思考中…</span>
+          </button>
+          <div class="reasoning-body" data-v-d08d6994>用户问的是「两打是多少个」。
+先拆一下单位：一打 = 12 个，所以两打 = 12 × 2 = 24。
+这个不需要调用工具，直接算就行。
+回答的时候简短一点，先给结论再说算式。</div>
+        </div>
+        <div class="message-content" data-v-d08d6994>两打一共是 24 个。</div>
+      </div>
+    </div>
+
+    <div class="sec-title">③ 同时有推理 + 处理过程（工具调用场景）</div>
+    <div class="message-item assistant" data-v-d08d6994>
+      <div class="message-avatar" data-v-d08d6994>✦</div>
+      <div class="message-body" data-v-d08d6994>
+        <div class="message-meta" data-v-d08d6994>
+          <span class="message-role" data-v-d08d6994>小蝶</span>
+          <span class="message-time" data-v-d08d6994>16:43</span>
+        </div>
+        <div class="reasoning" data-v-d08d6994>
+          <button class="reasoning-head" data-v-d08d6994>
+            <span class="reasoning-chevron" data-v-d08d6994>⌄</span>
+            <span class="reasoning-label" data-v-d08d6994>已深度思考</span>
+            <span class="reasoning-hint" data-v-d08d6994>点击展开</span>
+          </button>
+        </div>
+        <div class="process" data-v-d08d6994>
+          <button class="process-head" data-v-d08d6994>
+            <span class="process-chevron" data-v-d08d6994>⌄</span>
+            <span data-v-d08d6994>⚙️ 处理过程（1 步）</span>
+          </button>
+          <div class="process-body" data-v-d08d6994>
+            <div class="process-step tool_call" data-v-d08d6994>
+              <span class="step-icon" data-v-d08d6994>🔧</span>
+              <span class="step-text" data-v-d08d6994>调用 <code data-v-d08d6994>list_workflows</code></span>
+            </div>
+          </div>
+        </div>
+        <div class="message-content" data-v-d08d6994>你有 3 个工作流。</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

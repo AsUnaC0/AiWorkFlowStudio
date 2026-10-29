@@ -319,7 +319,7 @@ const toggleProcess = (msgId: string) => {
 /** 展开判定：流式中的消息始终展开；已完成消息按用户点击状态 */
 const processExpanded = (msg: ChatMessage) =>
   streamingMsgId.value === msg.id || expandedProcesses.value.has(msg.id);
-/** 只保留 tool_call + operation（过滤 thinking / tool_result / file） */
+/** 只保留 tool_call + operation（过滤 thinking / reasoning / tool_result / file） */
 const processSteps = (msg: ChatMessage) =>
   (msg.trail ?? []).filter(
     (s) => s.type === "tool_call" || s.type === "operation",
@@ -328,6 +328,36 @@ const hasProcess = (msg: ChatMessage) => processSteps(msg).length > 0;
 /** 步骤数：只统计工具调用，操作卡片随对应工具出现，避免重复计数 */
 const processStepCount = (msg: ChatMessage) =>
   processSteps(msg).filter((s) => s.type === "tool_call").length;
+
+// 深度思考（推理过程）折叠控制
+// 与「处理过程」同一套逻辑：流式中恒展开，结束后自动折叠成一行「已深度思考」
+const expandedReasonings = ref<Set<string>>(new Set());
+const toggleReasoning = (msgId: string) => {
+  if (expandedReasonings.value.has(msgId)) expandedReasonings.value.delete(msgId);
+  else expandedReasonings.value.add(msgId);
+};
+const reasoningExpanded = (msg: ChatMessage) =>
+  streamingMsgId.value === msg.id || expandedReasonings.value.has(msg.id);
+
+/**
+ * 取推理全文。
+ * 后端把推理过程作为**一条** trail 步骤落库（`{ type:'reasoning', content }`），
+ * 所以刷新会话后走的是同一条读取路径，不需要额外的消息字段。
+ */
+const reasoningOf = (msg: ChatMessage): string => {
+  const step = (msg.trail ?? []).find((s) => s.type === "reasoning");
+  const content = step?.content;
+  return typeof content === "string" ? content : "";
+};
+
+/** 流式更新推理全文：始终只保留一条，整体覆盖（后端推的就是累积全文） */
+const setReasoning = (msg: ChatMessage, content: string) => {
+  if (!msg.trail) msg.trail = [];
+  const idx = msg.trail.findIndex((s) => s.type === "reasoning");
+  const step = { type: "reasoning", content };
+  if (idx >= 0) msg.trail[idx] = step;
+  else msg.trail.push(step);
+};
 
 // 侧边栏折叠
 const sidebarCollapsed = ref(false);
@@ -706,6 +736,11 @@ const handleAgentEvent = (event: AgentStreamEvent, assistantMsgId: string) => {
       msg.trail.push(event as unknown as Record<string, unknown>);
       break;
     }
+    case "reasoning": {
+      // 思考型模型的推理过程 —— 单独折叠区展示，不混进正文气泡
+      setReasoning(msg, event.content);
+      break;
+    }
     case "operation": {
       // 平台助理执行了一次平台操作 —— 渲染为操作卡片（风险等级 / 目标资源 / 跳转）
       if (!msg.trail) msg.trail = [];
@@ -819,6 +854,7 @@ const send = async () => {
     sending.value = false;
     streamingMsgId.value = null; // 流结束，恢复普通状态
     expandedProcesses.value.delete(assistantMsgId); // 拿到最终数据 → 自动折叠
+    expandedReasonings.value.delete(assistantMsgId); // 推理过程同理
     // 消息会在 SSE 过程中被逐步填充
     // 最后刷新一下会话列表更新 updatedAt
     if (!disposed) {
@@ -1161,6 +1197,19 @@ const stepOperation = (step: Record<string, unknown>) =>
                   <span class="message-time">{{ formatTime(msg.createdAt) }}</span>
                 </div>
 
+                <!-- 深度思考：思考型模型的推理过程，独立折叠区（默认折叠，流式中自动展开） -->
+                <div v-if="msg.role === 'assistant' && reasoningOf(msg)" class="reasoning">
+                  <button class="reasoning-head" :class="{ expanded: reasoningExpanded(msg) }"
+                    @click="toggleReasoning(msg.id)">
+                    <t-icon name="chevron-down" class="reasoning-chevron" />
+                    <span class="reasoning-label">
+                      {{ reasoningExpanded(msg) ? "深度思考中…" : "已深度思考" }}
+                    </span>
+                    <span v-if="!reasoningExpanded(msg)" class="reasoning-hint">点击展开</span>
+                  </button>
+                  <div v-if="reasoningExpanded(msg)" class="reasoning-body">{{ reasoningOf(msg) }}</div>
+                </div>
+
                 <!-- 处理过程：单一气泡内的可折叠区块（只有 assistant 且有过程步骤时显示） -->
                 <div v-if="msg.role === 'assistant' && hasProcess(msg)" class="process">
                   <button class="process-head" :class="{ expanded: processExpanded(msg) }"
@@ -1214,7 +1263,9 @@ const stepOperation = (step: Record<string, unknown>) =>
                 <div class="message-content">
                   {{ msg.content }}
                   <!-- 无处理过程时：纯聊天等待，内容区显示呼吸 -->
-                  <div v-if="streamingMsgId === msg.id && !msg.content && !hasProcess(msg)" class="content-breathing">
+                  <div
+                    v-if="streamingMsgId === msg.id && !msg.content && !hasProcess(msg) && !reasoningOf(msg)"
+                    class="content-breathing">
                     <i></i><i></i><i></i>
                   </div>
                 </div>
@@ -2136,6 +2187,64 @@ const stepOperation = (step: Record<string, unknown>) =>
   50% {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+// 深度思考（推理过程）
+// 刻意做成「灰底 + 次要文字色」，与上方蓝底的「处理过程」区分：
+// 推理过程是模型的自言自语，不是给用户看的答案，视觉权重必须更低。
+.reasoning {
+  width: 100%;
+  margin-bottom: @space-2;
+  border: 1px solid @color-border;
+  border-radius: @radius-lg;
+  overflow: hidden;
+
+  .reasoning-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: @space-1 @space-3;
+    background: @color-bg-hover;
+    color: @color-text-secondary;
+    font-size: @font-xs;
+    cursor: pointer;
+    border: none;
+    text-align: left;
+
+    .reasoning-chevron {
+      transition: transform 0.2s;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    &.expanded .reasoning-chevron {
+      transform: rotate(180deg);
+    }
+
+    .reasoning-label {
+      font-weight: 500;
+    }
+
+    .reasoning-hint {
+      margin-left: auto;
+      color: @color-text-tertiary;
+      font-size: 11px;
+    }
+  }
+
+  .reasoning-body {
+    padding: @space-2 @space-3;
+    max-height: 360px;
+    overflow-y: auto;
+    border-top: 1px dashed @color-border;
+    font-size: @font-xs;
+    line-height: 1.75;
+    color: @color-text-secondary;
+    /* 保留模型输出的换行与缩进，否则推理过程会糊成一坨 */
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 }
 

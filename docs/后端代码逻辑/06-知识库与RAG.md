@@ -276,7 +276,7 @@ PENDING ──► PROCESSING ──► READY ──► (激活) ──► isActi
 | `PROCESSING` | 正在重新向量化 | ❌ |
 | `READY` | 全部完成（`chunkFailed = 0` 且 done = total） | ✅ |
 | `FAILED` | 有失败项或任务异常 | ❌（可重试失败项） |
-| `ARCHIVED` | 曾被激活，现已被新版本顶下（可回滚） | ✅（重新激活即回滚） |
+| `ARCHIVED` | 曾被激活，现已被新版本顶下 | ❌（状态不是 `READY`，直接激活会被 400 拒绝；需先重跑 re-embed 回到 `READY`） |
 
 ### 换模型的完整流程
 
@@ -312,7 +312,8 @@ await this.prisma.$transaction([
 ```
 
 > 只有 `READY` 的版本才允许激活 —— 防止跑到一半的版本顶上来导致检索空窗。
-> **旧版本不下线不删除**，直接重新激活即可回滚。
+> **旧版本下线后 `status` 变成 `ARCHIVED`，记录和物理表都保留**，但要回滚必须先让它重新跑成 `READY`
+> （`activateVersion()` 的守卫是 `status !== READY → 400`，不会对 `ARCHIVED` 网开一面）。
 
 ### 关键约束（踩过的坑）
 
@@ -612,4 +613,10 @@ export class ReEmbeddingProcessor extends WorkerHost {
 | 进度可查 | `job.updateProgress()` + 版本表 `chunkDone/chunkTotal/chunkFailed`，前端每 3s 轮询 |
 | 完成才可激活 | `chunkFailed = 0` 且 done = total 才置 `READY`，未 `READY` 不让激活 |
 
-> 两个队列都注册在 `queues.module.ts`；`knowledge-reembed` 依赖 Redis，Redis 没起时任务会堆积不执行。
+> **注册位置容易记错**：两条队列都**不在** `queues.module.ts` 里 `registerQueue`。
+> `queues.module.ts` 只做一件事 —— 把 3 个 Processor 挂成 provider（`DocumentProcessor` /
+> `WorkflowProcessor` / `ReEmbeddingProcessor`）。真正的 `BullModule.registerQueue` 写在**用队列的业务模块**里：
+> `knowledge.module.ts:27`（`document-processing`）、`:30`（`knowledge-reembed`）、
+> `workflows.module.ts:38`（`workflow-execution`）、`chat-files.module.ts:32`（`chat-file-processing`）
+> —— 另外 `platform-tools.module.ts:52` 也声明了 `document-processing`，供平台助理挂文档时入队。
+> `knowledge-reembed` 依赖 Redis，Redis 没起时任务会堆积不执行。

@@ -18,10 +18,10 @@ model Agent {
   name             String
   description      String?
   avatar           String?
-  type             AgentType    // GENERAL | KNOWLEDGE | WORKFLOW | TOOL | CUSTOM
+  type             String  @default("GENERAL")  // GENERAL | KNOWLEDGE | WORKFLOW | TOOL | CUSTOM（String，非 Prisma enum）
   isDefault        Boolean      // 系统默认助手（isDefault=true, isSystem=true）
   isSystem         Boolean      // 系统预设，不可修改
-  status           AgentStatus  // DRAFT | PUBLISHED | DISABLED
+  status           String  @default("PUBLISHED") // DRAFT | PUBLISHED | DISABLED（同样是 String）
   
   model            String       // 模型名（默认 qwen2.5:7b）
   llmModelId       String?      // 可选的自定义云端模型 id（优先于 model）
@@ -61,7 +61,7 @@ model Agent {
 
 ### 系统预设 Agent —— 现在只有「平台助理」一个
 
-`ensureSystemAgents()` 已经不再自己创建助手，而是一行委托给平台助理服务（`agent.service.ts:199`）：
+`ensureSystemAgents()` 已经不再自己创建助手，而是一行委托给平台助理服务（`agent.service.ts:215`）：
 
 ```typescript
 async ensureSystemAgents() {
@@ -90,7 +90,7 @@ async ensureSystemAgents() {
 >
 > | 字段 | 运行时是否生效 | 说明 |
 > |---|---|---|
-> | `Agent.mcpServerIds` | ✅ **已接入** | `runStream()` 初始化阶段调 `McpService.findRuntimeConfigs()` + `McpToolService.buildBindings()`（`agent.service.ts:580-593`），把选中 Server 的工具合并进 ReAct 工具集；tool_call 先查 MCP binding，没命中才回落 `ToolRegistry`（三级路由在 `:827-860`） |
+> | `Agent.mcpServerIds` | ✅ **已接入** | `runStream()` 初始化阶段调 `McpService.findRuntimeConfigs()` + `McpToolService.buildBindings()`（`agent.service.ts:641-644`），把选中 Server 的工具合并进 ReAct 工具集；tool_call 先查平台工具 → 再查 MCP binding → 没命中才回落 `ToolRegistry`（三级路由在 `:908-926`） |
 > | `Agent.skillIds` | ❌ **仅 CRUD** | 字段能存能查（`getAvailableResources()` 会返回可选列表），但 `AgentService` 没有注入 `SkillService`，运行时不把 `instructions` 拼进 System Prompt。**已由产品确认暂缓实现，不是 bug** |
 >
 > 所以：**在 Agent 配置页勾选 MCP Server 会生效；勾选 Skill 不会。** 想用 Skill 只能走工作流的 LLM 节点（画布上勾选），详见 [05](./05-工作流引擎.md)。
@@ -164,9 +164,9 @@ async ensureSystemAgents() {
 > **附件解析失败**：用户消息已落库（不丢），但本轮会 `yield { type: 'error', message }` 直接结束，不再调用 LLM。
 >
 > **遥测归属（ModelCallLog）**：初始化第 9 步解析 `telemetryWorkspaceId` 后构造
-> `telemetry = { workspaceId, agentId }`，之后每次 LLM 调用前后都 `recordAgentCall(telemetry, chatBackend, {...})`
-> 写 `ModelCallLog`（成功/失败都记）。`workspaceId` 的解析是**五级回退链**
-> （`resolveTelemetryWorkspaceId()`，`agent.service.ts:928`）：
+> `telemetry = { workspaceId, agentId }`，之后每次 LLM 调用**结束后**调**一次** `recordAgentCall(telemetry, chatBackend, {...})`
+> 写 `ModelCallLog`（成功记 `SUCCESS`、异常记 `FAILED` 后 rethrow，一次调用只落一条）。`workspaceId` 的解析是**五级回退链**
+> （`resolveTelemetryWorkspaceId()`，`agent.service.ts:1009`）：
 > 1. 平台助理当前选中的空间
 > 2. 平台助理可访问的第一个空间（多空间且未选择时兜底，保证统计不丢）
 > 3. Agent 自身所属空间（普通 Agent）
@@ -187,25 +187,38 @@ if (tools.length === 0) {
   allTrailSteps.push({ type: 'thinking', message: '思考中...' });
 
   let fullContent = '';
+  let reasoningContent = '';
   if (supportsStream) {
-    for await (const token of chatBackend.streamChat(currentMessages, chatOptions)) {
-      fullContent += token;
+    for await (const chunk of chatBackend.streamChat(currentMessages, chatOptions)) {
+      // 推理过程走独立事件，累积推送（与 message 同为「全文覆盖」语义）
+      if (chunk.type === 'reasoning') {
+        reasoningContent += chunk.text;
+        yield { type: 'reasoning', content: reasoningContent };
+        continue;
+      }
+      fullContent += chunk.text;
       yield { type: 'message', content: fullContent };   // 累积内容（不是单个 token）
     }
   } else {
     // 模型不支持流式：改用一次性非流式 chat，避免触发服务商 SSE 限制（如 1212 错误）
     const res = await chatBackend.chat(currentMessages, chatOptions);
     fullContent = res.content;
+    if (res.reasoning) {
+      reasoningContent = res.reasoning;
+      yield { type: 'reasoning', content: reasoningContent };
+    }
     yield { type: 'message', content: fullContent };
   }
-  // 前后各调一次 recordAgentCall(telemetry, ...) 写 ModelCallLog（成功/失败都记，见 03 第八节）
+  // 调用结束后 recordAgentCall(telemetry, ...) 记一条 ModelCallLog（成功 SUCCESS / 异常 FAILED 后 rethrow）
 
   // 落库 assistant 消息（content + trail 执行轨迹），再刷一次 updatedAt
+  // 落库前 pushReasoningStep(reasoningContent) —— 推理全文进 trail，刷新会话后仍可见
   return;
 }
 ```
 
-> `allTrailSteps` 是本轮累积的 `thinking / tool_call / tool_result` 数组，最终会写进 ChatMessage 的 **`trail`** 字段，供前端渲染"执行轨迹"折叠面板。
+> `allTrailSteps` 是本轮累积的 `thinking / reasoning / tool_call / tool_result / file / operation` 数组，
+> 最终会写进 ChatMessage 的 **`trail`** 字段，供前端渲染「执行轨迹」折叠面板。
 
 ### 分支 B：有工具 → ReAct 循环
 
@@ -350,6 +363,7 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 |---|---|---|
 | `meta` | 模型信息 | agentId, agentName, model, provider, **isPlatformAssistant** |
 | `thinking` | LLM 正在推理 | message |
+| **`reasoning`** | **模型的推理过程（思维链）**，只有思考型模型才有；累积语义，前端渲染成独立折叠区 | content（每次都是**推理全文**） |
 | `tool_call` | LLM 调用工具 | tool name, args |
 | **`file`** | **`generate_file` 产出的文件**（每个工具执行后，`flushFileEvents()` 在 `tool_result` **之前** yield） | file，前端渲染成文件卡片，见 09 |
 | **`operation`** | **平台工具的一次操作记录**（仅平台助理） | operation（工具 / 风险 / 目标资源 / 状态 / 耗时 / 跳转链接），前端渲染成操作卡片，见 11 |
@@ -357,6 +371,14 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 | `thinking` | 继续下一轮... | |
 | `message` | 最终回答（累积内容） | content（每次都是完整内容） |
 | `error` | 出错（附件解析失败 / 达到工具调用上限 / Agent 被禁用） | message |
+
+> **`reasoning` 与 `thinking` 不是一回事**，别混：
+> - `thinking` 是**后端自己造的**状态提示（「思考中...」「思考中... (第 2 轮)」），没有真实信息量，
+>   只用来让前端显示呼吸动画，且会被前端过滤掉、不渲染成步骤。
+> - `reasoning` 是**模型真实返回的思维链文本**（DeepSeek 的 `reasoning_content` / Ollama 的
+>   `message.thinking`），要展示给用户看。
+>
+> 两者都进 `trail`，但前端只把 `reasoning` 单独渲染成一个「深度思考」折叠区。
 
 ---
 
@@ -556,7 +578,7 @@ ChatMessage 的 role 有 4 种：`user` / `assistant` / `system` / `tool`。
 | `role` | user / assistant / system / tool |
 | `content` | 消息正文（**始终是字符串**）—— 云端模型可能把内容返回成多模态 content parts 数组，Provider 边界已用 `normalizeContentToString()` 归一化，落库前 `persistAssistantMessage()` 再兜一道，见 [03 第九节](./03-AI%20Provider大模型接入层.md) |
 | `toolCalls`（Json?） | 仅 assistant：LLM 返回的原始 tool_calls，用于多轮对话历史重建 |
-| `trail`（Json?） | 仅 assistant：本轮的 `thinking / tool_call / tool_result` 执行轨迹，前端渲染折叠面板 |
+| `trail`（Json?） | 仅 assistant：本轮的 `thinking / reasoning / tool_call / tool_result / file / operation` 执行轨迹，前端渲染折叠面板 |
 | `toolCallId` | 仅 tool：对应 assistant 消息里某个 toolCall 的 `id` |
 | `files`（关联） | 仅 assistant：本轮 `generate_file` 产出的文件（`GeneratedFile`），渲染成文件卡片，见 09 |
 | `attachments`（关联） | 仅 user：随消息上传的聊天附件（`ChatAttachment`），历史回看能看到用户当时发了哪些文件，见 10 |

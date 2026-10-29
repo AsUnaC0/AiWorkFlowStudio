@@ -10,7 +10,7 @@
 |---|---|---|---|
 | 01 | [项目架构与入口](./01-项目架构与入口.md) | main.ts / app.module.ts / PrismaService / StorageService / EncryptionService | NestJS 怎么启动？全局依赖怎么注入？数据库表有哪些？ |
 | 02 | [Auth 认证模块](./02-Auth认证模块.md) | AuthService / JwtStrategy / JwtAuthGuard | 注册登录完整流程？JWT 怎么生成和校验？为什么 validate 里还要查数据库？ |
-| 03 | [AI Provider 大模型接入层](./03-AI%20Provider大模型接入层.md) | AiProvider 接口 / OllamaProvider / OpenAICompatibleProvider / DeepSeekProvider / ProviderFactory | AI_PROVIDER Symbol 怎么变成真实大模型？3 种 Provider 怎么发 HTTP 请求？流式和非流式怎么解析？ |
+| 03 | [AI Provider 大模型接入层](./03-AI%20Provider大模型接入层.md) | AiProvider 接口 / OllamaProvider / OpenAICompatibleProvider / ProviderFactory | AI_PROVIDER Symbol 怎么变成真实大模型？2 种 Provider 怎么发 HTTP 请求？流式和非流式怎么解析？为什么 DeepSeek 没有独立类？ |
 | 04 | [Agent 智能体模块](./04-Agent智能体模块.md) | AgentService / runStream ReAct 循环 / **平台助理分支** / 工具三级路由（平台 → MCP → ToolRegistry）/ ChatSession | ReAct 循环每轮发生什么？工具怎么注册和路由？平台助理怎么接管默认 Agent？ChatSession 怎么持久化？ |
 | 05 | [工作流引擎](./05-工作流引擎.md) | WorkflowEngine / NodeExecutorRegistry / 8 种 Executor / VariableService / WorkflowsService / BullMQ | 画布定义怎么变成可执行的？8 种节点各自做什么？变量模板 {{xxx}} 怎么解析？Condition 怎么选分支？ |
 | 06 | [知识库与 RAG](./06-知识库与RAG.md) | KnowledgeService / DocumentProcessor / DocumentParser / EmbeddingService / VectorStoreService / KnowledgeRetrievalService | 文档上传后怎么变成向量？pgvector 检索有几种模式？RRF 融合怎么工作？ |
@@ -47,10 +47,11 @@
 
 ## 本文档的准确性说明
 
-本套文档已对照 `backend/src/**` 与 `prisma/schema.prisma` 逐方法核验过。2026-10-23 复核：原审查报告里的
-**14 条文档问题（8 处硬错误 + 6 处描述不完整）已全部修进 01~08**，明细已按「已解决即删除」移除；
-**仍未闭环的代码侧缺口只剩 3 项**（G2 流式 LLM 节点不支持 MCP 工具、G3 RAG 不过滤文档状态、
-Agent 侧 Skill 暂缓未接入），详见 **[后端代码逻辑审查报告](../后端代码逻辑审查报告.md)**。
+本套文档已对照 `backend/src/**` 与 `prisma/schema.prisma` 逐方法核验过。**2026-10-29 全量复核**：01~12 逐篇重跑
+「数字 / 名称 / 行为」三类校验，本轮改掉 8 处与代码不符的描述（见修订记录 #31）；历史问题一律按
+「已解决即删除」处理，明细看 git 历史。
+**仍未闭环的代码侧缺口只剩 2 项**（G2 流式 LLM 节点不支持 MCP 工具、G3 RAG 不过滤文档状态）
+＋ **1 项产品确认暂缓**（Agent 侧 Skill 未接入运行时），详见 **[后端代码逻辑审查报告](../后端代码逻辑审查报告.md)**。
 
 ### 本次更新的修订记录（对照当前代码重新核验）
 
@@ -86,6 +87,8 @@ Agent 侧 Skill 暂缓未接入），详见 **[后端代码逻辑审查报告](.
 | 28 | 01 + 12 | 新增 `DesktopPetModule`（`src/desktop-pet/`，1 个接口）：浏览器不允许网页启动本地程序，所以「网页点一下打开桌宠」由后端 `spawn` 本机 Electron。01 模块树补该模块并说明零依赖；12 §11 新增 **11.0 怎么启动**（两条路 / 目录探测 / 删 `ELECTRON_RUN_AS_NODE` / detached）、补 `npm start` 在本机 GPU 崩溃的修法（`no-sandbox` + `disable-gpu` + `in-process-gpu`） |
 | 29 | 12 | 补 **登录态交接**（12 §11.0 新增小节）：`launch` 把 JWT 写进 `%TEMP%/xiaodie-handoff-<uuid>.json`（0600、60s TTL），只把**路径**放进 `env.XIAODIE_HANDOFF`，桌宠读完即删 → 点开就是登录状态、不弹面板。关键细节：**交接文件必须在拿单实例锁之前读**，否则桌宠已开着时第二个进程拿不到锁就退出、env 传不到第一个实例（实测会留下含完整 token 的文件 60 秒，且换账号失效），改用 `requestSingleInstanceLock({ handoff })` → `second-instance` 第 4 个参数转交 |
 | 30 | 全局 | **同步第七轮（2026-10-28）**：实测后端 **141** 接口 / **20** Controller / **31** 表 / **25** 迁移 / **181** 个 `.ts` / `schema.prisma` **1029** 行 / 注册模块 **21**；补 **TTS 模块**（`/tts/synthesize` 1 接口，零依赖，桌宠后端兜底）到 08 第九节、教程 00 §3.16、教程 08 §6.10、命令.md 模块表；MCP 接口表补 `GET /mcp-servers/capabilities`（共 10 个）；模块树补 `TtsModule`；各基线数字（138/139→141、18→20、852→1029、175/178→181、23→25）统一对齐 |
+| 31 | 03 / 04 / 06 / 10 / 12 / 本页 | **同步第八轮（2026-10-29）全量复核**：改掉 8 处与代码不符的描述 —— 遥测「前后各记一次」→「结束后记一条」、tool_calls 解析的 `parse`/`stringify` 方向、Provider 请求体写死的 `temperature: 0.7`、`ARCHIVED` 版本被标成可激活、附件上下文模板、记忆沉淀分支数、summary「超长丢弃」→「截断到 120 字」；本页「最容易踩的坑」#4（最终答案生成两遍）已随 `streamAsTypewriter` 改造过时，改写为「打字机是后端切片模拟」；审查报告删掉已修复条目索引，只留 G2 / G3 / Skill 暂缓 |
+| 32 | 03 / 04 / 06 / 08 / 10 / 00 / 02 / 12 / 11 / 本页 | **Provider 层两项结构调整（2026-10-29）**：<br>① **删除 `DeepSeekProvider` 子类** —— 只有构造函数 4 行有效代码、零方法覆写，与 `openai` 的「工厂传参」写法不对称。`ai/providers/` 从 3 个实现类收敛到 **2 个**（`OllamaProvider` / `OpenAICompatibleProvider`），承载 4 种 `LlmProviderType`。03 第五节整节改写为「为什么 DeepSeek 没有独立类」+ 两个必须避开的坑（`DEFAULT_BASE_URL.deepseek` 不能删、第三参数 `name` 不能省）；工厂里 `openai` / `deepseek` 两个 case 也合并成一个（`DEFAULT_BASE_URL[provider]` + `provider` 当 name），`openai-compatible` 因无默认地址仍独立。<br>② **新增 reasoning（推理过程）双通道** —— `AiProvider.streamChat` 返回值从 `AsyncGenerator<string>` 改为 `AsyncGenerator<ChatStreamChunk>`（`{type:'content'\|'reasoning', text}`），非流式加 `ChatResult.reasoning?` / `ToolChatResult.reasoning?`；字段探测 `reasoning_content` / `reasoning` / Ollama `message.thinking`。Agent SSE 新增 `reasoning` 事件（累积语义），推理全文作为一条 trail 步骤落库（**无新字段、无迁移**）。03 新增「为什么流式要返回分片」小节，04 补事件表并强调 **`thinking`（后端自造状态）≠ `reasoning`（模型真实思维链）**，06/08 补前端渲染说明，10 补接口签名，12 补桌宠 `reasoning` 期间的思考动画与 SSE 空闲兜底 |
 
 > 仍在文档里但**代码尚未修**的缺口见下表（G2 / G3）。
 
@@ -113,12 +116,12 @@ Agent 侧 Skill 暂缓未接入），详见 **[后端代码逻辑审查报告](.
 > G1 已**拆分处理**：Agent 侧 **MCP 已接入运行时**（不再是缺口，04/08 均已标注 ✅）；
 > 剩下的 **Skill 未接入**部分由产品确认**暂缓实现**，转为"预留字段"在 04/08 中标注，不再是待办。
 
-### 最容易踩的 12 个坑
+### 最容易踩的 13 个坑
 
 1. `StorageService` 的方法叫 **`upload()`**，返回 `{ key, size }`——不是 `save()` 返回字符串
 2. 加密密钥环境变量是 **`LLM_CONFIG_ENCRYPTION_KEY`**，不是 `ENCRYPTION_KEY`
 3. `WorkspaceMember` **没有 role 字段**，role 是按 `userId === workspace.ownerId` 现算的
-4. Agent ReAct 循环里最终答案会**生成两遍**（先整段推、再流式重生成）
+4. Agent 有工具时的「打字机效果」是**后端切片模拟**的（`streamAsTypewriter`，3 字/片），不是真流式 —— 早期「先推整段再 `streamChat` 重生成」的做法已废弃（多花一次调用、内容会突变、长度会回退）
 5. HTTP 节点的 **4xx/5xx 不抛错**（`validateStatus: () => true`），会作为正常响应返回
 6. **生成的 docx 前端预览正常 ≠ Word 能打开**：`[Content_Types].xml` 必须在 zip 首位，且 `w:numId` 不能是 `{...}` 占位符。详见 **09**第六节
 7. **聊天附件 ≠ 知识库文档**：聊天页上传的附件**不向量化、不进 RAG**，只在当轮对话里作为上下文。想长期检索请走知识库上传。详见 **10**第一节
@@ -127,3 +130,4 @@ Agent 侧 Skill 暂缓未接入），详见 **[后端代码逻辑审查报告](.
 10. **Agent 里勾 MCP 会生效，勾 Skill 不会**：MCP 已接入运行时，Skill 仍是预留字段（产品确认暂缓）。详见 **04**第一节的接入状态表
 11. **人格别往 `Agent` 表塞**：系统 Agent 的 `PATCH` 只认 `llmModelId / model / temperature`（`SYSTEM_AGENT_EDITABLE_FIELDS`），多带一个字段整个请求 400。人格走独立表 `AgentPersona` + 自己的接口。详见 **12**
 12. **记忆列表接口不带 `content`**：`GET /memories` 的 `select` 刻意排除正文（只给 `summary`），看全文必须单独 `GET /memories/:id`；3D 图一次取 500 个节点，带正文会把响应撑到几 MB。详见 **12**
+13. **推理过程（`reasoning`）和正文（`content`）是两条流，绝不能混**：`streamChat` 返回的是 `ChatStreamChunk` 联合类型，不是字符串。思考型模型的 `reasoning_content` / `message.thinking` 一旦拼进正文，就会写进 `ChatMessage.content`、被桌宠念出来、被工作流节点当成输出。只要正文的调用方套 `contentOnly()`。详见 **03**第二节

@@ -132,6 +132,17 @@ export interface AgentStreamThinking {
   message: string;
 }
 
+/**
+ * 模型的推理过程（思维链）增量快照。
+ *
+ * 与 `message` 同为**累积**语义：每次推当前已收到的推理全文，直接覆盖渲染即可。
+ * 只有思考型模型（DeepSeek reasoner / Ollama thinking 模型）才会出现。
+ */
+export interface AgentStreamReasoning {
+  type: "reasoning";
+  content: string;
+}
+
 export interface AgentStreamToolCall {
   type: "tool_call";
   tool: string;
@@ -186,6 +197,7 @@ export interface AgentStreamError {
 export type AgentStreamEvent =
   | AgentStreamMeta
   | AgentStreamThinking
+  | AgentStreamReasoning
   | AgentStreamToolCall
   | AgentStreamToolResult
   | AgentStreamOperation

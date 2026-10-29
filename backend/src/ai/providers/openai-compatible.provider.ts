@@ -3,6 +3,7 @@ import {
   ChatMessage,
   ChatOptions,
   ChatResult,
+  ChatStreamChunk,
   EmbeddingOptions,
   EmbeddingResult,
   ToolDefinition,
@@ -21,6 +22,10 @@ import { normalizeContentToString } from '../content.util';
  *   - 向量：POST `{baseUrl}/embeddings`
  *   - 工具：POST `{baseUrl}/chat/completions`，透传 tools
  *   - 模型列表：GET `{baseUrl}/models`
+ *
+ * 思考型模型（DeepSeek reasoner / OpenRouter 推理模型等）额外返回的
+ * `reasoning_content` / `reasoning` 会被解析成独立的推理通道，
+ * 不会混进正文（见 `pickReasoning()` 与 `ChatStreamChunk`）。
  *
  * 注意：Ollama 用的是 NDJSON，而 OpenAI 是 SSE，二者行解析逻辑不同，因此单独实现。
  */
@@ -73,6 +78,27 @@ export class OpenAICompatibleProvider implements AiProvider {
     };
     if (this.apiKey) h.Authorization = `Bearer ${this.apiKey}`;
     return h;
+  }
+
+  /**
+   * 取出推理过程文本（思维链）。
+   *
+   * 字段名各家不统一，这里按优先级探测：
+   *  - `reasoning_content` —— DeepSeek reasoner / 硅基流动等，最常见
+   *  - `reasoning`         —— OpenRouter、部分自建网关
+   *
+   * 两者都可能是字符串，也可能是内容块数组，统一过一遍 normalizeContentToString。
+   * 都没有则返回空串 —— 普通模型本来就没有推理过程，不是错误。
+   */
+  private static pickReasoning(source?: Record<string, unknown>): string {
+    if (!source) return '';
+    for (const key of ['reasoning_content', 'reasoning'] as const) {
+      const value = source[key];
+      if (value == null) continue;
+      const text = normalizeContentToString(value);
+      if (text) return text;
+    }
+    return '';
   }
 
   private toOpenAIMessages(messages: ChatMessage[]): unknown[] {
@@ -131,7 +157,14 @@ export class OpenAICompatibleProvider implements AiProvider {
 
     const data = (await response.json()) as {
       // content 可能是字符串，也可能是多模态内容块数组（图像生成 / 多模态模型）
-      choices?: Array<{ message?: { content?: unknown } }>;
+      choices?: Array<{
+        message?: {
+          content?: unknown;
+          /** 推理过程（思考型模型才有） */
+          reasoning_content?: unknown;
+          reasoning?: unknown;
+        };
+      }>;
       usage?: {
         prompt_tokens?: number;
         completion_tokens?: number;
@@ -139,10 +172,15 @@ export class OpenAICompatibleProvider implements AiProvider {
       };
     };
 
-    const content = normalizeContentToString(data.choices?.[0]?.message?.content);
+    const message = data.choices?.[0]?.message;
+    const content = normalizeContentToString(message?.content);
+    const reasoning = OpenAICompatibleProvider.pickReasoning(
+      message as Record<string, unknown> | undefined,
+    );
     const usage = data.usage;
     return {
       content,
+      ...(reasoning ? { reasoning } : {}),
       model: options.model,
       usage:
         usage && usage.total_tokens !== undefined
@@ -162,7 +200,7 @@ export class OpenAICompatibleProvider implements AiProvider {
   async *streamChat(
     messages: ChatMessage[],
     options: ChatOptions,
-  ): AsyncGenerator<string> {
+  ): AsyncGenerator<ChatStreamChunk> {
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: this.headers,
@@ -199,13 +237,26 @@ export class OpenAICompatibleProvider implements AiProvider {
 
           try {
             const json = JSON.parse(payload) as {
-              choices?: Array<{ delta?: { content?: unknown } }>;
+              choices?: Array<{
+                delta?: {
+                  content?: unknown;
+                  /** 推理过程增量（思考型模型才有） */
+                  reasoning_content?: unknown;
+                  reasoning?: unknown;
+                };
+              }>;
             };
-            const delta = json.choices?.[0]?.delta?.content;
+            const delta = json.choices?.[0]?.delta;
+            // 推理增量先于正文到达，且与正文是两条通道 —— 不能拼进 content
+            const reasoning = OpenAICompatibleProvider.pickReasoning(
+              delta as Record<string, unknown> | undefined,
+            );
+            if (reasoning) yield { type: 'reasoning', text: reasoning };
+
             // delta.content 可能是内容块数组（多模态 / 图像生成），统一转成文本
-            if (delta != null) {
-              const text = normalizeContentToString(delta);
-              if (text) yield text;
+            if (delta?.content != null) {
+              const text = normalizeContentToString(delta.content);
+              if (text) yield { type: 'content', text };
             }
           } catch {
             // 忽略不完整/心跳行
@@ -274,6 +325,9 @@ export class OpenAICompatibleProvider implements AiProvider {
         message?: {
           // 同 chat：可能是字符串或内容块数组
           content?: unknown;
+          /** 推理过程（思考型模型才有） */
+          reasoning_content?: unknown;
+          reasoning?: unknown;
           tool_calls?: Array<{
             id?: string;
             type: 'function';
@@ -302,8 +356,12 @@ export class OpenAICompatibleProvider implements AiProvider {
     }));
 
     const usage = data.usage;
+    const reasoning = OpenAICompatibleProvider.pickReasoning(
+      msg as Record<string, unknown> | undefined,
+    );
     return {
       content: normalizeContentToString(msg?.content),
+      ...(reasoning ? { reasoning } : {}),
       toolCalls,
       model: options.model,
       usage:

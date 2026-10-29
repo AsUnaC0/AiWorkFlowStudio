@@ -739,6 +739,14 @@ api.onChatEvent((event) => {
       break;
     }
 
+    case 'reasoning': {
+      // 思考型模型的推理过程：桌宠不展示内容（气泡太小），
+      // 但必须保持「思考中」动画 —— 推理可能持续几十秒且期间没有 message 事件，
+      // 不处理的话形象会提前静止，看起来像卡死了。
+      petRoot.classList.add('thinking');
+      break;
+    }
+
     case 'tool_call': {
       const label = TOOL_LABELS[event.tool] || event.tool;
       showBubble(`正在${label}…`, { cursor: true });
