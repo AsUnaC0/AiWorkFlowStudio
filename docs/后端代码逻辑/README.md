@@ -11,7 +11,7 @@
 | 01 | [项目架构与入口](./01-项目架构与入口.md) | main.ts / app.module.ts / PrismaService / StorageService / EncryptionService | NestJS 怎么启动？全局依赖怎么注入？数据库表有哪些？ |
 | 02 | [Auth 认证模块](./02-Auth认证模块.md) | AuthService / JwtStrategy / JwtAuthGuard | 注册登录完整流程？JWT 怎么生成和校验？为什么 validate 里还要查数据库？ |
 | 03 | [AI Provider 大模型接入层](./03-AI%20Provider大模型接入层.md) | AiProvider 接口 / OllamaProvider / OpenAICompatibleProvider / ProviderFactory | AI_PROVIDER Symbol 怎么变成真实大模型？2 种 Provider 怎么发 HTTP 请求？流式和非流式怎么解析？为什么 DeepSeek 没有独立类？ |
-| 04 | [Agent 智能体模块](./04-Agent智能体模块.md) | AgentService / runStream ReAct 循环 / **平台助理分支** / 工具三级路由（平台 → MCP → ToolRegistry）/ ChatSession | ReAct 循环每轮发生什么？工具怎么注册和路由？平台助理怎么接管默认 Agent？ChatSession 怎么持久化？ |
+| 04 | [Agent 智能体模块](./04-Agent智能体模块.md) | AgentService / runStream ReAct 循环 / **平台助理分支** / 工具三级路由（平台 → MCP → ToolRegistry）/ **内置 `web_search`** / ChatSession | ReAct 循环每轮发生什么？工具怎么注册和路由？平台助理怎么接管默认 Agent？联网搜索为什么做成内置工具？ChatSession 怎么持久化？ |
 | 05 | [工作流引擎](./05-工作流引擎.md) | WorkflowEngine / NodeExecutorRegistry / 8 种 Executor / VariableService / WorkflowsService / BullMQ | 画布定义怎么变成可执行的？8 种节点各自做什么？变量模板 {{xxx}} 怎么解析？Condition 怎么选分支？ |
 | 06 | [知识库与 RAG](./06-知识库与RAG.md) | KnowledgeService / DocumentProcessor / DocumentParser / EmbeddingService / VectorStoreService / KnowledgeRetrievalService | 文档上传后怎么变成向量？pgvector 检索有几种模式？RRF 融合怎么工作？ |
 | 07 | [LLM 模型配置管理](./07-LLM模型配置管理.md) | LlmConfigService / 加密存储 / resolveModelRuntime() | API Key 怎么保护？运行时怎么动态绑定 Provider？Agent 怎么从本地 Ollama 切到云端 DeepSeek？ |
@@ -50,8 +50,8 @@
 本套文档已对照 `backend/src/**` 与 `prisma/schema.prisma` 逐方法核验过。**2026-10-29 全量复核**：01~12 逐篇重跑
 「数字 / 名称 / 行为」三类校验，本轮改掉 8 处与代码不符的描述（见修订记录 #31）；历史问题一律按
 「已解决即删除」处理，明细看 git 历史。
-**仍未闭环的代码侧缺口只剩 2 项**（G2 流式 LLM 节点不支持 MCP 工具、G3 RAG 不过滤文档状态）
-＋ **1 项产品确认暂缓**（Agent 侧 Skill 未接入运行时），详见 **[后端代码逻辑审查报告](../后端代码逻辑审查报告.md)**。
+**仍未闭环的代码侧缺口只剩 2 项**（G2 流式 LLM 节点不支持 MCP 工具、G3 RAG 不过滤文档状态）。
+Agent 侧 Skill 已于 **2026-10-30 接入运行时**（不再是暂缓项），详见 **[后端代码逻辑审查报告](../后端代码逻辑审查报告.md)**。
 
 ### 本次更新的修订记录（对照当前代码重新核验）
 
@@ -89,6 +89,7 @@
 | 30 | 全局 | **同步第七轮（2026-10-28）**：实测后端 **141** 接口 / **20** Controller / **31** 表 / **25** 迁移 / **181** 个 `.ts` / `schema.prisma` **1029** 行 / 注册模块 **21**；补 **TTS 模块**（`/tts/synthesize` 1 接口，零依赖，桌宠后端兜底）到 08 第九节、教程 00 §3.16、教程 08 §6.10、命令.md 模块表；MCP 接口表补 `GET /mcp-servers/capabilities`（共 10 个）；模块树补 `TtsModule`；各基线数字（138/139→141、18→20、852→1029、175/178→181、23→25）统一对齐 |
 | 31 | 03 / 04 / 06 / 10 / 12 / 本页 | **同步第八轮（2026-10-29）全量复核**：改掉 8 处与代码不符的描述 —— 遥测「前后各记一次」→「结束后记一条」、tool_calls 解析的 `parse`/`stringify` 方向、Provider 请求体写死的 `temperature: 0.7`、`ARCHIVED` 版本被标成可激活、附件上下文模板、记忆沉淀分支数、summary「超长丢弃」→「截断到 120 字」；本页「最容易踩的坑」#4（最终答案生成两遍）已随 `streamAsTypewriter` 改造过时，改写为「打字机是后端切片模拟」；审查报告删掉已修复条目索引，只留 G2 / G3 / Skill 暂缓 |
 | 32 | 03 / 04 / 06 / 08 / 10 / 00 / 02 / 12 / 11 / 本页 | **Provider 层两项结构调整（2026-10-29）**：<br>① **删除 `DeepSeekProvider` 子类** —— 只有构造函数 4 行有效代码、零方法覆写，与 `openai` 的「工厂传参」写法不对称。`ai/providers/` 从 3 个实现类收敛到 **2 个**（`OllamaProvider` / `OpenAICompatibleProvider`），承载 4 种 `LlmProviderType`。03 第五节整节改写为「为什么 DeepSeek 没有独立类」+ 两个必须避开的坑（`DEFAULT_BASE_URL.deepseek` 不能删、第三参数 `name` 不能省）；工厂里 `openai` / `deepseek` 两个 case 也合并成一个（`DEFAULT_BASE_URL[provider]` + `provider` 当 name），`openai-compatible` 因无默认地址仍独立。<br>② **新增 reasoning（推理过程）双通道** —— `AiProvider.streamChat` 返回值从 `AsyncGenerator<string>` 改为 `AsyncGenerator<ChatStreamChunk>`（`{type:'content'\|'reasoning', text}`），非流式加 `ChatResult.reasoning?` / `ToolChatResult.reasoning?`；字段探测 `reasoning_content` / `reasoning` / Ollama `message.thinking`。Agent SSE 新增 `reasoning` 事件（累积语义），推理全文作为一条 trail 步骤落库（**无新字段、无迁移**）。03 新增「为什么流式要返回分片」小节，04 补事件表并强调 **`thinking`（后端自造状态）≠ `reasoning`（模型真实思维链）**，06/08 补前端渲染说明，10 补接口签名，12 补桌宠 `reasoning` 期间的思考动画与 SSE 空闲兜底 |
+| 33 | 04 / 08 / 11 / 01 / 本页 | **新增内置联网搜索 `web_search` + 系统助理放开 Skill/MCP 绑定（2026-10-30）**：<br>① **`web_search`** —— 新增 `backend/src/web-search/`（`WebSearchService` 做 provider 抽象与归一化，`WebSearchModule` 只读环境变量、不碰数据库），`agent/tools/web-search.tool.ts` 出 ToolDefinition；`ToolRegistry.buildDefinitions()` 按 `isAvailable()`（= 配了 `BOCHA_API_KEY` / `TAVILY_API_KEY`）决定要不要 push。04 新增 **§三·六** 完整章节（为什么不做成 MCP、两家的字段差异对照表、摘要截断 520 / 注入提示 / 失败不抛错三个取舍、博查 `HTTP 200 + body.code≠200` 的坑）。<br>② **系统平台助理放开 `skillIds` / `mcpServerIds`** —— `SYSTEM_AGENT_EDITABLE_FIELDS` 从 3 个字段扩到 5 个；**关键**：`assertOwnsSkills()` / `assertOwnsMcpServers()` 原本只写在 `else`（用户 Agent）分支里，必须提到 `if (agent.isSystem)` 之前，否则系统助理能绑别人的 Skill 指令与 MCP 凭据。04 权限模型表、08 两处接入状态、11 新增 **§五·二**、01 模块树说明同步；本页坑表 #11 改写、新增 #14。 |
 
 > 仍在文档里但**代码尚未修**的缺口见下表（G2 / G3）。
 
@@ -100,10 +101,11 @@
 |---|---|---|
 | 工作流 LLM 节点 + BullMQ 异步执行 | ✅ 注入 System Prompt | ✅ `McpToolService.callTool()` 走 Function Calling |
 | 工作流 LLM 节点 + 画布流式调试 | ✅ 注入 System Prompt | ❌ `executeStream()` 忽略 tools（缺口 G2） |
-| **Agent 配置页** | ❌ 仅 CRUD，**已确认暂缓实现** | ✅ **已接入**：`runStream()` 把选中 Server 的工具合并进 ReAct 工具集（见 04） |
+| **Agent 配置页** | ✅ **已接入**：`buildSkillSection()` 把 `instructions` 拼进 System Prompt（见 04） | ✅ **已接入**：配置页有「MCP 工具」区块，`runStream()` 把选中 Server 的工具合并进 ReAct 工具集（见 04） |
+| **系统平台助理**（同一套字段） | ✅ **已接入**（2026-10-30 放开，`SYSTEM_AGENT_EDITABLE_FIELDS` 含 `skillIds`） | ✅ **已接入**（同上，含 `mcpServerIds`） |
 
 > 结论：
-> - **要用 Skill** → 只能在画布的 LLM 节点上勾（在 Agent 里勾没用，字段会存进去但运行时不读）。
+> - **要用 Skill** → Agent 配置页勾选**会生效**；画布 LLM 节点勾选同样生效，两条路径互不影响。
 > - **要用 MCP** → Agent 配置页勾选**会生效**；画布上勾选则必须走 BullMQ 异步执行，流式调试仍调不到。
 
 ### 其余已知实现缺口（文档已标注，代码尚未修）
@@ -113,10 +115,10 @@
 | G2 | `LLMNodeExecutor.executeStream()` 忽略 `tools` / `mcpBindings` | 画布上**流式调试运行**的 LLM 节点调不到 MCP 工具，只有 BullMQ 异步路径可以 |
 | G3 | RAG 检索 SQL 未过滤 `Document.status` | PROCESSING / FAILED 文档已入库的 chunk 也可能被检索出来 |
 
-> G1 已**拆分处理**：Agent 侧 **MCP 已接入运行时**（不再是缺口，04/08 均已标注 ✅）；
-> 剩下的 **Skill 未接入**部分由产品确认**暂缓实现**，转为"预留字段"在 04/08 中标注，不再是待办。
+> G1 已**完全闭环**：Agent 侧 **MCP 与 Skill 均已接入运行时**（04/08 均已标注 ✅），
+> 不再是待办；Skill 的 `WORKFLOW` / `TOOL` 两种 type 仍只有 `instructions` 参与注入，属于后续增强。
 
-### 最容易踩的 13 个坑
+### 最容易踩的 14 个坑
 
 1. `StorageService` 的方法叫 **`upload()`**，返回 `{ key, size }`——不是 `save()` 返回字符串
 2. 加密密钥环境变量是 **`LLM_CONFIG_ENCRYPTION_KEY`**，不是 `ENCRYPTION_KEY`
@@ -127,7 +129,8 @@
 7. **聊天附件 ≠ 知识库文档**：聊天页上传的附件**不向量化、不进 RAG**，只在当轮对话里作为上下文。想长期检索请走知识库上传。详见 **10**第一节
 8. **`ChatAttachment` 不持久化 `previewType`**：历史消息的附件要用扩展名兜底推导预览类型（前端 `previewTypeFromExt()`），否则 PDF 可能被当纯文本渲染。详见 **10**第八节
 9. **平台助理的识别判据是 `isSystem && isDefault`，不是名字**：名字可以被改，标识不能。`Agent.type` 仍是 `'CUSTOM'`，别去加枚举值。详见 **11**第三节
-10. **Agent 里勾 MCP 会生效，勾 Skill 不会**：MCP 已接入运行时，Skill 仍是预留字段（产品确认暂缓）。详见 **04**第一节的接入状态表
-11. **人格别往 `Agent` 表塞**：系统 Agent 的 `PATCH` 只认 `llmModelId / model / temperature`（`SYSTEM_AGENT_EDITABLE_FIELDS`），多带一个字段整个请求 400。人格走独立表 `AgentPersona` + 自己的接口。详见 **12**
+10. **Agent 里勾 MCP 和 Skill 都会生效**：两者都已接入运行时，但 Skill 注入按 `ownerId` 过滤，绑定别人的 Skill 会被拒（`assertOwnsSkills()`）。详见 **04**第一节的接入状态表
+11. **人格别往 `Agent` 表塞**：系统 Agent 的 `PATCH` 只认 `llmModelId / model / temperature / skillIds / mcpServerIds`（`SYSTEM_AGENT_EDITABLE_FIELDS`），多带一个字段整个请求 400。人格走独立表 `AgentPersona` + 自己的接口。详见 **12**
 12. **记忆列表接口不带 `content`**：`GET /memories` 的 `select` 刻意排除正文（只给 `summary`），看全文必须单独 `GET /memories/:id`；3D 图一次取 500 个节点，带正文会把响应撑到几 MB。详见 **12**
 13. **推理过程（`reasoning`）和正文（`content`）是两条流，绝不能混**：`streamChat` 返回的是 `ChatStreamChunk` 联合类型，不是字符串。思考型模型的 `reasoning_content` / `message.thinking` 一旦拼进正文，就会写进 `ChatMessage.content`、被桌宠念出来、被工作流节点当成输出。只要正文的调用方套 `contentOnly()`。详见 **03**第二节
+14. **内置工具的开关在环境变量，不在数据库**：`web_search` 没有 `Agent.enableWebSearch` 这种字段 —— 配了 `BOCHA_API_KEY` / `TAVILY_API_KEY` 就对**所有** Agent（含系统助理）生效，没配则工具定义根本不进 `tools` 数组。想做「按 Agent 开关」得加迁移，别指望前端页面能关。详见 **04**§三·六

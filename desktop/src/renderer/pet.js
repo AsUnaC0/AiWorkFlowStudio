@@ -40,6 +40,7 @@ const refreshBtn = $('refreshBtn');
 const logoutBtn = $('logoutBtn');
 const voiceToggle = $('voiceToggle');
 const voiceSelect = $('voiceSelect');
+const voiceIdInput = $('voiceIdInput');
 const voiceBtn = $('voiceBtn');
 const settingsBtn = $('settingsBtn');
 const topControls = $('topControls');
@@ -875,7 +876,13 @@ loginBtn.addEventListener('click', async () => {
 
     const loginVoiceId = result.assistant?.persona?.voiceId;
     if (loginVoiceId) {
-      voiceSelect.value = loginVoiceId;
+      if (/^voc_/i.test(loginVoiceId)) {
+        // BreezeBlue 音色不在 Edge 下拉里，回填到自定义输入框
+        if (voiceIdInput) voiceIdInput.value = loginVoiceId;
+      } else {
+        voiceSelect.value = loginVoiceId;
+        if (voiceIdInput) voiceIdInput.value = '';
+      }
       api.setVoice({ voiceId: loginVoiceId });
     }
 
@@ -922,8 +929,17 @@ if (settingsBtn) {
 }
 
 voiceSelect.addEventListener('change', () => {
+  // 选了内置 Edge 音色就清掉自定义输入，避免显示与生效不一致
+  if (voiceIdInput) voiceIdInput.value = '';
   api.setVoice({ voiceId: voiceSelect.value });
 });
+
+if (voiceIdInput) {
+  voiceIdInput.addEventListener('change', () => {
+    const v = voiceIdInput.value.trim();
+    if (v) api.setVoice({ voiceId: v });
+  });
+}
 
 // 托盘菜单里也有一个语音开关，改了要同步回来（只更新 UI，不再回写，避免来回弹）
 api.onVoiceState?.((payload) => {

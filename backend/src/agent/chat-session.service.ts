@@ -10,9 +10,9 @@ import { stringifyToolArguments } from '../ai/tool-args.util';
 /**
  * ChatSession 服务 —— 会话隔离。
  *
- * 权限模型：
- *   - 系统 Agent（isSystem=true）：所有人可创建/查看会话
- *   - 用户 Agent（isSystem=false）：只有创建者（createdBy）可操作
+ * 权限模型：Agent 一律按归属隔离（createdBy === userId）。
+ * 系统默认 Agent 也是每个用户一条，所以不再有「系统 Agent 所有人可用」的例外 ——
+ * 那个例外会让用户 A 拿着用户 B 的默认助手 id 建会话、读别人的对话。
  */
 @Injectable()
 export class ChatSessionService {
@@ -24,7 +24,7 @@ export class ChatSessionService {
       where: { id: agentId },
     });
     if (!agent) throw new NotFoundException('Agent 不存在');
-    if (!agent.isSystem && agent.createdBy !== userId) {
+    if (agent.createdBy !== userId) {
       throw new ForbiddenException('无权访问此 Agent');
     }
     return agent;

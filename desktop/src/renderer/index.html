@@ -256,8 +256,13 @@
               <option value="zh-CN-shaanxi-XiaoniNeural">陕西女声</option>
             </select>
           </label>
+          <label class="field">
+            <span>自定义音色 ID（BreezeBlue）</span>
+            <input type="text" id="voiceIdInput" placeholder="voc_xxx（留空则用上面的音色）" />
+          </label>
           <p class="tip">
             关掉后只出气泡不出声（静音模式）；音色默认跟随网页版人格设置。
+            填了 BreezeBlue 的 voiceId（voc_ 开头）会走后端合成。
           </p>
           <div class="actions">
             <button class="ghost" id="refreshBtn">重新连接</button>

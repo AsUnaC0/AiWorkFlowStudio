@@ -8,6 +8,9 @@ import {
     type Agent,
     type AgentResourceWorkflow,
     type AgentResourceKnowledgeBase,
+    type AgentResourceSkill,
+    type AgentResourceMcpServer,
+    type AgentWebSearchCapability,
 } from "@/api/agent";
 import { AGENT_TEMPLATES } from "@/types/agent";
 import { getLlmModels } from "@/api/provider";
@@ -31,6 +34,8 @@ const form = ref({
     systemPrompt: "",
     workflowIds: [] as string[],
     knowledgeBaseIds: [] as string[],
+    skillIds: [] as string[],
+    mcpServerIds: [] as string[],
     maxToolIterations: 10,
     temperature: 0.7,
 });
@@ -55,7 +60,28 @@ const modelOptions = computed(() => [
 const resources = ref<{
     workflows: AgentResourceWorkflow[];
     knowledgeBases: AgentResourceKnowledgeBase[];
-}>({ workflows: [], knowledgeBases: [] });
+    skills: AgentResourceSkill[];
+    mcpServers: AgentResourceMcpServer[];
+    webSearch: AgentWebSearchCapability;
+}>({
+    workflows: [],
+    knowledgeBases: [],
+    skills: [],
+    mcpServers: [],
+    // 后端没返回时按「未启用」显示，避免误以为已开启
+    webSearch: { enabled: false, provider: null },
+});
+
+/** 搜索源展示名 */
+const WEB_SEARCH_LABELS: Record<string, string> = {
+    bocha: "博查",
+    tavily: "Tavily",
+};
+const webSearchLabel = computed(() =>
+    resources.value.webSearch.provider
+        ? WEB_SEARCH_LABELS[resources.value.webSearch.provider] ?? resources.value.webSearch.provider
+        : "",
+);
 
 const loadAgent = async () => {
     if (!agentId.value) return;
@@ -70,6 +96,8 @@ const loadAgent = async () => {
             systemPrompt: a.systemPrompt ?? "",
             workflowIds: [...a.workflowIds],
             knowledgeBaseIds: [...a.knowledgeBaseIds],
+            skillIds: [...a.skillIds],
+            mcpServerIds: [...a.mcpServerIds],
             maxToolIterations: a.maxToolIterations,
             temperature: a.temperature,
         };
@@ -150,6 +178,35 @@ const toggleKB = (id: string) => {
     else form.value.knowledgeBaseIds.push(id);
 };
 
+const toggleSkill = (id: string) => {
+    const i = form.value.skillIds.indexOf(id);
+    if (i > -1) form.value.skillIds.splice(i, 1);
+    else form.value.skillIds.push(id);
+};
+
+const toggleMcp = (id: string) => {
+    const i = form.value.mcpServerIds.indexOf(id);
+    if (i > -1) form.value.mcpServerIds.splice(i, 1);
+    else form.value.mcpServerIds.push(id);
+};
+
+/** MCP Server 连接状态：只有 CONNECTED 才真的能调工具 */
+const MCP_STATUS_LABELS: Record<string, string> = {
+    CONNECTED: "已连接",
+    ERROR: "连接失败",
+    DISCONNECTED: "未连接",
+};
+const mcpStatusLabel = (status: string) =>
+    MCP_STATUS_LABELS[status] ?? status;
+
+/** Skill 类型标签（PROMPT / WORKFLOW / TOOL） */
+const SKILL_TYPE_LABELS: Record<string, string> = {
+    PROMPT: "提示词",
+    WORKFLOW: "工作流",
+    TOOL: "MCP 工具",
+};
+const skillTypeLabel = (type: string) => SKILL_TYPE_LABELS[type] ?? type;
+
 const hasChanges = computed(() => {
     if (!agent.value) return false;
     return (
@@ -159,6 +216,8 @@ const hasChanges = computed(() => {
         form.value.systemPrompt !== (agent.value.systemPrompt ?? "") ||
         JSON.stringify(form.value.workflowIds) !== JSON.stringify(agent.value.workflowIds) ||
         JSON.stringify(form.value.knowledgeBaseIds) !== JSON.stringify(agent.value.knowledgeBaseIds) ||
+        JSON.stringify(form.value.skillIds) !== JSON.stringify(agent.value.skillIds) ||
+        JSON.stringify(form.value.mcpServerIds) !== JSON.stringify(agent.value.mcpServerIds) ||
         form.value.maxToolIterations !== agent.value.maxToolIterations ||
         form.value.temperature !== agent.value.temperature
     );
@@ -174,11 +233,14 @@ const handleSave = async () => {
     saving.value = true;
     try {
         if (isSystemAgent.value) {
-            // 系统预设 Agent：后端只放开模型配置，其余字段由系统维护。
-            // 这里必须「只发模型字段」——多带一个字段整个请求都会被拒（400）。
+            // 系统预设 Agent：后端只放开白名单字段（模型配置 + Skill/MCP 绑定）。
+            // 这里必须「只发白名单字段」——多带一个（name / systemPrompt / workflowIds…）
+            // 整个请求都会被拒（400）。
             await updateAgent(agent.value.id, {
                 llmModelId: form.value.llmModelId,
                 temperature: form.value.temperature,
+                skillIds: form.value.skillIds,
+                mcpServerIds: form.value.mcpServerIds,
             });
         } else {
             await updateAgent(agent.value.id, {
@@ -188,6 +250,8 @@ const handleSave = async () => {
                 systemPrompt: form.value.systemPrompt || undefined,
                 workflowIds: form.value.workflowIds,
                 knowledgeBaseIds: form.value.knowledgeBaseIds,
+                skillIds: form.value.skillIds,
+                mcpServerIds: form.value.mcpServerIds,
                 maxToolIterations: form.value.maxToolIterations,
                 temperature: form.value.temperature,
             });
@@ -353,6 +417,88 @@ const goChat = () => {
                         </div>
                     </div>
                 </section>
+
+                <!-- MCP Server：绑定的工具会合并进 ReAct 工具集
+                     系统 Agent 也允许绑定（后端白名单含 mcpServerIds），归属由后端校验。 -->
+                <section class="config-section">
+                    <h2 class="section-title">
+                        MCP 工具
+                        <span class="section-hint">绑定后，Server 上的工具会合并进 ReAct 工具集，模型可自行调用</span>
+                    </h2>
+                    <div v-if="resources.mcpServers.length === 0" class="empty-hint">
+                        暂无 MCP Server，请先在 MCP 页面添加并测试连接
+                    </div>
+                    <div v-else class="resource-grid">
+                        <div v-for="sv in resources.mcpServers" :key="sv.id" class="resource-card" role="button"
+                            tabindex="0" :class="{ active: form.mcpServerIds.includes(sv.id) }"
+                            @click="toggleMcp(sv.id)">
+                            <div class="resource-icon">
+                                <t-icon name="server" />
+                            </div>
+                            <div class="resource-info">
+                                <span class="resource-name">
+                                    {{ sv.name }}
+                                    <span class="resource-version" :class="`mcp-${sv.status.toLowerCase()}`">
+                                        {{ mcpStatusLabel(sv.status) }}
+                                    </span>
+                                </span>
+                                <span class="resource-meta">{{ sv.description ?? "未填写说明" }}</span>
+                            </div>
+                            <t-icon v-if="form.mcpServerIds.includes(sv.id)" name="check" class="resource-check" />
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 内置能力：联网搜索由后端环境变量决定，页面只读（系统 Agent 同样生效，
+                     所以这一段不放在 !isSystemAgent 条件里） -->
+                <section class="config-section">
+                    <h2 class="section-title">
+                        内置能力
+                        <span class="section-hint">由后端统一提供，对所有 Agent 生效</span>
+                    </h2>
+                    <div class="builtin-row">
+                        <span class="builtin-name">
+                            <t-icon name="link" />
+                            联网搜索
+                            <code>web_search</code>
+                        </span>
+                        <span v-if="resources.webSearch.enabled" class="builtin-status is-on">
+                            已启用 · {{ webSearchLabel }}
+                        </span>
+                        <span v-else class="builtin-status is-off">
+                            未配置 · 在 backend/.env 填写 BOCHA_API_KEY 或 TAVILY_API_KEY 后重启
+                        </span>
+                    </div>
+                </section>
+
+                <!-- Skill：instructions 会拼进 System Prompt
+                     系统 Agent 也允许绑定（后端白名单含 skillIds），归属由后端校验。 -->
+                <section class="config-section">
+                    <h2 class="section-title">
+                        Skill
+                        <span class="section-hint">绑定后，Skill 的 instructions 会拼进 System Prompt，命中场景时按它执行</span>
+                    </h2>
+                    <div v-if="resources.skills.length === 0" class="empty-hint">
+                        暂无可用 Skill，请先在 Skill 页面创建
+                    </div>
+                    <div v-else class="resource-grid">
+                        <div v-for="sk in resources.skills" :key="sk.id" class="resource-card" role="button"
+                            tabindex="0" :class="{ active: form.skillIds.includes(sk.id) }"
+                            @click="toggleSkill(sk.id)">
+                            <div class="resource-icon">
+                                <t-icon name="plugin" />
+                            </div>
+                            <div class="resource-info">
+                                <span class="resource-name">
+                                    {{ sk.name }}
+                                    <span class="resource-version">{{ skillTypeLabel(sk.type) }}</span>
+                                </span>
+                                <span class="resource-meta">{{ sk.description ?? "未填写说明" }}</span>
+                            </div>
+                            <t-icon v-if="form.skillIds.includes(sk.id)" name="check" class="resource-check" />
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <!-- 右侧：运行参数 -->
@@ -396,7 +542,7 @@ const goChat = () => {
                 <section v-if="isSystemAgent" class="config-section compact warning">
                     <t-icon name="info-circle" class="warning-icon" />
                     <p>
-                        这是系统预设 Agent：名称、描述、系统提示词与绑定资源由系统维护，不可修改；<strong>模型配置（模型、温度）可以调整</strong>。
+                        这是系统预设 Agent：名称、描述、系统提示词、工作流与知识库由系统维护，不可修改；<strong>模型配置、Skill 与 MCP 工具可以调整</strong>。
                         <template v-if="isPlatformAssistantAgent">
                             <br />
                             想改它的名字、语气、音色与主动行为？那属于<strong>人格</strong>配置，在上面「人格」标签页里维护；
@@ -688,6 +834,17 @@ const goChat = () => {
                 padding: 1px 6px;
                 background: @color-bg-hover;
                 border-radius: @radius-pill;
+
+                /* MCP 连接状态：只有「已连接」才真的能调工具 */
+                &.mcp-connected {
+                    color: #22c55e;
+                    background: rgba(34, 197, 94, 0.12);
+                }
+
+                &.mcp-error {
+                    color: #ef4444;
+                    background: rgba(239, 68, 68, 0.12);
+                }
             }
         }
 
@@ -701,6 +858,54 @@ const goChat = () => {
         color: @primary;
         font-size: 18px;
         flex-shrink: 0;
+    }
+}
+
+.builtin-row {
+    display: flex;
+    align-items: center;
+    gap: @space-3;
+    flex-wrap: wrap;
+    padding: @space-3 @space-4;
+    border: 1px solid @color-border;
+    border-radius: @radius-card;
+    background: @color-bg-surface;
+}
+
+.builtin-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: @font-sm;
+    font-weight: 600;
+    color: @color-text;
+
+    code {
+        padding: 1px 6px;
+        border-radius: @radius-sm;
+        background: @color-bg-hover;
+        color: @color-text-secondary;
+        font-family: @font-mono;
+        font-size: @font-xs;
+        font-weight: 400;
+    }
+}
+
+.builtin-status {
+    font-size: @font-xs;
+    padding: 2px 8px;
+    border-radius: @radius-pill;
+
+    &.is-on {
+        color: @color-success;
+        background: fade(@color-success, 12%);
+    }
+
+    /* 未配置是一句较长的说明，做成灰底胶囊会像标签块，直接裸文本更干净 */
+    &.is-off {
+        padding: 0;
+        color: @color-text-tertiary;
+        background: transparent;
     }
 }
 

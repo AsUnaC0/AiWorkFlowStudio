@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>memory graph sandbox</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #06070f; }
+  #stage {
+    position: relative;
+    width: 1100px;
+    height: 660px;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse at 50% 45%, rgba(76, 29, 149, 0.35) 0%, rgba(15, 23, 42, 0) 55%),
+      radial-gradient(ellipse at 80% 80%, rgba(30, 64, 175, 0.22) 0%, rgba(15, 23, 42, 0) 50%),
+      #06070f;
+  }
+  #stage canvas { display: block; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/three/build/three.module.js",
+    "three/addons/": "/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="stage"></div>
+<script type="module">
+import { mountGraph } from "./graph.js";
+mountGraph(document.getElementById("stage"));
+
+// ?focus=<id> 时模拟点选，用于预览高亮态
+const focusId = new URLSearchParams(location.search).get("focus");
+if (focusId) {
+  const tick = () => {
+    if (window.__focus) window.__focus(focusId);
+    else setTimeout(tick, 60);
+  };
+  setTimeout(tick, 800);
+}
+</script>
+</body>
+</html>

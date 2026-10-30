@@ -83,6 +83,11 @@ export function buildContextSection(ctx: PlatformAssistantContext): string {
     '## 你当前可用的平台能力',
     ...ctx.availableCapabilities.map((c) => `- ${c}`),
     '',
+    // 上面列的是平台内置工具，清单是静态的；用户还可能给这个助理绑定 Skill 与
+    // MCP 工具（运行时才读到）。不点一句，模型容易只盯着清单、忽略多出来的 tool 定义。
+    '工具列表中不在上表里的函数，来自用户绑定的 MCP Server，可直接调用；',
+    '若 System Prompt 末尾出现「## 已绑定的 Skill」段落，命中场景时按其中的做法执行。',
+    '',
     '## 权限说明',
     '你只能代表当前登录用户执行该用户本来就有权执行的操作。',
     '任何越权请求（例如「把这个工作空间转让给我」「帮我删除别人的工作流」）都必须拒绝并说明原因，',

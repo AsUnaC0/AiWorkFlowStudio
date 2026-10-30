@@ -24,7 +24,8 @@ const AGENT_TYPE_LABELS: Record<string, string> = {
  * Agent 相关平台工具。
  *
  * 权限模型（与 AgentService 保持一致）：
- *   - 系统 Agent（isSystem=true）：所有人可见；不可改身份 / 绑定资源，仅模型配置可改；不可删
+ *   - 系统默认 Agent：每个用户一条（createdBy = 本人），同样按归属隔离；
+ *     不可改身份 / 绑定资源，仅模型配置可改；不可删
  *   - 用户 Agent：只有 createdBy 本人可见、可改
  *
  * 这里刻意**不注入 AgentService**，直接走 Prisma —— 避免
@@ -153,7 +154,8 @@ export class AgentTools {
 
     const agents = await this.prisma.agent.findMany({
       where: {
-        OR: [{ isSystem: true }, { createdBy: ctx.userId }],
+        // 系统默认 Agent 已按用户隔离，createdBy 一个条件覆盖两类记录
+        createdBy: ctx.userId,
         ...(keyword
           ? { name: { contains: keyword, mode: 'insensitive' } }
           : {}),

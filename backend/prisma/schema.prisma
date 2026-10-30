@@ -346,12 +346,18 @@ model DocumentChunkEmbedding {
 
 // ---------------------------------------------------------------------------
 // Agent —— 可配置的 AI Agent（绑定 Workflow / Knowledge / LLM Prompt）
+//
+// 系统默认 Agent（平台助理，isSystem && isDefault）**每个用户一条独立记录**，
+// 用 createdBy 区分归属：改模型配置 / 人格只影响自己，不影响其他用户。
+// 历史遗留的 createdBy = NULL 记录只作为「模板」，不再命中 isSystem && isDefault
+// 判据（由 PlatformAssistantService.migrateLegacySharedAgent 降级）。
+// 一个用户最多一条，由部分唯一索引 Agent_system_default_per_user_key 保证。
 // ---------------------------------------------------------------------------
 
 model Agent {
   id                  String   @id @default(uuid())
   workspaceId         String?          // 可空：系统 Agent 不属于任何 Workspace
-  createdBy           String?          // 可空：系统 Agent 无创建者
+  createdBy           String?          // 系统默认 Agent 的归属用户；NULL 仅见于已降级的模板记录
 
   name                String
   description         String?

@@ -85,19 +85,30 @@ export class PersonaService {
   // ===========================================================================
 
   /**
-   * 校验 agentId 确实指向平台助理（系统默认 Agent）。
+   * 校验 agentId 确实指向**当前用户的**平台助理（系统默认 Agent）。
    *
    * 用「isSystem && isDefault」这个事实判定，而不是名字 —— 名字可以被人格改，
    * 标识不能。与 PlatformAssistantService.isPlatformAssistant 保持同一判据。
+   *
+   * 归属校验不可省：系统默认 Agent 每个用户一条，缺了它用户 A 能改用户 B 的人格。
    */
-  private async assertPlatformAssistant(agentId: string) {
+  private async assertPlatformAssistant(agentId: string, userId: string) {
     const agent = await this.prisma.agent.findUnique({
       where: { id: agentId },
-      select: { id: true, name: true, isSystem: true, isDefault: true },
+      select: {
+        id: true,
+        name: true,
+        isSystem: true,
+        isDefault: true,
+        createdBy: true,
+      },
     });
     if (!agent) throw new NotFoundException('Agent 不存在');
     if (!agent.isSystem || !agent.isDefault) {
       throw new ForbiddenException('人格配置仅对平台默认助理开放');
+    }
+    if (agent.createdBy !== userId) {
+      throw new ForbiddenException('无权修改此 Agent');
     }
     return agent;
   }
@@ -140,8 +151,7 @@ export class PersonaService {
 
   /** 对外接口用：校验权限后返回人格配置 */
   async get(userId: string, agentId: string): Promise<ResolvedPersona> {
-    void userId; // 人格是全局配置（一份记录服务所有用户），无需按用户隔离
-    await this.assertPlatformAssistant(agentId);
+    await this.assertPlatformAssistant(agentId, userId);
     return this.resolveForAgent(agentId);
   }
 
@@ -160,7 +170,7 @@ export class PersonaService {
     agentId: string,
     dto: UpdatePersonaDto,
   ): Promise<ResolvedPersona> {
-    await this.assertPlatformAssistant(agentId);
+    await this.assertPlatformAssistant(agentId, userId);
 
     const data = { ...dto };
     // 感知间隔兜底：DTO 已限制 >= 30，这里再挡一次，防止绕过 DTO 的调用路径
@@ -214,7 +224,7 @@ export class PersonaService {
 
   /** 恢复默认人格（删除记录，回落到内存默认值） */
   async reset(userId: string, agentId: string): Promise<ResolvedPersona> {
-    await this.assertPlatformAssistant(agentId);
+    await this.assertPlatformAssistant(agentId, userId);
     await this.prisma.agentPersona
       .delete({ where: { agentId } })
       .catch(() => undefined); // 本来就没有记录 → 幂等

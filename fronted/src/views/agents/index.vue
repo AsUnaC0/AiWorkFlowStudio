@@ -209,6 +209,14 @@ const goDetail = (agentId: string) => {
             <t-icon name="library" />
             {{ agent.knowledgeBaseIds.length }} KB
           </span>
+          <span v-if="agent.skillIds.length > 0" class="config-chip">
+            <t-icon name="plugin" />
+            {{ agent.skillIds.length }} Skill
+          </span>
+          <span v-if="agent.mcpServerIds.length > 0" class="config-chip">
+            <t-icon name="server" />
+            {{ agent.mcpServerIds.length }} MCP
+          </span>
         </div>
 
         <div class="card-actions">

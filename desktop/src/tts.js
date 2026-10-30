@@ -21,6 +21,13 @@ const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 const DEFAULT_VOICE = 'zh-CN-XiaoyiNeural';
 const ERROR_COOLDOWN_MS = 60 * 1000;
 
+/** BreezeBlue 音色 id 前缀（形如 voc_xxx）——这类音色必须走后端合成 */
+const BREEZE_VOICE_RE = /^voc_/i;
+
+function isBreezeVoice(voice) {
+  return BREEZE_VOICE_RE.test(voice || '');
+}
+
 let localBrokenUntil = 0;
 
 async function synthLocal(text, voice) {
@@ -66,6 +73,16 @@ async function synthRemote(text, voice, api) {
 async function synthesize(text, { voice, api } = {}) {
   if (!text || !text.trim()) return null;
 
+  // BreezeBlue 音色（voc_xxx）必须走服务端：密钥在后端，本地 Edge 合成不了
+  if (isBreezeVoice(voice)) {
+    try {
+      return await synthRemote(text, voice, api);
+    } catch (e) {
+      console.warn('[tts] BreezeBlue 合成失败：', e.message);
+      return null;
+    }
+  }
+
   const now = Date.now();
   if (now < localBrokenUntil) {
     // 本地刚失败过，直接走后端，省一次本地超时
@@ -89,4 +106,4 @@ async function synthesize(text, { voice, api } = {}) {
   }
 }
 
-module.exports = { synthesize, DEFAULT_VOICE };
+module.exports = { synthesize, isBreezeVoice, DEFAULT_VOICE };

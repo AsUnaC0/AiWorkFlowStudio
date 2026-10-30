@@ -13,7 +13,6 @@ import {
 import {
   PERSONA_LIMITS,
   PROACTIVE_FREQUENCIES,
-  VOICE_IDS,
 } from '../persona.prompt';
 
 /**
@@ -51,7 +50,9 @@ export class UpdatePersonaDto {
   @IsOptional()
   voiceEnabled?: boolean;
 
-  @IsIn(VOICE_IDS)
+  // 不再限定 Edge 白名单：允许 BreezeBlue 的自定义 voiceId（形如 voc_xxx）
+  @IsString()
+  @MaxLength(120)
   @IsOptional()
   voiceId?: string;
 

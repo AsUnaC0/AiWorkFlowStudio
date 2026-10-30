@@ -78,11 +78,34 @@ export interface AgentResourceKnowledgeBase {
   chunkCount: number;
 }
 
+/** 可绑定的 Skill（PROMPT / WORKFLOW / TOOL 三类） */
+export interface AgentResourceSkill {
+  id: string;
+  name: string;
+  description: string | null;
+  type: string;
+}
+
+/** 可绑定的 MCP Server（status 用于提示「还没连上」） */
+export interface AgentResourceMcpServer {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "CONNECTED" | "DISCONNECTED" | "ERROR";
+}
+
+/** 内置联网搜索状态（环境变量配了 Key 才启用，不可在页面里开关） */
+export interface AgentWebSearchCapability {
+  enabled: boolean;
+  provider: "bocha" | "tavily" | null;
+}
+
 export const getAgentResources = async (): Promise<{
   workflows: AgentResourceWorkflow[];
   knowledgeBases: AgentResourceKnowledgeBase[];
-  skills: Array<{ id: string; name: string; description: string | null; type: string }>;
-  mcpServers: Array<{ id: string; name: string; description: string | null; status: string }>;
+  skills: AgentResourceSkill[];
+  mcpServers: AgentResourceMcpServer[];
+  webSearch: AgentWebSearchCapability;
 }> => {
   return request.get(`/agent/resources`);
 };

@@ -487,7 +487,7 @@ export class LlmConfigService {
 
   /**
    * 取当前用户的「默认对话模型」。
-   * 用途：系统内置的平台助理不绑定固定模型（一份 Agent 记录服务所有用户），
+   * 用途：系统内置的平台助理默认不绑定固定模型（每个用户一条记录，llmModelId 初始为空），
    * 因此运行时按用户各自的默认对话模型解析；找不到则调用方回退全局 Ollama。
    */
   async resolveUserDefaultChatModel(userId: string): Promise<{

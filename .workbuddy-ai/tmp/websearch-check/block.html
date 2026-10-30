@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>内置能力区块渲染校验</title>
+<style>
+  :root {
+    --color-text: #18181b;
+    --color-text-secondary: #52525b;
+    --color-text-tertiary: #a1a1aa;
+    --color-border: #e8eaf0;
+    --color-bg-surface: #fff;
+    --color-bg-hover: #f4f4f5;
+    --color-success: #2ba471;
+  }
+  body {
+    margin: 0;
+    padding: 28px;
+    background: #f7f8fa;
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--color-text);
+  }
+  .config-section { max-width: 760px; margin-bottom: 28px; }
+  .section-title {
+    display: flex; align-items: baseline; gap: 8px;
+    margin: 0 0 12px; font-size: 14px; font-weight: 600; color: var(--color-text);
+  }
+  .section-hint { font-size: 12px; font-weight: 400; color: var(--color-text-tertiary); }
+
+  .builtin-row {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; border: 1px solid var(--color-border);
+    border-radius: 12px; background: var(--color-bg-surface);
+  }
+  .builtin-name {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; color: var(--color-text);
+  }
+  .builtin-name svg { width: 16px; height: 16px; color: var(--color-text-secondary); }
+  .builtin-name code {
+    padding: 1px 6px; border-radius: 4px; background: var(--color-bg-hover);
+    color: var(--color-text-secondary); font-size: 12px; font-weight: 400;
+    font-family: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+  }
+  .builtin-status {
+    font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  }
+  .builtin-status.is-on { color: var(--color-success); background: rgba(43, 164, 113, 0.12); }
+  .builtin-status.is-off { color: var(--color-text-tertiary); background: transparent; padding: 0; }
+
+  .label { font-size: 11px; color: var(--color-text-tertiary); margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <div class="config-section">
+    <div class="label">状态 A：已启用</div>
+    <h2 class="section-title">内置能力<span class="section-hint">由后端统一提供，对所有 Agent 生效</span></h2>
+    <div class="builtin-row">
+      <span class="builtin-name">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        联网搜索
+        <code>web_search</code>
+      </span>
+      <span class="builtin-status is-on">已启用 · 博查</span>
+    </div>
+  </div>
+
+  <div class="config-section">
+    <div class="label">状态 B：未配置</div>
+    <h2 class="section-title">内置能力<span class="section-hint">由后端统一提供，对所有 Agent 生效</span></h2>
+    <div class="builtin-row">
+      <span class="builtin-name">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        联网搜索
+        <code>web_search</code>
+      </span>
+      <span class="builtin-status is-off">未配置 · 在 backend/.env 填写 BOCHA_API_KEY 或 TAVILY_API_KEY 后重启</span>
+    </div>
+  </div>
+</body>
+</html>

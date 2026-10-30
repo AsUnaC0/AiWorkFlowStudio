@@ -29,7 +29,7 @@ export class AssistantController {
 
   @Get('assistant')
   async getAssistant(@CurrentUser() user: JwtUser) {
-    const agent = await this.platformAssistant.ensure();
+    const agent = await this.platformAssistant.ensure(user.id);
     const context = await this.platformAssistant.buildContext(user.id);
     const persona = await this.persona.get(user.id, agent.id);
 

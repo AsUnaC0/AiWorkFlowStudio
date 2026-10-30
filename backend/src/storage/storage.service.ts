@@ -216,14 +216,13 @@ export class StorageService {
       throw new Error('七牛云下载失败：未配置 QINIU_DOMAIN');
     }
 
-    // 规范化 domain：确保有协议前缀（签名必须带协议！）
-    const withHttp = /^https?:\/\//i.test(rawDomain)
-      ? rawDomain
-      : `http://${rawDomain}`;
-    const bareDomain = withHttp.replace(/^https?:\/\//i, '');
-    const withHttps = withHttp.startsWith('https://')
-      ? withHttp
-      : `https://${bareDomain}`;
+    // 规范化 domain：先剥离协议，再分别显式构造 http / https 基址。
+    // 注意：不能沿用「配置里写了 https 就只走 https」的写法 —— 七牛测试域名
+    // (*.clouddn.com) 的 HTTPS 常返回 421 Misdirected Request，只有 HTTP 可用。
+    // 这里统一先试 HTTP、再用 HTTPS 兜底，避免被配置里的协议前缀锁死。
+    const bareDomain = rawDomain.replace(/^https?:\/\//i, '');
+    const httpBase = `http://${bareDomain}`;
+    const httpsBase = `https://${bareDomain}`;
 
     // 构造候选 URL 列表
     const allUrls: string[] = [];
@@ -238,17 +237,17 @@ export class StorageService {
         );
         const deadline = Math.floor(Date.now() / 1000) + 3600;
 
-        // 用 http:// 协议签名（CDN 证书可能有问题，优先 http）
+        // 用 http:// 协议签名（七牛测试域名 HTTPS 会 421，优先 http）
         const signedHttp = bucketManager.privateDownloadUrl(
-          withHttp,
+          httpBase,
           key,
           deadline,
         );
         allUrls.push(signedHttp);
 
-        // 再用 https:// 签名一份作为兜底
+        // 再用 https:// 签名一份作为兜底（绑定正式证书的域名可用）
         const signedHttps = bucketManager.privateDownloadUrl(
-          withHttps,
+          httpsBase,
           key,
           deadline,
         );
@@ -259,8 +258,8 @@ export class StorageService {
     }
 
     // 2) 公开 URL（公有空间用，私有空间会 401）
-    allUrls.push(`${withHttp}/${key}`);
-    allUrls.push(`${withHttps}/${key}`);
+    allUrls.push(`${httpBase}/${key}`);
+    allUrls.push(`${httpsBase}/${key}`);
 
     let lastError: unknown = null;
     for (const url of allUrls) {

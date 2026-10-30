@@ -14,10 +14,12 @@
 |---|---|
 | **工作流 LLM 节点**（画布勾选 `mcpServerIds`） | ✅ **已接入**。`createParams()` 经 `McpToolService.buildBindings()` 把工具转成 ToolDefinition，工具调用走 `McpToolService.callTool()` |
 | 流式 / 画布调试运行（`executeStream()`） | ❌ 未接入。忽略 tools，见 [05](./05-工作流引擎.md) |
-| **Agent 配置页**（`Agent.mcpServerIds`） | ✅ **已接入**。`AgentService.runStream()` 把选中 Server 的工具合并进 ReAct 工具集，tool_call 先查 MCP binding 再回落到内置工具 |
+| **Agent 配置页**（`Agent.mcpServerIds`） | ✅ **已接入**。配置页有「MCP 工具」区块；`AgentService.runStream()` 把选中 Server 的工具合并进 ReAct 工具集，tool_call 先查 MCP binding 再回落到内置工具 |
+| **系统平台助理**（同一字段） | ✅ **已接入**（2026-10-30 放开）。`SYSTEM_AGENT_EDITABLE_FIELDS` 含 `mcpServerIds`，配置页对系统 Agent 也渲染「MCP 工具」区块 |
 
-> 📌 **Agent 侧 Skill（`Agent.skillIds`）仍未接入运行时**——字段能存能查，但 `AgentService` 没有注入 `SkillService`。
-> 也就是说：**在 Agent 配置页勾选 Skill 不会生效**，只有在画布上给 LLM 节点勾选 Skill 才会注入 System Prompt。
+> 📌 **Agent 侧 Skill（`Agent.skillIds`）已接入运行时**（2026-10-30）——`AgentService.buildSkillSection()`
+> 把 `instructions` 拼成 `## 已绑定的 Skill` 段落追加到 System Prompt，并按 `ownerId` 过滤越权 id。
+> 也就是说：**在 Agent 配置页勾选 Skill 会生效**，画布上给 LLM 节点勾选同样生效，两条路径互不影响。
 
 ### 目录结构与职责
 
@@ -235,7 +237,8 @@ currentMessages.push({ role: 'tool', content: outcome.text, tool_call_id: id });
 | 位置 | 状态 |
 |---|---|
 | **工作流 LLM 节点**（画布勾选 `skillIds`） | ✅ **已接入**。`createParams()` 取 `instructions` 追加进 System Prompt |
-| **Agent 配置页**（`Agent.skillIds`） | ❌ **仅 CRUD，未接入运行时**——已确认暂缓实现，字段预留 |
+| **Agent 配置页**（`Agent.skillIds`） | ✅ **已接入**。`buildSkillSection()` 取 `instructions` 追加进 System Prompt（按 `ownerId` 过滤，绑定前 `assertOwnsSkills()` 校验归属） |
+| **系统平台助理**（同一字段） | ✅ **已接入**（2026-10-30 放开）。`SYSTEM_AGENT_EDITABLE_FIELDS` 含 `skillIds`，配置页对系统 Agent 也渲染「Skill」区块 |
 
 > Skill 的 `WORKFLOW` / `TOOL` 两种 `type`（对应 `workflowId` / `mcpServerId`+`mcpToolName`）**也还没有执行分支**，目前只有 `instructions`（PROMPT 语义）会被用到。同样属于暂缓项。
 
@@ -257,7 +260,7 @@ model Skill {
 }
 ```
 
-### 注入时机 —— **只有 LLM 节点会注入**
+### 注入时机（一）：工作流 LLM 节点
 
 注入发生在 `LLMNodeExecutor.createParams()`：
 
@@ -280,10 +283,15 @@ if (skillInstructions) {
 }
 ```
 
-> 📌 **Agent 侧 Skill 仅 CRUD，未接入运行时——已确认暂缓实现，不是 bug**。
-> `Agent.skillIds` 字段存在且能存能查，但 `AgentService` **没有注入 SkillService**，运行时从不读取。
-> 也就是说：**在 Agent 配置页勾选 Skill 不会生效**，只有在画布上给 LLM 节点勾选 Skill 才会注入。
-> （对比：`Agent.mcpServerIds` **已接入运行时**，见本文第一节。）
+> 📌 **Agent 侧 Skill 已接入运行时**（2026-10-30）。
+> `AgentService.buildSkillSection()` 读取 `agent.skillIds`，把 `instructions` 拼成
+> `## 已绑定的 Skill` 段落追加到 System Prompt 末尾；只保留 `ownerId === 当前用户` 的记录。
+> 也就是说：**在 Agent 配置页勾选 Skill 会生效**，画布上给 LLM 节点勾选同样生效。
+> （对比：`Agent.mcpServerIds` **也已接入运行时**，见本文第一节。）
+>
+> ⚠️ 放开系统 Agent 绑定后，`assertOwnsSkills()` / `assertOwnsMcpServers()` 必须写在
+> `if (agent.isSystem)` 分支**之前**——否则系统助理能绑别人的 Skill 指令（进 System Prompt）
+> 和 MCP 凭据（运行时会解密使用）。详见 [04](./04-Agent智能体模块.md) §一「权限模型」。
 
 **Skill 本质上就是一段可复用的 System Prompt 片段**——比如写一个"代码审查" Skill，保存固定的审查标准，LLM 节点勾选后自动注入。
 注意 schema 虽然定义了 `WORKFLOW` / `TOOL` 两种类型（对应 `workflowId` / `mcpServerId` + `mcpToolName`），但当前注入逻辑**只处理 `instructions`**，那两个类型还没有对应的执行分支。

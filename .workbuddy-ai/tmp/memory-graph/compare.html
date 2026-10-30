@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  body {
+    margin: 0;
+    padding: 28px;
+    background: #0b0d14;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    color: #e2e8f0;
+  }
+  .row { display: flex; gap: 24px; }
+  .col { flex: 1; }
+  .label {
+    display: flex; align-items: baseline; gap: 10px;
+    margin: 0 0 12px 4px;
+  }
+  .label b { font-size: 17px; letter-spacing: 0.02em; }
+  .label span { font-size: 12px; color: #8b93a7; }
+  .tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid rgba(148,163,184,.3); color: #a1a1aa;
+  }
+  .tag.new { color: #c4b5fd; border-color: rgba(167,139,250,.5); background: rgba(124,92,252,.14); }
+  .frame {
+    width: 700px; height: 420px;
+    border-radius: 12px; overflow: hidden;
+    border: 1px solid rgba(148,163,184,.16);
+    background: #06070f;
+  }
+  .frame img { width: 100%; height: 100%; object-fit: cover; object-position: center top; display: block; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="col">
+      <div class="label"><span class="tag">改造前</span><b>平面糖果球 + 铁丝网</b><span>实体球被加法混合糊成一片，连线织成笼子</span></div>
+      <div class="frame"><img src="./before.png" /></div>
+    </div>
+    <div class="col">
+      <div class="label"><span class="tag new">改造后</span><b>星云簇 + 星座连线</b><span>分类成团、星等映射重要度、静息态连线隐形</span></div>
+      <div class="frame"><img src="./panel3.png" /></div>
+    </div>
+  </div>
+</body>
+</html>

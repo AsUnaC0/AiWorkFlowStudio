@@ -192,9 +192,10 @@ export class DashboardService {
       },
     });
 
-    // Agent 统计
+    // Agent 统计（系统默认 Agent 每用户一条，但那是平台内置能力，不计入）
     const agentTotal = await this.prisma.agent.count({
       where: {
+        isSystem: false,
         OR: [
           { createdBy: userId },
           { workspaceId: { in: workspaceIds } },

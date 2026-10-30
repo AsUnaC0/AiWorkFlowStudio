@@ -32,6 +32,8 @@ import type { MemoryRecallItem } from '../assistant/platform-assistant.context';
 import { PersonaService } from '../persona/persona.service';
 import { MemoryService } from '../memory/memory.service';
 import { MemoryWriterService } from '../memory/memory-writer.service';
+import { SkillService } from '../skill/skill.service';
+import { WebSearchService } from '../web-search/web-search.service';
 import type { PlatformToolContext } from '../platform-tools/platform-tool.interface';
 import type { PlatformOperationPayload } from '../platform-tools/platform-tools.service';
 import { CreateAgentDto } from './dto/create-agent.dto';
@@ -113,17 +115,24 @@ export interface AgentRunOptions {
 const DEFAULT_LOCAL_MODEL = 'qwen2.5:7b';
 
 /**
- * 系统预设 Agent 允许用户修改的字段白名单 —— 只放开「模型配置」。
+ * 系统预设 Agent 允许用户修改的字段白名单。
  *
- * 系统 Agent（平台助理）的名称 / 描述 / System Prompt / 绑定资源由系统维护
+ * 系统 Agent（平台助理）的名称 / 描述 / System Prompt / 工作流 / 知识库由系统维护
  * （ensure() 会在每次访问时把它们纠正回来），改了也没有意义；
- * 但模型配置必须放开：用户可能接的是自己的模型服务，
- * 需要能决定默认助手到底用哪个模型、什么温度。
+ * 但以下三类必须放开：
+ *   - 模型配置：用户可能接的是自己的模型服务，需要能决定默认助手用哪个模型；
+ *   - 绑定 Skill：instructions 会拼进 System Prompt，属于「表达/做法」而非身份；
+ *   - 绑定 MCP：工具集合，与模型配置同属「这个助手能干什么」。
+ *
+ * 绑定资源仍要求归属（见 update 里的 assertOwnsSkills / assertOwnsMcpServers），
+ * 否则用户 A 能把自己无权使用的 Skill 指令、或别人的 MCP 凭据挂到助手身上。
  */
 const SYSTEM_AGENT_EDITABLE_FIELDS = [
   'llmModelId',
   'model',
   'temperature',
+  'skillIds',
+  'mcpServerIds',
 ] as const;
 
 /**
@@ -187,6 +196,10 @@ export class AgentService {
     private readonly memoryService: MemoryService,
     /** 记忆沉淀（对话结束后异步触发） */
     private readonly memoryWriter: MemoryWriterService,
+    /** Skill 定义（绑定的 instructions 会拼进 System Prompt） */
+    private readonly skillService: SkillService,
+    /** 联网搜索（内置 web_search 工具；只用于向前端暴露「是否已启用」） */
+    private readonly webSearchService: WebSearchService,
   ) {}
 
   /** 把 GeneratedFileRef 转成可 JSON 序列化的 SSE 载荷 */
@@ -215,13 +228,13 @@ export class AgentService {
   // ===========================================================================
 
   /**
-   * 确保系统预设 Agent 存在（幂等，应用启动或首次访问时调用）。
+   * 确保当前用户的系统预设 Agent 存在（幂等，列表与发消息前调用）。
    *
-   * 现在只有「平台助理」一个系统 Agent，且它的创建 / 历史迁移由
+   * 系统默认 Agent 每个用户一条（createdBy = userId），创建 / 历史迁移由
    * PlatformAssistantService.ensure() 负责（那里同时维护专属 Prompt 与工具注册）。
    */
-  async ensureSystemAgents() {
-    await this.platformAssistant.ensure();
+  async ensureSystemAgents(userId: string) {
+    await this.platformAssistant.ensure(userId);
   }
 
   // ===========================================================================
@@ -229,25 +242,24 @@ export class AgentService {
   // ===========================================================================
   //
   // 权限约定（直接内联在各自方法里，不抽公共布尔方法 —— 三处规则并不相同）：
-  //   可见（list / findOne）：isSystem 或 createdBy === userId
-  //   修改（update）：系统 Agent 只允许改模型配置（见 SYSTEM_AGENT_EDITABLE_FIELDS），
-  //                  用户 Agent 要求 createdBy === userId
+  //   可见（list / findOne）：createdBy === userId
+  //     系统默认 Agent 也是每个用户一条，因此不再有「系统 Agent 对所有人可见」的分支；
+  //     缺了这条校验，用户 A 就能拿用户 B 的默认 Agent id 去发消息 / 改配置。
+  //   修改（update）：系统 Agent 只允许改白名单字段（模型配置 + Skill/MCP 绑定，
+  //                  见 SYSTEM_AGENT_EDITABLE_FIELDS），但仍要求 createdBy === userId；
+  //                  用户 Agent 同样要求归属
   //   删除（remove）：系统 Agent 一律不允许
   // ===========================================================================
 
   async list(userId: string) {
-    // 确保系统 Agent 存在
-    await this.ensureSystemAgents();
+    // 确保当前用户的系统默认 Agent 存在
+    await this.ensureSystemAgents(userId);
 
     return this.prisma.agent.findMany({
-      where: {
-        OR: [
-          { isSystem: true }, // 系统预设 Agent 对所有人可见
-          { createdBy: userId }, // 用户自己创建的 Agent
-        ],
-      },
+      // 系统默认 Agent 已按用户隔离（createdBy = userId），一个条件覆盖两类记录
+      where: { createdBy: userId },
       orderBy: [
-        { isDefault: 'desc' }, // 默认助手（AWS）排最前面
+        { isDefault: 'desc' }, // 默认助手排最前面
         { isSystem: 'desc' },
         { createdAt: 'asc' },
       ],
@@ -259,7 +271,7 @@ export class AgentService {
       where: { id: agentId },
     });
     if (!agent) throw new NotFoundException('Agent 不存在');
-    if (!agent.isSystem && agent.createdBy !== userId) {
+    if (agent.createdBy !== userId) {
       throw new ForbiddenException('无权访问此 Agent');
     }
     return agent;
@@ -278,6 +290,11 @@ export class AgentService {
     // 绑定自定义模型时，model 列存真实模型标识（如 deepseek-ai/DeepSeek-V4-Flash）；
     // 未绑定时回退本地默认模型。
     const llmModelId = dto.llmModelId?.trim() || null;
+    if (llmModelId) await this.assertOwnsModel(userId, llmModelId);
+    if (dto.skillIds?.length) await this.assertOwnsSkills(userId, dto.skillIds);
+    if (dto.mcpServerIds?.length) {
+      await this.assertOwnsMcpServers(userId, dto.mcpServerIds);
+    }
     const model = await this.resolveModelName(llmModelId, dto.model);
 
     return this.prisma.agent.create({
@@ -305,6 +322,108 @@ export class AgentService {
   }
 
   /**
+   * 校验 skillIds 全部属于当前用户。
+   *
+   * 与 assertOwnsModel 同理：Skill 的 instructions 会进 System Prompt，
+   * 不校验归属就等于允许把别人的提示词注入自己的对话。
+   */
+  private async assertOwnsSkills(userId: string, skillIds: string[]) {
+    const ids = [...new Set(skillIds)];
+    if (ids.length === 0) return;
+
+    const owned = await this.prisma.skill.findMany({
+      where: { id: { in: ids }, ownerId: userId },
+      select: { id: true },
+    });
+    if (owned.length !== ids.length) {
+      throw new ForbiddenException('包含无权使用的 Skill');
+    }
+  }
+
+  /**
+   * 组装已绑定 Skill 的 System Prompt 片段。
+   *
+   * 运行时再按 ownerId 过滤一次：`SkillService.findByIds` 刻意不做归属校验
+   * （工作流执行路径依赖这个行为），这里必须补上，否则历史脏数据里的
+   * 越权 id 会一直生效。
+   *
+   * 任何异常都降级为「不注入」—— Skill 是能力增强，不该让整轮对话挂掉。
+   */
+  private async buildSkillSection(
+    userId: string,
+    skillIds: string[],
+  ): Promise<string> {
+    if (!Array.isArray(skillIds) || skillIds.length === 0) return '';
+
+    try {
+      const skills = await this.skillService.findByIds([...new Set(skillIds)]);
+      const valid = skills.filter(
+        (s) => s.ownerId === userId && s.instructions?.trim(),
+      );
+      if (valid.length === 0) return '';
+
+      return [
+        '## 已绑定的 Skill',
+        '以下 Skill 定义了你在特定任务中的做法。命中对应场景时按它执行，不要自行简化或改写；未命中时忽略。',
+        '',
+        ...valid.map((s) => `### ${s.name}\n${s.instructions!.trim()}`),
+      ].join('\n');
+    } catch (e) {
+      this.logger.warn(
+        `Skill 注入失败，本轮不注入：${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      return '';
+    }
+  }
+
+  /**
+   * 取出 mcpServerIds 中确实属于当前用户的那部分（保持去重）。
+   *
+   * 写入时由 assertOwnsMcpServers 拦截，这里再兜一次底：
+   * `McpService.findRuntimeConfigs()` 只按 id 直取并解密凭据，不做归属校验，
+   * 历史脏数据里的越权 id 会让运行时连上别人的 Server。
+   */
+  private async ownedMcpServerIds(
+    userId: string,
+    ids: string[],
+  ): Promise<string[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+
+    const owned = await this.prisma.mcpServer.findMany({
+      where: { id: { in: unique }, ownerId: userId },
+      select: { id: true },
+    });
+    return owned.map((s) => s.id);
+  }
+
+  /** 校验 mcpServerIds 全部属于当前用户 */
+  private async assertOwnsMcpServers(userId: string, ids: string[]) {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return;
+
+    const owned = await this.ownedMcpServerIds(userId, unique);
+    if (owned.length !== unique.length) {
+      throw new ForbiddenException('包含无权使用的 MCP Server');
+    }
+  }
+
+  /**
+   * 校验 llmModelId 属于当前用户。
+   *
+   * 不校验的话，任何登录用户只要拿到别人的模型 id（UUID）就能绑到自己的 Agent 上，
+   * 运行时用别人的 API Key 发请求 —— 归属校验必须在这里做，不能只靠前端下拉框。
+   */
+  private async assertOwnsModel(userId: string, llmModelId: string) {
+    const owned = await this.llmConfigService.listOwnedModelIds(userId);
+    if (!owned.includes(llmModelId)) {
+      throw new ForbiddenException('无权使用该模型配置');
+    }
+  }
+
+  /**
    * 根据 llmModelId 解析出要写入 `Agent.model` 的真实模型名。
    * - 有 llmModelId 且能查到 → 用模型标识（如 deepseek-ai/DeepSeek-V4-Flash）
    * - 有 llmModelId 但查不到 → 回退调用方传入的 fallback
@@ -329,10 +448,22 @@ export class AgentService {
 
     let data: Record<string, unknown>;
 
+    // 绑定资源的归属校验对系统 Agent 与用户 Agent 一视同仁：
+    // Skill 的 instructions 会拼进 System Prompt，MCP 凭据会被运行时解密使用，
+    // 放行越权 id 等于让用户借用别人的指令 / 凭据。
+    if (dto.skillIds) await this.assertOwnsSkills(userId, dto.skillIds);
+    if (dto.mcpServerIds) {
+      await this.assertOwnsMcpServers(userId, dto.mcpServerIds);
+    }
+
     if (agent.isSystem) {
-      // 系统预设 Agent：只放开模型配置（见 SYSTEM_AGENT_EDITABLE_FIELDS），
+      // 系统预设 Agent：只放开白名单字段（见 SYSTEM_AGENT_EDITABLE_FIELDS），
       // 其余字段一律拒绝并明确告知调用方。
-      // 注意 createdBy 为 null（系统创建），因此这里不做归属校验。
+      // 系统默认 Agent 每个用户一条，所以这里**必须**校验归属 ——
+      // 否则用户 A 能把用户 B 的默认助手模型改掉。
+      if (agent.createdBy !== userId) {
+        throw new ForbiddenException('无权修改此 Agent');
+      }
       const provided = Object.entries(dto as Record<string, unknown>).filter(
         ([, value]) => value !== undefined,
       );
@@ -344,9 +475,9 @@ export class AgentService {
         );
       if (rejected.length > 0) {
         throw new BadRequestException(
-          `系统预设 Agent 仅允许修改模型配置（${SYSTEM_AGENT_EDITABLE_FIELDS.join(
+          `系统预设 Agent 仅允许修改 ${SYSTEM_AGENT_EDITABLE_FIELDS.join(
             ' / ',
-          )}），不支持修改：${rejected.join('、')}`,
+          )}，不支持修改：${rejected.join('、')}`,
         );
       }
       data = Object.fromEntries(provided);
@@ -361,6 +492,7 @@ export class AgentService {
     // 同时把 model 列同步为真实模型名，保证「模型名」字段始终正确。
     if (dto.llmModelId !== undefined) {
       const llmModelId = dto.llmModelId?.trim() || null;
+      if (llmModelId) await this.assertOwnsModel(userId, llmModelId);
       data.llmModelId = llmModelId;
       data.model = await this.resolveModelName(llmModelId, dto.model);
     }
@@ -447,7 +579,14 @@ export class AgentService {
       }),
     ]);
 
-    return { workflows, knowledgeBases, skills, mcpServers };
+    // 内置联网搜索：环境变量配了 Key 就自动可用，对所有 Agent（含系统助理）生效，
+    // 因此不在 resources 里给「可选」语义，只回报启用状态供前端提示。
+    const webSearch = {
+      enabled: this.webSearchService.isEnabled(),
+      provider: this.webSearchService.getProvider(),
+    };
+
+    return { workflows, knowledgeBases, skills, mcpServers, webSearch };
   }
 
   // ===========================================================================
@@ -460,7 +599,7 @@ export class AgentService {
     history?: ChatMessage[],
   ): AsyncGenerator<AgentStreamEvent> {
     // 1. 读取 Agent + 权限
-    await this.ensureSystemAgents();
+    await this.ensureSystemAgents(userId);
     const agent = await this.findOne(userId, options.agentId);
     if (agent.status === 'DISABLED') {
       yield { type: 'error', message: '该 Agent 已被禁用' };
@@ -468,10 +607,12 @@ export class AgentService {
     }
 
     // 2. 解析运行时 Provider（优先用户自定义模型，否则回退全局 Ollama）
-    //    平台助理是「一份记录服务所有用户」，因此它不绑定固定模型：
-    //    运行时按当前用户的默认对话模型解析，找不到才回退全局 Ollama。
-    const isPlatformAssistant =
-      this.platformAssistant.isPlatformAssistant(agent);
+    //    平台助理每个用户一条记录，模型配置只对自己生效：
+    //    用户显式绑定了 llmModelId 就用它，没绑才回退到「该用户的默认对话模型」。
+    const isPlatformAssistant = this.platformAssistant.isPlatformAssistant(
+      agent,
+      userId,
+    );
     let chatBackend: AiProvider = this.aiService.getProvider();
     let chatModel = agent.model;
     // 模型是否支持流式（STREAM）。默认 true：未明确绑定模型（本地 Ollama 等兜底路径）
@@ -593,7 +734,7 @@ export class AgentService {
     //    平台助理的 System Prompt = 专属身份规则 + 服务端注入的动态上下文，
     //    因此这里覆盖库里存的静态 systemPrompt。
     const messages: ChatMessage[] = [];
-    const systemPrompt = assistantContext
+    const baseSystemPrompt = assistantContext
       ? this.platformAssistant.buildSystemPrompt(assistantContext, {
           // 人格只取表达相关字段；voiceId / 频率 / 感知开关是客户端参数，模型不需要知道
           persona: persona
@@ -606,6 +747,15 @@ export class AgentService {
           memories,
         })
       : agent.systemPrompt;
+
+    // 4.1 Skill 注入：把绑定的 Skill instructions 追加到 System Prompt 末尾。
+    //     放在最后一段是有意的 —— 前面的身份 / 人格 / 记忆 / 动态上下文是「你是谁」，
+    //     Skill 是「这类任务具体怎么做」，属于更靠近执行的指令。
+    const skillSection = await this.buildSkillSection(userId, agent.skillIds);
+    const systemPrompt = skillSection
+      ? [baseSystemPrompt, skillSection].filter(Boolean).join('\n\n')
+      : baseSystemPrompt;
+
     if (systemPrompt) {
       messages.push({ role: 'system', content: systemPrompt });
     }
@@ -644,11 +794,19 @@ export class AgentService {
     }
 
     // 5.1 MCP 工具：按 Agent 配置筛选（不做「所有 MCP 工具无差别塞给模型」）
+    //     先按 ownerId 过滤再取运行时配置 —— findRuntimeConfigs 只按 id 直取
+    //     （工作流路径依赖这个行为），不过滤的话历史脏数据里的越权 id
+    //     会让运行时拿着别人的 Server 凭据去连接。
     let mcpBindings = new Map<string, McpToolBinding>();
     if (Array.isArray(agent.mcpServerIds) && agent.mcpServerIds.length > 0) {
-      const servers = await this.mcpService.findRuntimeConfigs(
-        agent.mcpServerIds,
-      );
+      const ownedIds = await this.ownedMcpServerIds(userId, agent.mcpServerIds);
+      const requestedCount = new Set(agent.mcpServerIds).size;
+      if (ownedIds.length < requestedCount) {
+        this.logger.warn(
+          `agent "${agent.name}" 绑定了 ${requestedCount - ownedIds.length} 个不属于当前用户的 MCP Server，已跳过`,
+        );
+      }
+      const servers = await this.mcpService.findRuntimeConfigs(ownedIds);
       const built = await this.mcpToolService.buildBindings(servers);
       tools.push(...built.tools);
       mcpBindings = built.bindings;

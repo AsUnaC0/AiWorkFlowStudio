@@ -10,6 +10,8 @@ import { McpModule } from '../mcp/mcp.module';
 import { AssistantModule } from '../assistant/assistant.module';
 import { PersonaModule } from '../persona/persona.module';
 import { MemoryModule } from '../memory/memory.module';
+import { SkillModule } from '../skill/skill.module';
+import { WebSearchModule } from '../web-search/web-search.module';
 import { AgentController } from './agent.controller';
 import { AgentService } from './agent.service';
 import { ChatSessionService } from './chat-session.service';
@@ -17,6 +19,7 @@ import { ToolRegistry } from './tool-registry.service';
 import { WorkflowTool } from './tools/workflow.tool';
 import { KnowledgeTool } from './tools/knowledge.tool';
 import { GenerateFileTool } from './tools/generate-file.tool';
+import { WebSearchTool } from './tools/web-search.tool';
 
 /**
  * Agent 模块：
@@ -50,6 +53,11 @@ import { GenerateFileTool } from './tools/generate-file.tool';
     PersonaModule,
     // 对话记忆（召回注入 + 结束后异步沉淀）
     MemoryModule,
+    // Skill 定义（绑定的 instructions 拼进 System Prompt）
+    // 只依赖 PrismaModule，不会和 AgentModule 形成循环
+    SkillModule,
+    // 联网搜索（web_search 内置工具；只读环境变量，不碰数据库）
+    WebSearchModule,
   ],
   controllers: [AgentController],
   providers: [
@@ -59,6 +67,7 @@ import { GenerateFileTool } from './tools/generate-file.tool';
     WorkflowTool,
     KnowledgeTool,
     GenerateFileTool,
+    WebSearchTool,
   ],
   exports: [AgentService, ChatSessionService],
 })

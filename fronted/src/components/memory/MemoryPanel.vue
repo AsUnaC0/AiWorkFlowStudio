@@ -301,13 +301,9 @@ onMounted(loadGraph);
         </div>
       </div>
 
-      <!-- 图例（仅星图模式） -->
-      <div v-if="mode === 'graph' && categories.length > 0" class="legend">
-        <div v-for="c in categories" :key="c.category" class="legend-item">
-          <i class="dot" :style="{ background: categoryColor(c.category), boxShadow: `0 0 8px ${categoryColor(c.category)}` }"></i>
-          <span>{{ c.label }}</span>
-        </div>
-        <p class="legend-hint">拖拽旋转 · 滚轮缩放 · 点击节点查看</p>
+      <!-- 操作提示（分类图例在工具栏已经有，这里不重复） -->
+      <div v-if="mode === 'graph' && categories.length > 0" class="stage-hint">
+        拖拽旋转 · 滚轮缩放 · 点击星点查看
       </div>
 
       <!-- 详情面板 -->
@@ -400,15 +396,20 @@ onMounted(loadGraph);
   flex-direction: column;
   height: calc(100vh - @header-height);
   overflow: hidden;
+  background: #06070f;
 }
 
-/* 嵌入模式：固定高度 + 圆角边框，Tab 里不会把页面撑爆 */
+/* 嵌入模式：固定高度 + 圆角边框，Tab 里不会把页面撑爆。
+   整块做成深色「观星窗口」——浅色工具栏压在星图上方会显得割裂。 */
 .memory-panel.is-embedded {
   height: 660px;
-  border: 1px solid @color-border;
-  border-radius: @radius-card;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
   overflow: hidden;
-  background: @color-bg-surface;
+  background: #06070f;
+  box-shadow:
+    0 1px 2px rgba(9, 12, 24, 0.2),
+    0 18px 48px rgba(9, 12, 24, 0.18);
 }
 
 /* ---------- 工具栏 ---------- */
@@ -417,8 +418,8 @@ onMounted(loadGraph);
   align-items: center;
   gap: @space-3;
   padding: @space-3 @space-4;
-  border-bottom: 1px solid @color-border;
-  background: @color-bg-surface;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(10, 13, 24, 0.92);
   flex-shrink: 0;
   flex-wrap: wrap;
 }
@@ -431,16 +432,17 @@ onMounted(loadGraph);
   .panel-title {
     font-size: @font-md;
     font-weight: 600;
-    color: @color-text;
+    color: #e8ecf5;
+    letter-spacing: 0.01em;
   }
 
   .total-badge {
     font-size: @font-xs;
-    color: @color-text-tertiary;
+    color: rgba(148, 163, 184, 0.85);
 
     .truncated {
       margin-left: @space-1;
-      color: @color-warning;
+      color: #fbbf24;
     }
   }
 }
@@ -460,22 +462,22 @@ onMounted(loadGraph);
   gap: 5px;
   padding: 4px 10px;
   border-radius: @radius-pill;
-  border: 1px solid @color-border;
+  border: 1px solid rgba(148, 163, 184, 0.18);
   background: transparent;
-  color: @color-text-secondary;
+  color: rgba(203, 213, 225, 0.72);
   font-size: @font-xs;
   cursor: pointer;
   transition: all @duration-fast @ease-standard;
 
   &:hover {
-    border-color: @primary;
-    color: @primary;
+    border-color: rgba(167, 139, 250, 0.55);
+    color: #ddd6fe;
   }
 
   &.active {
-    background: @primary-light;
-    border-color: @primary;
-    color: @primary;
+    background: rgba(124, 92, 252, 0.18);
+    border-color: rgba(167, 139, 250, 0.6);
+    color: #ddd6fe;
     font-weight: 600;
   }
 
@@ -503,7 +505,7 @@ onMounted(loadGraph);
   display: inline-flex;
   padding: 2px;
   border-radius: @radius-md;
-  background: @color-bg-hover;
+  background: rgba(148, 163, 184, 0.1);
   margin-right: @space-2;
 
   button {
@@ -514,17 +516,47 @@ onMounted(loadGraph);
     border: none;
     border-radius: @radius-sm;
     background: transparent;
-    color: @color-text-secondary;
+    color: rgba(203, 213, 225, 0.7);
     font-size: @font-xs;
     cursor: pointer;
     transition: all @duration-fast;
 
     &.active {
-      background: @color-bg-surface;
-      color: @primary;
+      background: rgba(255, 255, 255, 0.1);
+      color: #f4f4f5;
       font-weight: 600;
-      box-shadow: @shadow-xs;
     }
+  }
+}
+
+/* 深色底上的图标按钮：TDesign 默认是深色图标，这里统一提亮 */
+.toolbar-right :deep(.t-button) {
+  color: rgba(203, 213, 225, 0.72);
+
+  &:hover {
+    color: #f4f4f5;
+    background: rgba(148, 163, 184, 0.12);
+  }
+}
+
+.toolbar-right :deep(.t-button--variant-outline) {
+  color: #fca5a5;
+  background: transparent;
+  border-color: rgba(248, 113, 113, 0.4);
+
+  &:hover {
+    color: #fecaca;
+    border-color: rgba(248, 113, 113, 0.7);
+    background: rgba(248, 113, 113, 0.1);
+  }
+
+  &.t-button--variant-outline.t-is-disabled {
+    background: transparent;
+  }
+
+  &.t-is-disabled {
+    color: rgba(148, 163, 184, 0.4);
+    border-color: rgba(148, 163, 184, 0.16);
   }
 }
 
@@ -540,7 +572,7 @@ onMounted(loadGraph);
     #06070f;
 
   &.is-list {
-    background: @color-bg;
+    background: #06070f;
     overflow-y: auto;
     padding: @space-5;
   }
@@ -558,26 +590,26 @@ onMounted(loadGraph);
 .list-empty {
   padding: @space-16;
   text-align: center;
-  color: @color-text-tertiary;
+  color: rgba(148, 163, 184, 0.8);
   font-size: @font-sm;
 }
 
 .memory-card {
-  background: @color-bg-surface;
-  border: 1px solid @color-border;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: @radius-card;
   padding: @space-4;
   cursor: pointer;
   transition: all @duration-fast @ease-standard;
 
   &:hover {
-    border-color: @primary;
-    box-shadow: @shadow-sm;
+    border-color: rgba(167, 139, 250, 0.5);
+    background: rgba(255, 255, 255, 0.05);
   }
 
   &.active {
-    border-color: @primary;
-    background: @primary-glow;
+    border-color: rgba(167, 139, 250, 0.7);
+    background: rgba(124, 92, 252, 0.12);
   }
 
   .card-head {
@@ -588,14 +620,14 @@ onMounted(loadGraph);
 
     .card-time {
       font-size: @font-xs;
-      color: @color-text-tertiary;
+      color: rgba(148, 163, 184, 0.75);
     }
   }
 
   .card-summary {
     margin: 0 0 @space-3;
     font-size: @font-base;
-    color: @color-text;
+    color: rgba(226, 232, 240, 0.92);
     line-height: 1.6;
   }
 
@@ -614,7 +646,7 @@ onMounted(loadGraph);
       width: 72px;
       height: 4px;
       border-radius: @radius-pill;
-      background: @color-bg-hover;
+      background: rgba(148, 163, 184, 0.18);
       overflow: hidden;
       display: inline-block;
 
@@ -627,7 +659,7 @@ onMounted(loadGraph);
 
     .imp-text {
       font-size: @font-xs;
-      color: @color-text-tertiary;
+      color: rgba(148, 163, 184, 0.75);
     }
   }
 }
@@ -648,40 +680,22 @@ onMounted(loadGraph);
   letter-spacing: 0.02em;
 }
 
-/* ---------- 图例 ---------- */
-.legend {
+/* ---------- 操作提示：分类图例在工具栏已有，这里只留操作说明 ---------- */
+.stage-hint {
   position: absolute;
-  left: @space-4;
+  left: 50%;
   bottom: @space-4;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: @space-2 @space-3;
-  border-radius: @radius-lg;
-  background: rgba(9, 12, 24, 0.62);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  transform: translateX(-50%);
+  padding: 5px 14px;
+  border-radius: @radius-pill;
+  background: rgba(9, 12, 24, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.12);
   backdrop-filter: blur(8px);
+  color: rgba(148, 163, 184, 0.72);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
   pointer-events: none;
-
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: @space-2;
-    font-size: 11px;
-    color: rgba(226, 232, 240, 0.85);
-
-    .dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-    }
-  }
-
-  .legend-hint {
-    margin: @space-1 0 0;
-    font-size: 10px;
-    color: rgba(148, 163, 184, 0.7);
-  }
 }
 
 /* ---------- 详情面板 ---------- */
@@ -791,6 +805,19 @@ onMounted(loadGraph);
   .panel-actions {
     margin-top: auto;
     padding-top: @space-2;
+
+    /* 深色面板上的危险操作：TDesign outline 默认是白底，这里改成描边 */
+    :deep(.t-button) {
+      background: transparent;
+      color: #fca5a5;
+      border-color: rgba(248, 113, 113, 0.35);
+
+      &:hover {
+        color: #fecaca;
+        border-color: rgba(248, 113, 113, 0.65);
+        background: rgba(248, 113, 113, 0.1);
+      }
+    }
   }
 }
 

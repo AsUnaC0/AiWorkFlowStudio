@@ -705,8 +705,8 @@ export class SkillMcpTools {
         ...warnings,
         '',
         '入口链接：/skills（可在页面继续编辑或删除）。',
-        '⚠️ 现状说明：Skill 的 instructions 目前只在「工作流的 LLM 节点」里注入生效；' +
-          'Agent 运行时尚未接入 Skill（Agent 配置页可以绑定，但暂无运行时效果）。',
+        '生效范围：Skill 的 instructions 会注入到「工作流的 LLM 节点」和「绑定了它的 Agent」的 System Prompt。' +
+          '想让某个 Agent 用上它，去 Agent 配置页的「Skill」区块勾选即可（create_agent 也支持 skillIds）。',
       ]
         .filter(Boolean)
         .join('\n'),
@@ -778,7 +778,10 @@ export class SkillMcpTools {
         where: { knowledgeBase: { ownerId: userId } },
         _count: { _all: true },
       }),
-      this.prisma.agent.count({ where: { createdBy: userId } }),
+      // 系统默认 Agent 每用户一条，但那是平台内置能力，不计入「我的 Agent」
+      this.prisma.agent.count({
+        where: { createdBy: userId, isSystem: false },
+      }),
       this.prisma.skill.count({ where: { ownerId: userId } }),
       this.prisma.mcpServer.findMany({
         where: { ownerId: userId },

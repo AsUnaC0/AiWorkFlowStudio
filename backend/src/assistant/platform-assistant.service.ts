@@ -32,6 +32,38 @@ export const PLATFORM_ASSISTANT_AGENT_TYPE = 'CUSTOM';
 /** 历史上默认系统 Agent 的旧名称（升级时用于原地迁移，避免出现两个默认助手） */
 const LEGACY_DEFAULT_AGENT_NAMES = ['meibus', 'AWS'];
 
+/** 未绑定自定义模型时使用的本地 Ollama 默认模型 */
+const DEFAULT_PLATFORM_MODEL = 'qwen2.5:7b';
+
+/** 平台助理依赖工具调用，ReAct 迭代上限给足 */
+const PLATFORM_ASSISTANT_MAX_TOOL_ITERATIONS = 12;
+
+/**
+ * 系统默认 Agent 的基线配置。
+ *
+ * 每个用户首次 ensure() 时按这份数据创建**自己的**一条记录 ——
+ * 因此「配置最开始都一致」，之后谁改谁的，互不影响。
+ * 集中在一处，避免「创建」与「历史迁移」两条路径的字段漂移。
+ */
+const PLATFORM_ASSISTANT_BASE_DATA = {
+  workspaceId: null,
+  name: PLATFORM_ASSISTANT_NAME,
+  description: PLATFORM_ASSISTANT_DESCRIPTION,
+  type: PLATFORM_ASSISTANT_AGENT_TYPE,
+  isDefault: true,
+  isSystem: true,
+  status: 'PUBLISHED',
+  model: DEFAULT_PLATFORM_MODEL,
+  systemPrompt: PLATFORM_ASSISTANT_BASE_PROMPT,
+  workflowIds: [] as string[],
+  knowledgeBaseIds: [] as string[],
+  skillIds: [] as string[],
+  mcpServerIds: [] as string[],
+  maxToolIterations: PLATFORM_ASSISTANT_MAX_TOOL_ITERATIONS,
+  temperature: 0.3,
+  enableFileGeneration: true,
+};
+
 /**
  * PlatformAssistantService —— 平台助理的编排层。
  *
@@ -43,10 +75,18 @@ const LEGACY_DEFAULT_AGENT_NAMES = ['meibus', 'AWS'];
  *
  * 平台助理 = 系统默认 Agent（isSystem && isDefault）+ 上述三样。
  * 因此普通用户创建的 Agent 完全不受影响。
+ *
+ * **隔离边界**：系统默认 Agent 每个用户一条（createdBy = 用户 id），
+ * 模型配置、人格、会话、记忆都挂在这条记录上，改配置只对自己生效。
+ * 所有读取入口都必须带 userId —— 不带 userId 的 find() 已不再提供，
+ * 就是为了避免再写出「一份记录服务所有用户」的代码。
  */
 @Injectable()
 export class PlatformAssistantService {
   private readonly logger = new Logger(PlatformAssistantService.name);
+
+  /** 历史共享记录的拆分只做一次（并发调用复用同一个 promise） */
+  private legacyMigration?: Promise<void>;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -60,25 +100,33 @@ export class PlatformAssistantService {
   /**
    * 判断某个 Agent 是否为平台助理。
    * 判据是「系统默认 Agent」这个事实，而不是名字 —— 名字可以被改，标识不能。
+   *
+   * 传 userId 时同时校验归属：别人的系统默认 Agent 不算「我的」平台助理，
+   * 否则用户 A 的配置会被当成用户 B 的来跑。
    */
-  isPlatformAssistant(agent: {
-    isSystem?: boolean | null;
-    isDefault?: boolean | null;
-  }): boolean {
-    return agent?.isSystem === true && agent?.isDefault === true;
+  isPlatformAssistant(
+    agent: {
+      isSystem?: boolean | null;
+      isDefault?: boolean | null;
+      createdBy?: string | null;
+    },
+    userId?: string,
+  ): boolean {
+    if (agent?.isSystem !== true || agent?.isDefault !== true) return false;
+    return userId === undefined || agent.createdBy === userId;
   }
 
-  /** 读取平台助理记录（不存在返回 null） */
-  async find() {
+  /** 读取当前用户的平台助理记录（不存在返回 null） */
+  async find(userId: string) {
     return this.prisma.agent.findFirst({
-      where: { isSystem: true, isDefault: true },
+      where: { isSystem: true, isDefault: true, createdBy: userId },
       orderBy: { createdAt: 'asc' },
     });
   }
 
-  /** 读取平台助理记录，不存在则抛 404 */
-  async findOrFail() {
-    const agent = await this.find();
+  /** 读取当前用户的平台助理记录，不存在则抛 404 */
+  async findOrFail(userId: string) {
+    const agent = await this.find(userId);
     if (!agent) throw new NotFoundException('平台助理尚未初始化');
     return agent;
   }
@@ -88,95 +136,269 @@ export class PlatformAssistantService {
   // ===========================================================================
 
   /**
-   * 确保平台助理存在。首次启动时创建；若存在历史的默认助手（meibus / AWS），
-   * 则**原地升级**成平台助理（保留 id，会话历史不丢）。
+   * 确保**当前用户**的平台助理存在。
    *
-   * 注意：系统 Agent 的 systemPrompt 在库里只存基础 Prompt，
-   * 运行时会被 composeSystemPrompt 替换为「基础 Prompt + 动态上下文」。
+   * 每个用户一条独立记录：首次访问时按基线配置创建，
+   * 之后该用户的模型配置 / 人格修改只写在自己的记录上。
+   *
+   * 注意：systemPrompt 在库里只存基础 Prompt，运行时会被
+   * buildSystemPrompt 替换为「基础 Prompt + 动态上下文」。
    */
-  async ensure() {
-    const existing = await this.prisma.agent.findFirst({
-      where: { isSystem: true, isDefault: true },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    if (existing) {
-      // 只在确实需要时更新，避免每次请求都写库
-      const needsUpgrade =
-        existing.name !== PLATFORM_ASSISTANT_NAME ||
-        existing.description !== PLATFORM_ASSISTANT_DESCRIPTION ||
-        existing.systemPrompt !== PLATFORM_ASSISTANT_BASE_PROMPT ||
-        existing.type !== PLATFORM_ASSISTANT_AGENT_TYPE ||
-        existing.status !== 'PUBLISHED';
-
-      if (needsUpgrade) {
-        this.logger.log(
-          `升级系统默认 Agent ${existing.id}「${existing.name}」→ 平台助理`,
-        );
-        return this.prisma.agent.update({
-          where: { id: existing.id },
-          data: {
-            name: PLATFORM_ASSISTANT_NAME,
-            description: PLATFORM_ASSISTANT_DESCRIPTION,
-            type: PLATFORM_ASSISTANT_AGENT_TYPE,
-            systemPrompt: PLATFORM_ASSISTANT_BASE_PROMPT,
-            status: 'PUBLISHED',
-            // 平台助理依赖工具调用，迭代上限给足
-            maxToolIterations: Math.max(existing.maxToolIterations, 12),
-          },
-        });
-      }
-      return existing;
-    }
-
-    // 兼容更早版本遗留的、非 isDefault 的系统助手（原地升级，不新建）
-    const legacy = await this.prisma.agent.findFirst({
-      where: {
-        isSystem: true,
-        name: { in: LEGACY_DEFAULT_AGENT_NAMES },
-      },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (legacy) {
-      this.logger.log(
-        `迁移历史系统助手 ${legacy.id}「${legacy.name}」→ 平台助理`,
+  async ensure(userId: string) {
+    // 先把历史上那份「全局共享」的记录拆给各个用户（幂等，只会真正执行一次）
+    try {
+      await this.migrateLegacySharedAgent(userId);
+    } catch (e) {
+      // 拆分失败不能让对话打不开：本次按未拆分状态继续，下次访问重试
+      this.logger.warn(
+        `平台助理历史数据拆分失败，本次跳过：${
+          e instanceof Error ? e.message : String(e)
+        }`,
       );
-      return this.prisma.agent.update({
-        where: { id: legacy.id },
-        data: {
-          name: PLATFORM_ASSISTANT_NAME,
-          description: PLATFORM_ASSISTANT_DESCRIPTION,
-          type: PLATFORM_ASSISTANT_AGENT_TYPE,
-          isDefault: true,
-          status: 'PUBLISHED',
-          systemPrompt: PLATFORM_ASSISTANT_BASE_PROMPT,
-          maxToolIterations: Math.max(legacy.maxToolIterations, 12),
-        },
-      });
     }
 
-    this.logger.log('创建平台助理（系统默认 Agent）');
-    return this.prisma.agent.create({
+    const existing = await this.find(userId);
+    if (existing) return this.repair(existing);
+
+    try {
+      const created = await this.prisma.agent.create({
+        data: { ...PLATFORM_ASSISTANT_BASE_DATA, createdBy: userId },
+      });
+      this.logger.log(`为用户 ${userId} 创建平台助理 ${created.id}`);
+      return created;
+    } catch (e) {
+      // 并发 ensure（列表与发消息同时打进来）会撞部分唯一索引，
+      // 此时说明另一个请求已经建好了，回读即可。
+      if (this.isUniqueViolation(e)) {
+        const concurrent = await this.find(userId);
+        if (concurrent) return concurrent;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * 把存量记录纠偏到当前版本（名称 / 描述 / Prompt 由系统维护）。
+   *
+   * 只改系统维护字段：模型配置（llmModelId / model / temperature）属于用户，
+   * 一律不碰 —— 这正是本次改造要保住的东西。
+   */
+  private async repair(existing: {
+    id: string;
+    name: string;
+    description: string | null;
+    systemPrompt: string | null;
+    type: string;
+    status: string;
+    maxToolIterations: number;
+  }) {
+    const needsUpgrade =
+      existing.name !== PLATFORM_ASSISTANT_NAME ||
+      existing.description !== PLATFORM_ASSISTANT_DESCRIPTION ||
+      existing.systemPrompt !== PLATFORM_ASSISTANT_BASE_PROMPT ||
+      existing.type !== PLATFORM_ASSISTANT_AGENT_TYPE ||
+      existing.status !== 'PUBLISHED';
+
+    if (!needsUpgrade) return existing;
+
+    this.logger.log(`升级系统默认 Agent ${existing.id}「${existing.name}」`);
+    return this.prisma.agent.update({
+      where: { id: existing.id },
       data: {
-        workspaceId: null,
-        createdBy: null,
         name: PLATFORM_ASSISTANT_NAME,
         description: PLATFORM_ASSISTANT_DESCRIPTION,
         type: PLATFORM_ASSISTANT_AGENT_TYPE,
-        isDefault: true,
-        isSystem: true,
-        status: 'PUBLISHED',
-        model: 'qwen2.5:7b',
         systemPrompt: PLATFORM_ASSISTANT_BASE_PROMPT,
-        workflowIds: [],
-        knowledgeBaseIds: [],
-        skillIds: [],
-        mcpServerIds: [],
-        maxToolIterations: 12,
-        temperature: 0.3,
-        enableFileGeneration: true,
+        status: 'PUBLISHED',
+        maxToolIterations: Math.max(
+          existing.maxToolIterations,
+          PLATFORM_ASSISTANT_MAX_TOOL_ITERATIONS,
+        ),
       },
     });
+  }
+
+  /**
+   * 历史数据迁移：把 `createdBy = NULL` 的全局共享平台助理拆成每用户一条。
+   *
+   * 为什么要拆：改造前所有用户的会话、记忆、人格都指向同一条记录，
+   * 直接给记录加 createdBy 会让「第一个访问的人」独占所有人的历史。
+   *
+   * 步骤（幂等）：
+   *   1. 找出该共享记录下有会话 / 记忆的用户
+   *   2. 给每个这样的用户建一条自己的记录，沿用共享记录上的模型配置
+   *      （迁移前所有人看到的就是这份配置，不继承会表现为「模型突然被重置」）
+   *   3. 把该用户的 ChatSession / Memory / PlatformOperationLog 指向新记录
+   *   4. 人格配置复制一份给新记录（人格原本也只有一份，所有人共用）
+   *   5. 原共享记录降级为模板（isDefault=false），不再命中 isSystem && isDefault
+   *
+   * 迁移失败不阻断对话：抛错由调用方吞掉并记日志，下次访问重试。
+   */
+  private async migrateLegacySharedAgent(currentUserId: string): Promise<void> {
+    if (this.legacyMigration) return this.legacyMigration;
+
+    this.legacyMigration = this.doMigrateLegacySharedAgent(currentUserId)
+      .then((settled) => {
+        // 还有共享记录没拆完（例如当时还没有任何用户产生会话）→ 不缓存结果，
+        // 下次访问再试，避免「第一次跑空就永久跳过」
+        if (!settled) this.legacyMigration = undefined;
+      })
+      .catch((e) => {
+        // 允许下次访问重试，否则一次数据库抖动会让迁移永久跳过
+        this.legacyMigration = undefined;
+        throw e;
+      });
+
+    return this.legacyMigration;
+  }
+
+  /**
+   * @returns 是否已处理完毕（没有待拆分的共享记录时为 true）
+   */
+  private async doMigrateLegacySharedAgent(
+    currentUserId: string,
+  ): Promise<boolean> {
+    let shared = await this.prisma.agent.findFirst({
+      where: { isSystem: true, isDefault: true, createdBy: null },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (!shared) {
+      // 更早版本遗留的默认助手：名字是 meibus / AWS，但没打 isDefault 标记。
+      // 先补上标记，再走同一套按用户拆分流程。
+      const legacy = await this.prisma.agent.findFirst({
+        where: {
+          isSystem: true,
+          createdBy: null,
+          name: { in: LEGACY_DEFAULT_AGENT_NAMES },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (!legacy) return true;
+      shared = await this.prisma.agent.update({
+        where: { id: legacy.id },
+        data: { isDefault: true },
+      });
+    }
+
+    const [sessionOwners, memoryOwners, persona] = await Promise.all([
+      this.prisma.chatSession.groupBy({
+        by: ['userId'],
+        where: { agentId: shared.id },
+      }),
+      this.prisma.memory.groupBy({
+        by: ['userId'],
+        where: { agentId: shared.id },
+      }),
+      this.prisma.agentPersona.findUnique({ where: { agentId: shared.id } }),
+    ]);
+
+    const ownerIds = [
+      ...new Set([...sessionOwners, ...memoryOwners].map((row) => row.userId)),
+    ];
+
+    // 还没有任何用户在这条记录下产生会话 / 记忆 —— 说明它只是「初始化时建的空壳」。
+    // 这时不需要复制，直接归属首个访问的用户即可（保留它上面的模型配置与人格），
+    // 否则会留下一份永远没人用、又每次访问都要扫一遍的孤儿记录。
+    if (ownerIds.length === 0) {
+      const claimed = await this.prisma.agent.updateMany({
+        where: { id: shared.id, createdBy: null },
+        data: { createdBy: currentUserId },
+      });
+      if (claimed.count > 0) {
+        this.logger.log(
+          `平台助理共享记录 ${shared.id} 无历史数据，直接归属首个访问用户 ${currentUserId}`,
+        );
+        return true;
+      }
+      // 被并发请求抢先认领了：本次不缓存结果，下次按正常拆分流程走
+      return false;
+    }
+
+    for (const userId of ownerIds) {
+      const own = await this.prisma.agent.findFirst({
+        where: { isSystem: true, isDefault: true, createdBy: userId },
+        select: { id: true },
+      });
+
+      let targetId = own?.id;
+      if (!targetId) {
+        const created = await this.prisma.agent.create({
+          data: {
+            ...PLATFORM_ASSISTANT_BASE_DATA,
+            createdBy: userId,
+            // 沿用迁移前的模型配置，避免升级后表现成「模型被重置」
+            model: shared.model,
+            llmModelId: shared.llmModelId,
+            temperature: shared.temperature,
+            maxToolIterations: Math.max(
+              shared.maxToolIterations,
+              PLATFORM_ASSISTANT_MAX_TOOL_ITERATIONS,
+            ),
+          },
+          select: { id: true },
+        });
+        targetId = created.id;
+
+        if (persona) {
+          await this.prisma.agentPersona.create({
+            data: {
+              agentId: targetId,
+              name: persona.name,
+              tags: persona.tags,
+              systemPrompt: persona.systemPrompt,
+              avatar: persona.avatar,
+              voiceEnabled: persona.voiceEnabled,
+              voiceId: persona.voiceId,
+              speechRate: persona.speechRate,
+              pitch: persona.pitch,
+              desktopPetEnabled: persona.desktopPetEnabled,
+              proactiveChatEnabled: persona.proactiveChatEnabled,
+              proactiveChatFrequency: persona.proactiveChatFrequency,
+              screenPerceptionEnabled: persona.screenPerceptionEnabled,
+              screenPerceptionInterval: persona.screenPerceptionInterval,
+              personaVersion: persona.personaVersion,
+            },
+          });
+        }
+      }
+
+      await this.prisma.$transaction([
+        this.prisma.chatSession.updateMany({
+          where: { agentId: shared.id, userId },
+          data: { agentId: targetId },
+        }),
+        this.prisma.memory.updateMany({
+          where: { agentId: shared.id, userId },
+          data: { agentId: targetId },
+        }),
+        this.prisma.platformOperationLog.updateMany({
+          where: { agentId: shared.id, userId },
+          data: { agentId: targetId },
+        }),
+      ]);
+    }
+
+    // 降级为模板：不再满足 isSystem && isDefault，也不会出现在任何用户的列表里。
+    // 不删除是为了保留审计里可能出现的 targetId 引用。
+    await this.prisma.agent.update({
+      where: { id: shared.id },
+      data: { isDefault: false },
+    });
+
+    this.logger.log(
+      `平台助理已按用户拆分：共享记录 ${shared.id} → ${ownerIds.length} 个用户实例，原记录降级为模板`,
+    );
+    return true;
+  }
+
+  /** Prisma 唯一约束冲突（P2002）—— 并发 ensure 的预期结果，不是错误 */
+  private isUniqueViolation(e: unknown): boolean {
+    return (
+      typeof e === 'object' &&
+      e !== null &&
+      (e as { code?: string }).code === 'P2002'
+    );
   }
 
   // ===========================================================================

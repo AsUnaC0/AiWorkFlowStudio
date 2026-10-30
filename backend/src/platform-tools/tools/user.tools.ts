@@ -91,7 +91,10 @@ export class UserTools {
         },
       }),
       this.prisma.knowledgeBase.count({ where: { ownerId: ctx.userId } }),
-      this.prisma.agent.count({ where: { createdBy: ctx.userId } }),
+      // 系统默认 Agent 每用户一条，但那是平台内置能力，不计入「我的 Agent」
+      this.prisma.agent.count({
+        where: { createdBy: ctx.userId, isSystem: false },
+      }),
       this.prisma.skill.count({ where: { ownerId: ctx.userId } }),
       this.prisma.mcpServer.count({ where: { ownerId: ctx.userId } }),
     ]);

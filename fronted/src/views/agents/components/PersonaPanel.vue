@@ -280,8 +280,11 @@ const voiceOptions = computed(() =>
           <div class="field">
             <label>音色</label>
             <t-select v-model="form.voiceId" :options="voiceOptions" :disabled="!form.voiceEnabled"
-              placeholder="选择音色" />
-            <p class="hint">首版为 Edge TTS 白名单，后续再开放自定义接口。</p>
+              placeholder="选择音色，或直接输入 voiceId" creatable filterable />
+            <p class="hint">
+              内置为 Edge 音色；要换成 BreezeBlue 音色，直接把 voiceId（形如
+              <code>voc_xxx</code>）填进来即可，桌宠会自动走后端合成。
+            </p>
           </div>
           <div class="field">
             <label>语速 {{ form.speechRate.toFixed(1) }}</label>
