@@ -10,12 +10,14 @@ import { McpModule } from '../mcp/mcp.module';
 import { SkillModule } from '../skill/skill.module';
 import { PlatformToolsService } from './platform-tools.service';
 import { PlatformOperationLogService } from './platform-operation-log.service';
+import { UIActionBridgeService } from './ui-action-bridge.service';
 import { UserTools } from './tools/user.tools';
 import { WorkspaceTools } from './tools/workspace.tools';
 import { WorkflowTools } from './tools/workflow.tools';
 import { KnowledgeTools } from './tools/knowledge.tools';
 import { AgentTools } from './tools/agent.tools';
 import { SkillMcpTools } from './tools/skill-mcp.tools';
+import { UIControlTools } from './tools/ui-control.tools';
 
 /**
  * PlatformTools 模块 —— 平台内置工具集合。
@@ -54,13 +56,20 @@ import { SkillMcpTools } from './tools/skill-mcp.tools';
   providers: [
     PlatformToolsService,
     PlatformOperationLogService,
+    // 界面操作结果回传桥（AgentService 挂起等待，前端 POST 回传）
+    UIActionBridgeService,
     UserTools,
     WorkspaceTools,
     WorkflowTools,
     KnowledgeTools,
     AgentTools,
     SkillMcpTools,
+    UIControlTools,
   ],
-  exports: [PlatformToolsService, PlatformOperationLogService],
+  exports: [
+    PlatformToolsService,
+    PlatformOperationLogService,
+    UIActionBridgeService,
+  ],
 })
 export class PlatformToolsModule {}

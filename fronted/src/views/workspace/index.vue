@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { ref, shallowRef, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, shallowRef, computed, watch, nextTick, onMounted, onBeforeUnmount, onUnmounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useWorkspace } from "@/composables/useWorkspace";
+import {
+  registerPageContext,
+  unregisterPageContext,
+} from "@/modules/ui-control";
 import {
   getWorkflows,
   createWorkflow,
@@ -415,13 +419,111 @@ watch(workspaceId, (id) => {
   }
 });
 
+/** AI 填表：根据当前视图填「创建工作空间」或「创建工作流」表单（只填不提交） */
+const fillWorkspaceForm = (fields: Record<string, unknown>) => {
+  if (workspaceId.value) {
+    if (!wfCreateDialogVisible.value) openWfCreateDialog();
+    if (typeof fields.name === "string") workflowName.value = fields.name;
+    return {
+      success: true,
+      message: "已把内容填进「创建工作流」表单（未提交）",
+    };
+  }
+  if (!createDialogVisible.value) openCreateDialog();
+  if (typeof fields.name === "string") workspaceName.value = fields.name;
+  return {
+    success: true,
+    message: "已把内容填进「创建工作空间」表单（未提交）",
+  };
+};
+
 onMounted(() => {
   if (!workspaceId.value) fetchWorkspaces();
   else {
     fetchWorkflows();
     fetchMembers();
   }
+
+  registerPageContext(
+    {
+      pageId: "workspace",
+      title: "工作空间",
+      route: "/workspace",
+      description: "管理空间与工作流",
+      actions: [
+        {
+          name: "open_create_workspace_dialog",
+          label: "创建工作空间",
+          description: "打开创建工作空间弹窗（会先回到工作空间列表）",
+        },
+        {
+          name: "open_create_workflow_dialog",
+          label: "创建工作流",
+          description: "在当前工作空间下打开创建工作流弹窗",
+        },
+        { name: "fill_form", label: "填写表单" },
+      ],
+    },
+    {
+      open_create_workspace_dialog: async () => {
+        // 创建工作空间的弹窗只存在于「空间列表」视图，先切回去
+        if (workspaceId.value) {
+          await router.push({ path: "/workspace" });
+          await nextTick();
+        }
+        openCreateDialog();
+        await nextTick();
+        const dialogVisible = createDialogVisible.value;
+        return {
+          success: dialogVisible,
+          message: dialogVisible
+            ? "已打开「创建工作空间」弹窗"
+            : "「创建工作空间」弹窗没有打开",
+          currentPage: "workspace",
+          actualState: { dialogVisible },
+          ...(dialogVisible
+            ? {}
+            : {
+                errorCode: "DIALOG_NOT_OPEN",
+                errorMessage: "createDialogVisible 为 false",
+              }),
+        };
+      },
+      open_create_workflow_dialog: async () => {
+        if (!workspaceId.value) {
+          return {
+            success: false,
+            message: "还没有选择工作空间：请先打开或创建一个工作空间，再创建工作流",
+            currentPage: "workspace",
+            errorCode: "NO_WORKSPACE",
+            errorMessage: "workspaceId 为空",
+          };
+        }
+        openWfCreateDialog();
+        await nextTick();
+        const dialogVisible = wfCreateDialogVisible.value;
+        return {
+          success: dialogVisible,
+          message: dialogVisible
+            ? "已打开「创建工作流」弹窗"
+            : "「创建工作流」弹窗没有打开",
+          currentPage: "workspace",
+          actualState: { dialogVisible },
+          ...(dialogVisible
+            ? {}
+            : {
+                errorCode: "DIALOG_NOT_OPEN",
+                errorMessage: "wfCreateDialogVisible 为 false",
+              }),
+        };
+      },
+      fill_form: (params) =>
+        fillWorkspaceForm((params.fields ?? {}) as Record<string, unknown>),
+    },
+  );
 });
+
+onUnmounted(() => unregisterPageContext("workspace"));
 
 onBeforeUnmount(() => {
   workflows.value = [];

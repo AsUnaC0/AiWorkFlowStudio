@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import {
   createMcpServer,
   getMcpCapabilities,
@@ -9,6 +9,10 @@ import {
   testMcpConnection,
   refreshMcpTools,
 } from "@/api/mcp";
+import {
+  registerPageContext,
+  unregisterPageContext,
+} from "@/modules/ui-control";
 import { MessagePlugin } from "tdesign-vue-next";
 import type {
   McpCapabilities,
@@ -110,6 +114,26 @@ const openEditDialog = (server: McpServer) => {
   };
   formError.value = "";
   createDialogVisible.value = true;
+};
+
+/** AI 填表：把用户提供的内容写进新建表单（只填不提交） */
+const fillMcpForm = (fields: Record<string, unknown>) => {
+  if (!createDialogVisible.value) openCreateDialog();
+  if (typeof fields.name === "string") formData.value.name = fields.name;
+  if (typeof fields.description === "string") {
+    formData.value.description = fields.description;
+  }
+  if (typeof fields.serverUrl === "string") {
+    formData.value.serverUrl = fields.serverUrl;
+  }
+  const transport = fields.transport;
+  if (transport === "STREAMABLE_HTTP" || transport === "SSE" || transport === "STDIO") {
+    formData.value.transport = transport;
+  }
+  return {
+    success: true,
+    message: "已把内容填进「新建 MCP Server」表单（未提交；密钥仍需你在页面填写）",
+  };
 };
 
 /** 把 textarea 里的多行参数解析成数组（忽略空行与首尾空格） */
@@ -332,7 +356,53 @@ const getEndpointLabel = (server: McpServer): string => {
 onMounted(() => {
   fetchServers();
   fetchCapabilities();
+
+  registerPageContext(
+    {
+      pageId: "mcp",
+      title: "MCP Server 管理",
+      route: "/mcp",
+      description: "接入与管理 MCP Server",
+      actions: [
+        {
+          name: "open_create_mcp_dialog",
+          label: "新建 MCP Server",
+          description: "打开新建 MCP Server 弹窗",
+        },
+        {
+          name: "fill_form",
+          label: "填写 MCP 表单",
+          description: "把内容填进新建 MCP Server 表单（不提交）",
+        },
+      ],
+    },
+    {
+      open_create_mcp_dialog: async () => {
+        openCreateDialog();
+        await nextTick();
+        const dialogVisible = createDialogVisible.value;
+        return {
+          success: dialogVisible,
+          message: dialogVisible
+            ? "已打开「新建 MCP Server」弹窗"
+            : "「新建 MCP Server」弹窗没有打开",
+          currentPage: "mcp",
+          actualState: { dialogVisible },
+          ...(dialogVisible
+            ? {}
+            : {
+                errorCode: "DIALOG_NOT_OPEN",
+                errorMessage: "createDialogVisible 为 false",
+              }),
+        };
+      },
+      fill_form: (params) =>
+        fillMcpForm((params.fields ?? {}) as Record<string, unknown>),
+    },
+  );
 });
+
+onUnmounted(() => unregisterPageContext("mcp"));
 </script>
 
 <template>

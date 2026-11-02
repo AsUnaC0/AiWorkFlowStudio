@@ -1,5 +1,6 @@
 import { request } from "@/utils/request";
 import { useUserStore } from "@/stores/user";
+import type { UIContextPayload } from "@/modules/ui-control";
 import type {
   Agent,
   CreateAgentRequest,
@@ -164,6 +165,18 @@ export interface AgentChatStreamRequest {
    * 仅作为「用户意图」传给后端 —— 后端会重新校验成员关系后才采用。
    */
   workspaceId?: string;
+  /** 前端上报的当前页面上下文（UI Control 用，后端只注入 Prompt，不做权限判断） */
+  uiContext?: UIContextPayload;
+  /**
+   * 是否支持执行界面操作（UI Control）。
+   * 网页聊天传 true：后端发 ui_action 后会等待前端回传真实结果。
+   */
+  uiControl?: boolean;
+  /**
+   * 本次任务 ID（前端生成，用户点「停止」时按它取消）。
+   * 不传则后端自己生成。
+   */
+  taskId?: string;
 }
 
 /**
@@ -194,6 +207,9 @@ export const runAgentStream = async (
       sessionId: data.sessionId,
       attachmentIds: data.attachmentIds ?? [],
       workspaceId: data.workspaceId,
+      uiContext: data.uiContext,
+      uiControl: data.uiControl,
+      taskId: data.taskId,
     }),
     signal,
   });

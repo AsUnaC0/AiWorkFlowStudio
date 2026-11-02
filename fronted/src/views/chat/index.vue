@@ -56,6 +56,15 @@ import { getLlmModels } from "@/api/provider";
 import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
 import { isAuthFailure } from "@/utils/request";
+import {
+  executeUIAction,
+  enqueueUIAction,
+  getCurrentUIContext,
+  registerPageContext,
+  unregisterPageContext,
+  type UIActionResult,
+} from "@/modules/ui-control";
+import { cancelUITask, reportUIActionResult } from "@/api/uiControl";
 
 // 必须与路由 name 一致 —— MainLayout 的 <keep-alive :include> 按组件 name 匹配，
 // 名字对不上缓存会静默失效（表现为「切菜单回来回答还是丢了」）。
@@ -88,7 +97,21 @@ const loadingMessages = ref(false);
 
 // 发送状态
 const sending = ref(false);
+/** 当前进行中的任务 ID（用户点「停止」时按它取消后续界面操作） */
+const currentTaskId = ref<string | null>(null);
 const inputText = ref("");
+
+/** 生成任务 ID（优先用 crypto，老浏览器退回时间戳 + 随机数） */
+const newTaskId = (): string => {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // ignore
+  }
+  return `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+};
 const inputRef = ref<HTMLTextAreaElement | null>(null);
 const chatContainerRef = ref<HTMLElement | null>(null);
 
@@ -319,15 +342,24 @@ const toggleProcess = (msgId: string) => {
 /** 展开判定：流式中的消息始终展开；已完成消息按用户点击状态 */
 const processExpanded = (msg: ChatMessage) =>
   streamingMsgId.value === msg.id || expandedProcesses.value.has(msg.id);
-/** 只保留 tool_call + operation（过滤 thinking / reasoning / tool_result / file） */
+/**
+ * 只保留 tool_call + operation + ui_action。
+ * `ui_*` 工具调用会被 ui_action 卡片取代，不再重复展示一行裸工具名。
+ */
 const processSteps = (msg: ChatMessage) =>
-  (msg.trail ?? []).filter(
-    (s) => s.type === "tool_call" || s.type === "operation",
-  );
+  (msg.trail ?? []).filter((s) => {
+    if (s.type === "operation" || s.type === "ui_action") return true;
+    if (s.type === "tool_call") {
+      return !String(s.tool ?? "").startsWith("ui_");
+    }
+    return false;
+  });
 const hasProcess = (msg: ChatMessage) => processSteps(msg).length > 0;
-/** 步骤数：只统计工具调用，操作卡片随对应工具出现，避免重复计数 */
+/** 步骤数：工具调用 + 界面操作各算一步（operation 卡片随对应工具出现，不重复计数） */
 const processStepCount = (msg: ChatMessage) =>
-  processSteps(msg).filter((s) => s.type === "tool_call").length;
+  processSteps(msg).filter(
+    (s) => s.type === "tool_call" || s.type === "ui_action",
+  ).length;
 
 // 深度思考（推理过程）折叠控制
 // 与「处理过程」同一套逻辑：流式中恒展开，结束后自动折叠成一行「已深度思考」
@@ -521,6 +553,35 @@ const loadSessions = async () => {
   }
 };
 
+/**
+ * 刷新会话时：把持久化的 ui_action_result 合并进对应的 ui_action 卡片。
+ * 流式过程中前端已实时更新过状态；这里补的是「刷新页面 / 切回旧会话」的路径。
+ */
+const mergeUIActionResults = (msgs: ChatMessage[]) => {
+  for (const m of msgs) {
+    const trail = m.trail;
+    if (!trail?.length) continue;
+    for (const step of trail) {
+      if (step.type !== "ui_action") continue;
+      const result = trail.find(
+        (s) => s.type === "ui_action_result" && s.actionId === step.actionId,
+      );
+      if (result) {
+        step.status = result.cancelled
+          ? "CANCELLED"
+          : result.success
+            ? "SUCCESS"
+            : "FAILED";
+        step.message = result.message;
+        step.currentRoute = result.currentRoute;
+        step.currentPage = result.currentPage;
+        step.actualState = result.actualState;
+        step.errorCode = result.errorCode;
+      }
+    }
+  }
+};
+
 const loadMessages = async () => {
   if (!currentSessionId.value) {
     messages.value = [];
@@ -532,6 +593,7 @@ const loadMessages = async () => {
     messages.value = detail.messages.filter(
       (m) => m.role === "user" || m.role === "assistant",
     );
+    mergeUIActionResults(messages.value);
   } catch {
     messages.value = [];
   } finally {
@@ -718,6 +780,59 @@ const scrollToBottom = async () => {
   }
 };
 
+/**
+ * 执行一条界面操作，并把真实结果回传后端。
+ *
+ * 关键点：
+ *   - 从 `msg.trail` 里取回**响应式**的 step 再改状态（直接改 push 进去的原始对象
+ *     不会触发 Vue 更新 —— 数组里存的是被代理过的元素）
+ *   - 走 `enqueueUIAction` 串行执行，避免多个操作同时改路由 / 弹窗状态
+ *   - 成功或失败都要回传（后端在等），否则后端要等满超时
+ */
+const runUIAction = async (msg: ChatMessage, actionId: string) => {
+  const step = (msg.trail ?? []).find(
+    (s) => s.type === "ui_action" && s.actionId === actionId,
+  );
+  if (!step) return;
+
+  const name = String(step.name ?? "");
+  const params = (step.params ?? {}) as Record<string, unknown>;
+
+  let result: UIActionResult;
+  try {
+    result = await enqueueUIAction(() => executeUIAction(name, params));
+  } catch (e) {
+    // 兜底：绝不能让「执行函数抛错」变成「后端等满 15s 超时」
+    result = {
+      success: false,
+      message: e instanceof Error ? e.message : "界面操作执行失败",
+    };
+  }
+
+  step.status = result.success ? "SUCCESS" : "FAILED";
+  step.message = result.message;
+  step.currentRoute = result.currentRoute;
+  step.currentPage = result.currentPage;
+  step.actualState = result.actualState;
+  step.errorCode = result.errorCode;
+
+  try {
+    // 回传真实页面状态：后端/模型据此判断，而不是只看「函数跑完了」
+    await reportUIActionResult({
+      actionId,
+      success: result.success,
+      message: result.message,
+      currentRoute: result.currentRoute,
+      currentPage: result.currentPage,
+      actualState: result.actualState,
+      errorCode: result.errorCode,
+      errorMessage: result.errorMessage,
+    });
+  } catch {
+    // 回传失败不影响前端已展示的状态；后端会按超时处理
+  }
+};
+
 const handleAgentEvent = (event: AgentStreamEvent, assistantMsgId: string) => {
   // meta 事件不属于某条消息，先单独处理（后端回报本次实际使用的模型）
   if (event.type === "meta") {
@@ -729,6 +844,11 @@ const handleAgentEvent = (event: AgentStreamEvent, assistantMsgId: string) => {
   if (!msg) return;
 
   switch (event.type) {
+    case "task_started": {
+      // 后端确认了本轮任务 ID（前端自带时两者一致）
+      currentTaskId.value = event.taskId;
+      break;
+    }
     case "thinking":
     case "tool_call":
     case "tool_result": {
@@ -747,6 +867,44 @@ const handleAgentEvent = (event: AgentStreamEvent, assistantMsgId: string) => {
       msg.trail.push(event as unknown as Record<string, unknown>);
       // 顺带刷新操作记录，保证抽屉里的数据是新的
       if (operationsVisible.value) void openOperations();
+      break;
+    }
+    case "ui_action": {
+      // 后端要求前端执行一次界面操作（跳转 / 打开弹窗 / 填表）
+      if (!msg.trail) msg.trail = [];
+      const step: Record<string, unknown> = {
+        type: "ui_action",
+        actionId: event.actionId,
+        taskId: event.taskId,
+        name: event.name,
+        params: event.params,
+        tool: event.tool,
+        label: event.label,
+        status: "PENDING",
+        message: "正在执行…",
+      };
+      msg.trail.push(step);
+      // 异步执行并回传，不阻塞 SSE 读取
+      void runUIAction(msg, event.actionId);
+      break;
+    }
+    case "ui_action_result": {
+      // 后端回显的执行结果（本地通常已先行更新，这里做兜底同步）
+      const step = (msg.trail ?? []).find(
+        (s) => s.type === "ui_action" && s.actionId === event.actionId,
+      );
+      if (step) {
+        step.status = event.cancelled
+          ? "CANCELLED"
+          : event.success
+            ? "SUCCESS"
+            : "FAILED";
+        step.message = event.message;
+        step.currentRoute = event.currentRoute;
+        step.currentPage = event.currentPage;
+        step.actualState = event.actualState;
+        step.errorCode = event.errorCode;
+      }
       break;
     }
     case "file": {
@@ -824,6 +982,10 @@ const send = async () => {
     createdAt: new Date().toISOString(),
   });
 
+  // 本轮任务 ID：所有界面指令共享，用户点「停止」时按它取消
+  const taskId = newTaskId();
+  currentTaskId.value = taskId;
+
   sending.value = true;
   streamingMsgId.value = assistantMsgId;
   scrollToBottom();
@@ -840,6 +1002,11 @@ const send = async () => {
         workspaceId: isPlatformAssistant.value
           ? currentWorkspaceId.value
           : undefined,
+        // UI Control：上报当前页面上下文；本客户端支持执行界面操作
+        uiContext: getCurrentUIContext(),
+        uiControl: true,
+        // 本轮任务 ID（停止按钮据此取消后续界面操作）
+        taskId,
       },
       (event) => handleAgentEvent(event, assistantMsgId),
       streamAbort.signal,
@@ -852,6 +1019,7 @@ const send = async () => {
   } finally {
     streamAbort = null;
     sending.value = false;
+    currentTaskId.value = null;
     streamingMsgId.value = null; // 流结束，恢复普通状态
     expandedProcesses.value.delete(assistantMsgId); // 拿到最终数据 → 自动折叠
     expandedReasonings.value.delete(assistantMsgId); // 推理过程同理
@@ -861,6 +1029,32 @@ const send = async () => {
       loadSessions();
       scrollToBottom();
     }
+  }
+};
+
+/**
+ * 停止当前任务。
+ *
+ * 刻意**不直接 abort SSE**：让 Agent 收到「已取消」的结果后自己收尾，
+ * 回一句「好哒，那我先停下来～」，对话记录才是完整的。
+ * 直接断网会让后端一直等到超时，桌宠那边也会以为任务还在跑。
+ */
+const stopTask = async () => {
+  const taskId = currentTaskId.value;
+  if (!taskId) {
+    streamAbort?.abort();
+    return;
+  }
+  try {
+    const { cancelled } = await cancelUITask(taskId);
+    MessagePlugin.info(
+      cancelled > 0
+        ? "好哒，那我先停下来～"
+        : "已发送停止请求，本轮会尽快收尾",
+    );
+  } catch {
+    // 取消失败就退回直接中断网络
+    streamAbort?.abort();
   }
 };
 
@@ -962,6 +1156,17 @@ onActivated(() => {
 });
 
 onMounted(async () => {
+  // 先登记聊天页上下文（即使后面的数据加载失败，UI Control 也已就绪）
+  registerPageContext(
+    {
+      pageId: "chat",
+      title: "对话",
+      route: "/chat",
+      description: "与 AI 助理对话的聊天页",
+    },
+    {},
+  );
+
   await loadModels();
   await loadChatFilePolicy();
   await loadAgents();
@@ -978,6 +1183,7 @@ onBeforeUnmount(() => {
   agents.value = [];
   sessions.value = [];
   messages.value = [];
+  unregisterPageContext("chat");
 });
 
 // ===========================================================================
@@ -1009,6 +1215,67 @@ const statusMeta = (status?: unknown) =>
 /** 从 trail step 里安全取出平台操作对象 */
 const stepOperation = (step: Record<string, unknown>) =>
   (step.operation ?? {}) as AgentOperation;
+
+// ===========================================================================
+// UI Control 界面操作卡片
+// ===========================================================================
+
+const uiActionStatusOf = (
+  step: Record<string, unknown>,
+): "PENDING" | "SUCCESS" | "FAILED" | "CANCELLED" => {
+  const s = String(step.status ?? "PENDING");
+  if (s === "SUCCESS" || s === "FAILED" || s === "CANCELLED") return s;
+  return "PENDING";
+};
+
+const uiActionStatusClass = (step: Record<string, unknown>) =>
+  uiActionStatusOf(step).toLowerCase();
+
+const uiActionStatusText = (step: Record<string, unknown>): string => {
+  const s = uiActionStatusOf(step);
+  if (s === "SUCCESS") return "已完成";
+  if (s === "FAILED") return "失败";
+  if (s === "CANCELLED") return "已取消";
+  return "执行中";
+};
+
+const uiActionStatusTheme = (
+  step: Record<string, unknown>,
+): "success" | "warning" | "danger" | "default" => {
+  const s = uiActionStatusOf(step);
+  if (s === "SUCCESS") return "success";
+  if (s === "FAILED") return "danger";
+  if (s === "CANCELLED") return "default";
+  return "warning";
+};
+
+const uiActionIcon = (step: Record<string, unknown>): string => {
+  const s = uiActionStatusOf(step);
+  if (s === "SUCCESS") return "check-circle";
+  if (s === "FAILED") return "close-circle";
+  if (s === "CANCELLED") return "minus-circle";
+  return "time";
+};
+
+/** 界面操作卡片标题：优先用后端给的中文摘要 */
+const uiActionLabel = (step: Record<string, unknown>): string => {
+  const label = step.label;
+  if (typeof label === "string" && label) return label;
+  const name = String(step.name ?? "");
+  const map: Record<string, string> = {
+    navigate: "页面导航",
+    open_dialog: "打开弹窗",
+    click_action: "页面操作",
+    fill_form: "填写表单",
+  };
+  return map[name] ?? "界面操作";
+};
+
+const uiActionMessage = (step: Record<string, unknown>): string =>
+  typeof step.message === "string" ? step.message : "";
+
+const uiActionRoute = (step: Record<string, unknown>): string =>
+  typeof step.currentRoute === "string" ? step.currentRoute : "";
 </script>
 
 <template>
@@ -1168,8 +1435,12 @@ const stepOperation = (step: Record<string, unknown>) =>
               <div class="prompt-textarea">
                 <textarea ref="inputRef" v-model="inputText" placeholder="Ask anything..."
                   :disabled="sending || !currentAgentId" rows="1" @keydown="onKeydown" />
-                <button class="send-btn" :class="{ active: canSend }" :disabled="!canSend" @click="send">
-                  <t-icon :name="sending ? 'loading' : 'send'" :spin="sending" />
+                <button v-if="sending" class="send-btn active stop-btn" title="停止当前任务"
+                  @click="stopTask">
+                  <t-icon name="stop-circle" />
+                </button>
+                <button v-else class="send-btn" :class="{ active: canSend }" :disabled="!canSend" @click="send">
+                  <t-icon name="send" />
                 </button>
               </div>
               <ChatAttachmentBar v-if="currentAgentId" :attachments="pendingAttachments"
@@ -1256,6 +1527,21 @@ const stepOperation = (step: Record<string, unknown>) =>
                           </button>
                         </div>
                       </template>
+
+                      <!-- 界面操作卡片：AI 帮用户跳转页面 / 打开弹窗，展示真实执行状态 -->
+                      <template v-else-if="step.type === 'ui_action'">
+                        <div class="ui-action-card" :class="uiActionStatusClass(step)">
+                          <div class="ua-head">
+                            <t-icon :name="uiActionIcon(step)" :class="['ua-icon', uiActionStatusClass(step)]" />
+                            <span class="ua-label">{{ uiActionLabel(step) }}</span>
+                            <t-tag :theme="uiActionStatusTheme(step)" variant="light" size="small">
+                              {{ uiActionStatusText(step) }}
+                            </t-tag>
+                            <span v-if="uiActionRoute(step)" class="ua-route">{{ uiActionRoute(step) }}</span>
+                          </div>
+                          <div v-if="uiActionMessage(step)" class="ua-body">{{ uiActionMessage(step) }}</div>
+                        </div>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -1299,8 +1585,12 @@ const stepOperation = (step: Record<string, unknown>) =>
               <div class="prompt-textarea">
                 <textarea ref="inputRef" v-model="inputText" placeholder="继续对话..."
                   :disabled="sending || !currentAgentId" rows="1" @keydown="onKeydown" />
-                <button class="send-btn" :class="{ active: canSend }" :disabled="!canSend" @click="send">
-                  <t-icon :name="sending ? 'loading' : 'send'" :spin="sending" />
+                <button v-if="sending" class="send-btn active stop-btn" title="停止当前任务"
+                  @click="stopTask">
+                  <t-icon name="stop-circle" />
+                </button>
+                <button v-else class="send-btn" :class="{ active: canSend }" :disabled="!canSend" @click="send">
+                  <t-icon name="send" />
                 </button>
               </div>
               <ChatAttachmentBar v-if="currentAgentId" :attachments="pendingAttachments"
@@ -2025,6 +2315,16 @@ const stepOperation = (step: Record<string, unknown>) =>
       }
     }
 
+    // 停止按钮：发送中替代发送键，用警示色区分
+    &.stop-btn {
+      background: var(--td-error-color, #d54941);
+      color: #fff;
+
+      &:hover {
+        background: var(--td-error-color-hover, #c93b33);
+      }
+    }
+
     &:disabled {
       cursor: not-allowed;
     }
@@ -2489,6 +2789,69 @@ const stepOperation = (step: Record<string, unknown>) =>
 
   .op-summary {
     color: @color-text-secondary;
+  }
+}
+
+/* UI Control 界面操作卡片（跳转 / 打开弹窗 / 填表） */
+.ui-action-card {
+  width: 100%;
+  border: 1px solid @color-border;
+  border-left: 3px solid @color-warning;
+  border-radius: 8px;
+  background: @color-bg-surface;
+  padding: @space-2 @space-3;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  &.success {
+    border-left-color: @color-success;
+  }
+
+  &.failed {
+    border-left-color: @color-error;
+  }
+
+  .ua-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .ua-icon {
+    font-size: 14px;
+
+    &.pending {
+      color: @color-warning;
+    }
+
+    &.success {
+      color: @color-success;
+    }
+
+    &.failed {
+      color: @color-error;
+    }
+  }
+
+  .ua-label {
+    font-weight: 600;
+    font-size: 12px;
+    color: @color-text;
+  }
+
+  .ua-route {
+    font-size: 11px;
+    color: @color-text-tertiary;
+    margin-left: auto;
+    font-family: monospace;
+  }
+
+  .ua-body {
+    font-size: 12px;
+    color: @color-text-secondary;
+    word-break: break-word;
   }
 }
 

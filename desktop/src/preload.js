@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('pet', {
   // ---- 对话 ----
   send: (input) => ipcRenderer.invoke('chat:send', { input }),
   abort: () => ipcRenderer.send('chat:abort'),
+  /** 取消当前界面任务（清掉后续指令 + 让 Agent 停止后续步骤） */
+  cancelTask: (taskId) => ipcRenderer.invoke('ui:cancel', { taskId }),
   onChatEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('chat:event', handler);

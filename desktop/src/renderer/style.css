@@ -200,6 +200,26 @@ input {
   color: var(--ink);
 }
 
+/* 停止当前任务：多步骤界面操作进行中才出现 */
+.bubble-stop {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(213, 73, 65, 0.12);
+  color: #d54941;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.bubble-stop:hover {
+  background: #d54941;
+  color: #fff;
+}
+
 /* ---------- 形象 ---------- */
 
 .pet-wrap {

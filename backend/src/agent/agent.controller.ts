@@ -156,6 +156,12 @@ export class AgentController {
       attachmentIds?: string[];
       /** 当前工作空间（仅作为意图传入，后端会重新校验成员关系） */
       workspaceId?: string;
+      /** 前端上报的当前页面上下文（UI Control 用，不参与权限判断） */
+      uiContext?: import('../platform-tools/ui-action.types').UIContextPayload;
+      /** 客户端是否支持执行界面操作 */
+      uiControl?: boolean;
+      /** 本次任务 ID（用户喊停时按它取消） */
+      taskId?: string;
     },
   ) {
     if (!body.input?.trim()) {
@@ -180,6 +186,9 @@ export class AgentController {
         sessionId: body.sessionId,
         attachmentIds: body.attachmentIds,
         workspaceId: body.workspaceId,
+        uiContext: body.uiContext,
+        uiControl: body.uiControl,
+        taskId: body.taskId,
       },
       history,
     )) {
@@ -221,6 +230,10 @@ export class AgentController {
       sessionId?: string;
       attachmentIds?: string[];
       workspaceId?: string;
+      uiContext?: import('../platform-tools/ui-action.types').UIContextPayload;
+      uiControl?: boolean;
+      /** 本次任务 ID（用户喊停时按它取消） */
+      taskId?: string;
     },
     @Res() response: Response,
   ) {
@@ -254,6 +267,9 @@ export class AgentController {
           sessionId: body.sessionId,
           attachmentIds: body.attachmentIds,
           workspaceId: body.workspaceId,
+          uiContext: body.uiContext,
+          uiControl: body.uiControl,
+          taskId: body.taskId,
         },
         history,
       )) {

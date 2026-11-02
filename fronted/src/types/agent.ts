@@ -178,6 +178,48 @@ export interface AgentStreamOperation {
   operation: AgentOperation;
 }
 
+/**
+ * 界面操作指令（UI Control）。
+ *
+ * 后端不执行业务动作，只要求前端执行一次语义化界面操作
+ * （跳转 / 打开弹窗 / 填表），执行完必须调用 reportUIActionResult 回传。
+ */
+export interface AgentStreamUIAction {
+  type: "ui_action";
+  actionId: string;
+  /** 所属任务 ID（用户喊停时按它取消） */
+  taskId?: string;
+  /** navigate / open_dialog / click_action / fill_form */
+  name: string;
+  params?: Record<string, unknown>;
+  /** 触发它的工具名（ui_navigate 等） */
+  tool: string;
+  /** 人类可读描述 */
+  label?: string;
+}
+
+/** 一轮对话开始（携带 taskId，用于「停止」按钮） */
+export interface AgentStreamTaskStarted {
+  type: "task_started";
+  taskId: string;
+}
+
+/** 界面操作的执行结果（前端回传后，后端回显到 trail） */
+export interface AgentStreamUIActionResult {
+  type: "ui_action_result";
+  actionId: string;
+  taskId?: string;
+  success: boolean;
+  message: string;
+  currentRoute?: string;
+  currentPage?: string;
+  /** 真实页面状态快照（dialogVisible 等） */
+  actualState?: Record<string, unknown>;
+  errorCode?: string;
+  errorMessage?: string;
+  cancelled?: boolean;
+}
+
 export interface AgentStreamMessage {
   type: "message";
   content: string;
@@ -201,6 +243,9 @@ export type AgentStreamEvent =
   | AgentStreamToolCall
   | AgentStreamToolResult
   | AgentStreamOperation
+  | AgentStreamTaskStarted
+  | AgentStreamUIAction
+  | AgentStreamUIActionResult
   | AgentStreamMessage
   | AgentStreamFile
   | AgentStreamError;

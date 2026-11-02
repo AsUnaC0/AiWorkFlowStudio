@@ -947,6 +947,27 @@ function registerIpc() {
     }
   });
 
+  /**
+   * 取消当前界面任务。
+   *
+   * 只发取消请求，**不 abort SSE** —— 让 Agent 收到「已取消」后自己收尾，
+   * 回一句「好哒，我先停下」，对话记录才完整。断流会让后端干等到超时。
+   */
+  ipcMain.handle('ui:cancel', async (_event, payload) => {
+    const taskId = String(payload?.taskId ?? '').trim();
+    if (!taskId) return { ok: false, error: '没有正在进行的任务' };
+    try {
+      const data = await api('/platform/ui-command/cancel', {
+        method: 'POST',
+        body: { taskId },
+        timeout: 8000,
+      });
+      return { ok: true, cancelled: data?.cancelled ?? 0 };
+    } catch (error) {
+      return { ok: false, error: error.message || '取消失败' };
+    }
+  });
+
   ipcMain.on('pet:set-ignore-mouse', (_event, ignore) => {
     applyClickThrough(Boolean(ignore));
   });

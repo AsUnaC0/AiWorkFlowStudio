@@ -501,11 +501,12 @@ Engine.run() / runStream() 里每步都打日志：
 
 日志输出到 console + 可选的持久化（后续可接 ELK/Loki）。runId 贯穿全链路，方便排查"某次工作流为什么失败"。
 
-## 九、TTS 语音合成（★ 新增模块）
+## 九、TTS 语音合成（★ 新增模块，双引擎）
 
 **目录**：`backend/src/tts/`，**零依赖**（`TtsModule` 只注册 Controller + Service，不碰 Prisma）。
 
 桌宠「边读边出字」的**后端兜底通道**：桌宠优先用本地 TTS，本地失败或没装时回退到这个后端代理把文本合成 mp3。
+同时也是**云端音色的唯一出口** —— 云端密钥只在后端，桌面端拿不到。
 
 ### 接口
 
@@ -513,10 +514,55 @@ Engine.run() / runStream() 里每步都打日志：
 |---|---|---|
 | POST | `/tts/synthesize` | body `{ text, voice?, rate?, pitch? }` → `{ format: 'mp3', audio: base64 }` |
 
-- `voice` 必须是服务端白名单 `VOICE_IDS`（`persona/persona.prompt.ts` 定义，与桌宠音色一致），否则回落默认 `zh-CN-XiaoyiNeural`；
-- `rate` 默认 `1.0`（可传 `+50%` 这类相对值），`pitch` 默认 `+0Hz`；
+### 双引擎：靠 `voice` 前缀分流，不设 provider 开关
+
+| 引擎 | `voice` 形态 | 依赖 | 备注 |
+|---|---|---|---|
+| **Edge TTS**（默认） | `zh-CN-XiaoyiNeural` 这类，必须命中 `VOICE_IDS` 白名单 | `msedge-tts`，**无需密钥** | 白名单定义在 `persona/persona.prompt.ts`，与桌宠音色一致 |
+| **BreezeBlue**（ElevenLabs 兼容） | `voc_xxx`（`voc_` 前缀） | 需 `BREEZE_API_KEY` | 云端合成，支持自定义音色 id |
+
+**为什么按前缀分而不是加一个 `provider` 开关**：老音色（Edge 白名单）与 BreezeBlue 音色 id 命名空间天然不同，
+用户只要把 `voiceId` 改成 `voc_xxx` 就自动切到云端，不需要额外配置项，也不会影响已有的 Edge 音色。
+
+`TtsController` 的解析顺序（`tts.controller.ts`）：
+
+```
+requested 非空 且 (是 voc_ 前缀 || 命中 VOICE_IDS)  → 原样使用
+否则                                              → tts.getDefaultVoice()
+```
+
+`getDefaultVoice()`：配了 `BREEZE_DEFAULT_VOICE_ID` 且 `BREEZE_API_KEY` 存在 → 用它，否则回落 `zh-CN-XiaoyiNeural`。
+所以**「不传 voice」的默认值不再是固定的 Edge 音色**，取决于是否配了云端密钥。
+
+### 两条合成路径的差异
+
+| | Edge TTS | BreezeBlue |
+|---|---|---|
+| 单段上限 | 按 `[。！？!?\n]` 切到 ≤800 字/段（≤1000 字整段直通） | 按同样标点切到 ≤900 字/段（服务端单次上限 1000 字符） |
+| 失败处理 | 单段失败仅 `warn` 跳过，不中断整体 | **直接抛错**（鉴权/额度问题不是单段问题，继续没意义） |
+| 错误翻译 | 原始异常 | 401/402/404/429 各自翻译成人话（`describeBreezeError()`） |
+| `rate` / `pitch` | 生效 | **不生效**（Breeze 协议没有这两个参数） |
+
+### 环境变量（BreezeBlue）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `BREEZE_API_KEY` | 空 | `brz_xxx`；**不配则所有 `voc_` 音色不可用**（调用直接抛错），但 Edge 音色照常 |
+| `BREEZE_BASE_URL` | `https://api.breeze.blue` | 末尾斜杠会被剥掉 |
+| `BREEZE_MODEL_ID` | `breeze-tts-2` | 放进请求体 `model_id` |
+| `BREEZE_OUTPUT_FORMAT` | `mp3_24000_128` | 走 query `?output_format=` |
+| `BREEZE_TIMEOUT_MS` | `30000` | `AbortController` 超时，超时文案单独提示 |
+| `BREEZE_DEFAULT_VOICE_ID` | 空 | 未指定音色时的云端默认音色（可选） |
+
+请求形态：`POST {base}/v1/text-to-speech/{voice_id}?output_format=...`，header `xi-api-key`，body `{ text, model_id }`，返回二进制音频。
+
+### 其它要点
+
+- `rate` 默认 `1.0`（可传 `+50%` 这类相对值），`pitch` 默认 `+0Hz` —— **仅 Edge 引擎生效**；
 - 用 `msedge-tts` 而不是 `edge-tts`：微软当前要求 Sec-MS-GEC **v2** 令牌（`edge-tts@1.0.x` 只发 v1，直接 403）；`msedge-tts` 已实现 v2 且带时钟偏差校正；
-- `TtsService.synthesize()` 先把文本按句切片（≤800 字/段）逐段合成再 `Buffer.concat` 拼接，单段失败仅 `warn` 跳过，不中断整体；
+- 每次 Edge 合成都**新建实例、用完即关**，避免长连接状态互相污染；
 - 音频以 base64 包在 JSON 返回，便于桌宠复用既有 JSON 请求通道（不另开二进制流）。
 
-> 与桌宠的关系：桌宠客户端（`desktop/`）自己有本地 TTS，「语音边读边出字」优先本地；本接口是**后端兜底**，保证没装本地语音引擎时桌宠仍能出声。详见 [教程 00 §3.16](../教程/00-总览与技术选型.md)。
+> 与桌宠的关系：桌宠客户端（`desktop/`）自己有本地 Edge TTS，「语音边读边出字」优先本地；
+> 但 `voc_` 音色**必须**走本接口（`desktop/src/tts.js` 里 `isBreezeVoice()` 直接跳过本地合成），
+> 其余音色本地失败才回落到后端。详见 [教程 00 §3.16](../教程/00-总览与技术选型.md)。

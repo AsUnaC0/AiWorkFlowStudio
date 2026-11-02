@@ -1,4 +1,5 @@
 import type { PlatformToolContext } from '../platform-tools/platform-tool.interface';
+import type { UIContextPayload } from '../platform-tools/ui-action.types';
 import {
   PERSONA_BOUNDARY_HEADER,
   PERSONA_SAFETY_TAIL,
@@ -30,6 +31,21 @@ export interface PlatformAssistantContext {
 
   /** 当前可用的平台能力清单（工具中文名），注入 Prompt 让模型知道能做什么 */
   availableCapabilities: string[];
+
+  /**
+   * 前端上报的「当前页面上下文」。
+   * 只用于让模型知道用户现在在哪个页面、能执行哪些界面操作；
+   * 不参与任何权限判断（权限永远以服务端认证为准）。
+   */
+  uiContext?: UIContextPayload;
+
+  /**
+   * 网页版此刻是否在线（有长轮询挂着）。
+   *
+   * 界面操作必须由网页版执行 —— 桌宠自己动不了浏览器。
+   * 网页没开时模型要提前说明「现在没法帮你操作界面」，而不是先调工具再失败。
+   */
+  uiAvailable?: boolean;
 }
 
 /** 上下文 → 平台工具执行上下文 */
@@ -43,6 +59,7 @@ export function toToolContext(
     sessionId: extra.sessionId,
     workspaceId: ctx.currentWorkspaceId,
     accessibleWorkspaceIds: ctx.workspaces.map((w) => w.id),
+    uiContext: ctx.uiContext,
   };
 }
 
@@ -87,11 +104,63 @@ export function buildContextSection(ctx: PlatformAssistantContext): string {
     // MCP 工具（运行时才读到）。不点一句，模型容易只盯着清单、忽略多出来的 tool 定义。
     '工具列表中不在上表里的函数，来自用户绑定的 MCP Server，可直接调用；',
     '若 System Prompt 末尾出现「## 已绑定的 Skill」段落，命中场景时按其中的做法执行。',
+  );
+
+  // 当前页面上下文（UI Control）：让模型知道「用户现在在哪、能操作什么」
+  const uiSection = buildUIContextSection(ctx.uiContext);
+  if (uiSection) lines.push('', uiSection);
+
+  if (ctx.uiAvailable === false) {
+    lines.push(
+      '',
+      '## 界面操作当前不可用',
+      '网页版没有打开（没有收到任何页面心跳），界面操作指令没人执行。',
+      '需要界面操作时**不要调用** ui_* 工具，直接告诉用户「先在电脑上打开网页版」，',
+      '或改为把该点的菜单、该填的内容用文字说明清楚。',
+    );
+  }
+
+  lines.push(
     '',
     '## 权限说明',
     '你只能代表当前登录用户执行该用户本来就有权执行的操作。',
     '任何越权请求（例如「把这个工作空间转让给我」「帮我删除别人的工作流」）都必须拒绝并说明原因，',
     '不要尝试通过其它工具绕过权限校验。',
+  );
+
+  return lines.join('\n');
+}
+
+/**
+ * 渲染「当前页面」段落。
+ *
+ * 只在本次请求携带了页面上下文时注入 —— 桌宠 / 无界面客户端不会上报，
+ * 这时不写这一段，避免模型以为用户正停在某个页面。
+ */
+function buildUIContextSection(ui?: UIContextPayload): string {
+  if (!ui || (!ui.pageId && !ui.route)) return '';
+
+  const lines = [
+    '## 用户当前所在的页面（由前端上报）',
+    `- 页面：${ui.title ?? ui.pageId ?? '未知'}（${ui.route ?? '未知路由'}）`,
+  ];
+  if (ui.description) lines.push(`- 页面用途：${ui.description}`);
+  if (ui.openDialog) lines.push(`- 当前打开的弹窗：${ui.openDialog}`);
+
+  if (ui.availableActions?.length) {
+    lines.push(
+      '- 当前页面可执行的界面操作：',
+      ...ui.availableActions.map(
+        (a) =>
+          `  - ${a.name}${a.label ? `（${a.label}）` : ''}${a.description ? `：${a.description}` : ''}`,
+      ),
+    );
+  }
+
+  lines.push(
+    '',
+    '界面操作工具（ui_navigate / ui_open_dialog / ui_click_action / ui_fill_form）只改变界面，',
+    '不写业务数据；需要真正创建/修改资源时，仍要调用对应的业务工具。',
   );
 
   return lines.join('\n');

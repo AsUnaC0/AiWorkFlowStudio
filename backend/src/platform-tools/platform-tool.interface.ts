@@ -1,4 +1,8 @@
 import type { ToolDefinition } from '../ai/ai-provider.interface';
+import type {
+  UIActionInstruction,
+  UIContextPayload,
+} from './ui-action.types';
 
 /**
  * 平台工具（Platform Tool）统一契约。
@@ -31,6 +35,14 @@ export interface PlatformToolMeta {
   riskLevel: PlatformToolRisk;
   /** 默认目标资源类型：workflow / knowledge_base / document / agent / ... */
   targetType?: string;
+  /**
+   * 是否写入审计表（PlatformOperationLog）。默认 true。
+   *
+   * UI Control 工具（跳转 / 打开弹窗）只操作界面、不碰业务数据，
+   * 写进「平台操作记录」只会让审计列表变成一串无意义的「打开弹窗」，
+   * 因此显式关闭审计；它们仍会以 trail 步骤出现在聊天过程里。
+   */
+  audit?: boolean;
 }
 
 /**
@@ -50,6 +62,12 @@ export interface PlatformToolContext {
   workspaceId?: string;
   /** 该用户可访问的全部工作空间 ID（用于校验模型传入的 workspaceId） */
   accessibleWorkspaceIds: string[];
+  /**
+   * 前端上报的「当前页面上下文」（仅 UI Control 工具使用）。
+   * 只用于告诉模型「用户现在在哪个页面、有哪些操作」，
+   * 不参与任何权限判断 —— 权限永远以服务端认证为准。
+   */
+  uiContext?: UIContextPayload;
 }
 
 /** 平台工具执行结果 */
@@ -65,6 +83,14 @@ export interface PlatformToolOutcome {
   summary?: string;
   /** 前端可跳转的资源入口，如 /workspace/<workflowId> */
   link?: string;
+  /**
+   * 界面操作指令（UI Control 工具专用）。
+   *
+   * 有值时表示这个工具**没有在服务端执行任何业务动作**，
+   * 而是要求前端执行一次界面操作。AgentService 会把它翻译成
+   * `ui_action` 事件推给前端，并等待前端回传真实结果后再喂回模型。
+   */
+  uiAction?: UIActionInstruction;
 }
 
 export interface PlatformTool {

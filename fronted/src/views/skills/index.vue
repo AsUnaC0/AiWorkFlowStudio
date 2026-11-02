@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import {
   createSkill,
   getSkills,
   updateSkill,
   removeSkill,
 } from "@/api/skill";
+import {
+  registerPageContext,
+  unregisterPageContext,
+} from "@/modules/ui-control";
 import { MessagePlugin } from "tdesign-vue-next";
 import type { Skill, InputParam } from "@/types/skill";
 
@@ -71,6 +75,46 @@ const openEditDialog = (skill: Skill) => {
   };
   formError.value = "";
   createDialogVisible.value = true;
+};
+
+/** AI 填表：把用户提供的内容写进新建表单（只填不提交） */
+const fillSkillForm = (fields: Record<string, unknown>) => {
+  if (!createDialogVisible.value) openCreateDialog();
+  if (typeof fields.name === "string") formData.value.name = fields.name;
+  if (typeof fields.description === "string") {
+    formData.value.description = fields.description;
+  }
+  if (typeof fields.instructions === "string") {
+    formData.value.instructions = fields.instructions;
+  }
+  if (typeof fields.outputFormat === "string") {
+    formData.value.outputFormat = fields.outputFormat;
+  }
+  const type = fields.type;
+  if (type === "PROMPT" || type === "WORKFLOW" || type === "TOOL") {
+    formData.value.type = type;
+  }
+  // 回传真实状态：弹窗是否真的开着、填了哪些字段。
+  // 只报「函数执行完了」不够 —— 弹窗可能因为页面切换被关掉。
+  const dialogVisible = createDialogVisible.value;
+  return {
+    success: dialogVisible,
+    message: dialogVisible
+      ? "已把内容填进「新建 Skill」表单（未提交，请检查后手动创建）"
+      : "表单没填上：新建弹窗当前没有打开",
+    currentPage: "skills",
+    actualState: {
+      dialogVisible,
+      filledFields: Object.keys(fields),
+      name: formData.value.name,
+    },
+    ...(dialogVisible
+      ? {}
+      : {
+          errorCode: "DIALOG_NOT_OPEN",
+          errorMessage: "createDialogVisible 为 false",
+        }),
+  };
 };
 
 // 输入参数管理
@@ -211,7 +255,55 @@ const getParamCount = (skill: Skill): number => {
 
 onMounted(() => {
   fetchSkills();
+
+  // 向 UI Control 登记本页可被平台助理调用的界面操作
+  registerPageContext(
+    {
+      pageId: "skills",
+      title: "Skill 管理",
+      route: "/skills",
+      description: "管理可复用的 Skill（Prompt / Workflow / Tool）",
+      actions: [
+        {
+          name: "open_create_skill_dialog",
+          label: "新建 Skill",
+          description: "打开新建 Skill 弹窗",
+        },
+        {
+          name: "fill_form",
+          label: "填写 Skill 表单",
+          description: "把内容填进新建 Skill 表单（不提交）",
+        },
+      ],
+    },
+    {
+      open_create_skill_dialog: async () => {
+        openCreateDialog();
+        // 等一次渲染再读状态：确认弹窗的可见状态真的被置起来了
+        await nextTick();
+        const dialogVisible = createDialogVisible.value;
+        return {
+          success: dialogVisible,
+          message: dialogVisible
+            ? "已打开「新建 Skill」弹窗"
+            : "「新建 Skill」弹窗没有打开",
+          currentPage: "skills",
+          actualState: { dialogVisible },
+          ...(dialogVisible
+            ? {}
+            : {
+                errorCode: "DIALOG_NOT_OPEN",
+                errorMessage: "createDialogVisible 为 false",
+              }),
+        };
+      },
+      fill_form: (params) =>
+        fillSkillForm((params.fields ?? {}) as Record<string, unknown>),
+    },
+  );
 });
+
+onUnmounted(() => unregisterPageContext("skills"));
 </script>
 
 <template>

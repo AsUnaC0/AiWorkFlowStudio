@@ -30,12 +30,20 @@ import { PlatformAssistantService } from '../assistant/platform-assistant.servic
 import type { PlatformAssistantContext } from '../assistant/platform-assistant.context';
 import type { MemoryRecallItem } from '../assistant/platform-assistant.context';
 import { PersonaService } from '../persona/persona.service';
+import { stripPersonaMarks } from '../persona/persona-format.util';
 import { MemoryService } from '../memory/memory.service';
 import { MemoryWriterService } from '../memory/memory-writer.service';
 import { SkillService } from '../skill/skill.service';
 import { WebSearchService } from '../web-search/web-search.service';
 import type { PlatformToolContext } from '../platform-tools/platform-tool.interface';
 import type { PlatformOperationPayload } from '../platform-tools/platform-tools.service';
+import type {
+  UIActionInstruction,
+  UIActionResultPayload,
+  UIContextPayload,
+} from '../platform-tools/ui-action.types';
+import { UIActionBridgeService } from '../platform-tools/ui-action-bridge.service';
+import { randomUUID } from 'crypto';
 import { CreateAgentDto } from './dto/create-agent.dto';
 import { UpdateAgentDto } from './dto/update-agent.dto';
 
@@ -76,6 +84,43 @@ export type AgentStreamEvent =
   | { type: 'tool_result'; tool: string; result: string; durationMs: number }
   /** 平台助理执行了一次平台操作（前端渲染操作卡片：风险等级 / 目标资源 / 跳转链接） */
   | { type: 'operation'; operation: PlatformOperationPayload }
+  /**
+   * 界面操作指令（UI Control）。
+   *
+   * 与 `operation` 的区别：`operation` 是「后端已经真实执行业务操作」的结果，
+   * 而 `ui_action` 是「请前端执行一次界面操作」。前端执行完后必须调用
+   * `POST /platform/ui-result` 回传结果，后端据此把真实结果喂回模型。
+   */
+  | {
+      type: 'ui_action';
+      actionId: string;
+      /** 所属任务 ID（用户喊停时按它取消） */
+      taskId?: string;
+      /** 语义化操作名（navigate / open_dialog / click_action / fill_form） */
+      name: string;
+      params?: Record<string, unknown>;
+      /** 触发它的工具名（ui_navigate 等），便于展示 */
+      tool: string;
+      /** 人类可读描述，如「跳转到「Skill 管理」页面」 */
+      label?: string;
+    }
+  /** 一轮对话开始（携带 taskId，桌宠据此显示「停止」入口） */
+  | { type: 'task_started'; taskId: string }
+  /** 界面操作的执行结果（前端回传后，后端回显到 trail，便于刷新后仍能看到状态） */
+  | {
+      type: 'ui_action_result';
+      actionId: string;
+      taskId?: string;
+      success: boolean;
+      message: string;
+      currentRoute?: string;
+      currentPage?: string;
+      /** 真实页面状态快照（dialogVisible 等） */
+      actualState?: Record<string, unknown>;
+      errorCode?: string;
+      errorMessage?: string;
+      cancelled?: boolean;
+    }
   /** Agent 通过 generate_file 工具产出的文件（前端渲染为文件卡片） */
   | { type: 'file'; file: AgentFilePayload }
   | { type: 'message'; content: string }
@@ -109,10 +154,38 @@ export interface AgentRunOptions {
    * 校验不通过则忽略（见 PlatformAssistantService.buildContext）。
    */
   workspaceId?: string;
+  /**
+   * 前端上报的「当前页面上下文」（可选）。
+   * 只影响 Prompt 里的「用户当前所在页面」段落，不参与权限判断。
+   */
+  uiContext?: UIContextPayload;
+  /**
+   * 客户端是否支持执行界面操作（UI Control）。
+   *
+   * true  → 后端发出 `ui_action` 后**挂起等待前端回传真实结果**，再喂回模型；
+   * false → 客户端不支持（如桌宠单独调用），按「已发出指令」处理，不等待。
+   */
+  uiControl?: boolean;
+  /**
+   * 本次运行的任务 ID（可选）。
+   *
+   * 同一轮对话里的多条界面指令共享它，用于：
+   *   - 用户喊停时按 taskId 取消后续步骤（`POST /platform/ui-command/cancel`）；
+   *   - 桌宠展示「停止」按钮。
+   * 前端可自带（网页聊天生成），没带则后端生成。
+   */
+  taskId?: string;
 }
 
 /** 未绑定自定义模型时使用的本地 Ollama 默认模型 */
 const DEFAULT_LOCAL_MODEL = 'qwen2.5:7b';
+
+/**
+ * 等待前端回传界面操作结果的超时时间。
+ * 正常执行是一次 Vue 状态变更，毫秒级；给到 15s 足以覆盖慢设备与路由懒加载。
+ * 超时后按「未执行」处理，绝不当成功。
+ */
+const UI_ACTION_TIMEOUT_MS = 15_000;
 
 /**
  * 系统预设 Agent 允许用户修改的字段白名单。
@@ -200,6 +273,8 @@ export class AgentService {
     private readonly skillService: SkillService,
     /** 联网搜索（内置 web_search 工具；只用于向前端暴露「是否已启用」） */
     private readonly webSearchService: WebSearchService,
+    /** 界面操作结果回传桥（UI Control：挂起等待前端执行结果） */
+    private readonly uiActionBridge: UIActionBridgeService,
   ) {}
 
   /** 把 GeneratedFileRef 转成可 JSON 序列化的 SSE 载荷 */
@@ -613,6 +688,12 @@ export class AgentService {
       agent,
       userId,
     );
+
+    // 本次运行的任务 ID：同一轮对话里的所有界面指令共享它。
+    // 用户喊停时按 taskId 取消后续步骤；桌宠据此显示「停止」入口。
+    const taskId = options.taskId ?? randomUUID();
+    yield { type: 'task_started', taskId };
+
     let chatBackend: AiProvider = this.aiService.getProvider();
     let chatModel = agent.model;
     // 模型是否支持流式（STREAM）。默认 true：未明确绑定模型（本地 Ollama 等兜底路径）
@@ -641,10 +722,19 @@ export class AgentService {
     let assistantContext: PlatformAssistantContext | undefined;
     let platformToolContext: PlatformToolContext | undefined;
     if (isPlatformAssistant) {
+      // 桌宠发起对话时没有页面上下文（它看不见浏览器），
+      // 这里回落到网页版长轮询时上报的最近页面 —— 模型才不会瞎猜。
+      const uiContext =
+        options.uiContext ?? this.uiActionBridge.getBrowserContext(userId);
       assistantContext = await this.platformAssistant.buildContext(
         userId,
         options.workspaceId,
+        uiContext,
       );
+      // 网页版没开 → 界面操作没人执行，让模型提前说明而不是先调工具再失败。
+      // 但「客户端自己就能执行」（uiControl=true 的网页版聊天）时永远可用。
+      assistantContext.uiAvailable =
+        Boolean(options.uiControl) || this.uiActionBridge.isBrowserOnline(userId);
       platformToolContext = this.platformAssistant.buildToolContext(
         assistantContext,
         { agentId: agent.id, sessionId: options.sessionId },
@@ -932,7 +1022,8 @@ export class AgentService {
               continue;
             }
             fullContent += chunk.text;
-            yield { type: 'message', content: fullContent };
+            // 输出侧兜底清洗：旧人格模板教出来的 `|||` / `<sticker:…>` 不能原样进气泡
+            yield { type: 'message', content: stripPersonaMarks(fullContent) };
           }
         } else {
           // 模型不支持流式：改用一次性非流式 chat，避免触发服务商 SSE 限制（如 1212）
@@ -942,7 +1033,7 @@ export class AgentService {
             reasoningContent = res.reasoning;
             yield { type: 'reasoning', content: reasoningContent };
           }
-          yield { type: 'message', content: fullContent };
+          yield { type: 'message', content: stripPersonaMarks(fullContent) };
         }
         await this.recordAgentCall(telemetry, chatBackend, {
           model: chatModel,
@@ -962,9 +1053,11 @@ export class AgentService {
 
       if (options.sessionId && fullContent) {
         pushReasoningStep(reasoningContent);
+        // 落库也用清洗后的文本：历史消息本身就是下一轮的 few-shot 样例，
+        // 带着标记存进去，模型会一直照着模仿
         await this.persistAssistantMessage(
           options.sessionId,
-          fullContent,
+          stripPersonaMarks(fullContent),
           allTrailSteps,
           runFiles,
         );
@@ -987,6 +1080,23 @@ export class AgentService {
     };
 
     for (let i = 0; i < maxIters; i++) {
+      // 用户喊停：不再继续后续步骤（已经执行完的页面操作不回滚）。
+      // 放在每轮开头检查，是因为取消可能发生在「等结果」或「等模型」期间。
+      if (this.uiActionBridge.isTaskCancelled(taskId)) {
+        const stopText = '好哒，那我先停下来～';
+        yield { type: 'message', content: stopText };
+        if (options.sessionId) {
+          pushReasoningStep(allReasoning);
+          await this.persistAssistantMessage(
+            options.sessionId,
+            stopText,
+            allTrailSteps,
+            runFiles,
+          );
+        }
+        return;
+      }
+
       yield { type: 'thinking', message: `思考中... (第 ${i + 1} 轮)` };
       allTrailSteps.push({
         type: 'thinking',
@@ -1035,7 +1145,11 @@ export class AgentService {
         //   3. 第二次是「全量累积」协议，长度从 0 重新涨，前端按累积覆盖就会看到长度回退
         //      （桌宠客户端踩过：气泡先显示一段完整介绍，几秒后被换成一句更短的招呼）
         // 既然 content 已经是完整答案，直接对它做分块推送即可，效果一样而成本减半。
-        let finalContent = result.content;
+        // 先清洗再分块推送：finalContent 已经是完整答案，改一次即可，
+        // 不会出现「标记先发出去、下一帧又消失」的闪烁
+        let finalContent = result.content
+          ? stripPersonaMarks(result.content)
+          : result.content;
         if (finalContent) {
           yield* streamAsTypewriter(finalContent);
         } else if (supportsStream) {
@@ -1053,7 +1167,10 @@ export class AgentService {
                 continue;
               }
               streamedContent += chunk.text;
-              yield { type: 'message', content: streamedContent };
+              yield {
+                type: 'message',
+                content: stripPersonaMarks(streamedContent),
+              };
             }
             if (appendReasoning(restreamReasoning)) {
               yield { type: 'reasoning', content: allReasoning };
@@ -1073,7 +1190,7 @@ export class AgentService {
             });
             throw e;
           }
-          finalContent = streamedContent;
+          finalContent = stripPersonaMarks(streamedContent);
         }
         if (options.sessionId && finalContent) {
           pushReasoningStep(allReasoning);
@@ -1100,13 +1217,17 @@ export class AgentService {
           data: {
             sessionId: options.sessionId,
             role: 'assistant',
-            content: normalizeContentToString(result.content),
+            content: stripPersonaMarks(normalizeContentToString(result.content)),
             toolCalls: result.toolCalls as any,
           },
         });
       }
 
       for (const tc of result.toolCalls) {
+        // 同一批 tool_calls 里也可能中途被取消（用户点停止）：
+        // 立刻停止剩余工具调用，避免「说停了还在建东西」。
+        if (this.uiActionBridge.isTaskCancelled(taskId)) break;
+
         // 兼容 arguments 为「JSON 字符串」或「对象」两种形态（后者见于部分 OpenAI 兼容服务）
         const args = parseToolArguments(tc.function.arguments);
 
@@ -1116,6 +1237,8 @@ export class AgentService {
         const toolStart = Date.now();
         let toolResult = '';
         let operationPayload: PlatformOperationPayload | undefined;
+        let uiActionInstruction: UIActionInstruction | undefined;
+        let uiActionLabel: string | undefined;
         try {
           // 平台工具优先：只有平台助理拿得到这些工具定义，
           // 执行一律经 PlatformAssistantService（权限校验 + 审计 + 异常兜底）
@@ -1129,7 +1252,10 @@ export class AgentService {
               platformToolContext,
             );
             toolResult = execution.text;
-            operationPayload = execution.operation;
+            uiActionInstruction = execution.uiAction;
+            uiActionLabel = execution.operation.summary;
+            // UI Control 工具没有业务操作卡片，改为 ui_action 卡片
+            if (!uiActionInstruction) operationPayload = execution.operation;
           } else {
             // MCP 工具：按 binding 路由到对应 Server（会话由连接层复用）
             const binding = mcpBindings.get(tc.function.name);
@@ -1156,6 +1282,127 @@ export class AgentService {
         } catch (err) {
           toolResult = `工具执行错误：${err instanceof Error ? err.message : String(err)}`;
         }
+
+        // ===== UI Control：把工具意图翻译成界面操作，并等待前端真实结果 =====
+        //
+        // 关键点：不在这里假设成功。只有前端通过 /platform/ui-result 回传了
+        // 真实结果，才把它作为工具结果喂回模型；否则模型会说「已经打开了」
+        // 而页面其实没动 —— 这正是需求文档明令禁止的。
+        if (uiActionInstruction) {
+          const actionId = randomUUID();
+          const instruction = uiActionInstruction;
+
+          // 先建指令（网页版聊天也建，用于状态跟踪与 userId 校验），
+          // 但**不投递** —— 它走 SSE 自己执行，投递会造成重复执行。
+          this.uiActionBridge.createCommand(
+            {
+              commandId: actionId,
+              taskId,
+              name: instruction.name,
+              params: instruction.params,
+              tool: tc.function.name,
+              label: uiActionLabel,
+            },
+            userId,
+          );
+
+          yield {
+            type: 'ui_action',
+            actionId,
+            taskId,
+            name: instruction.name,
+            params: instruction.params,
+            tool: tc.function.name,
+            label: uiActionLabel,
+          };
+          allTrailSteps.push({
+            type: 'ui_action',
+            actionId,
+            taskId,
+            name: instruction.name,
+            params: instruction.params,
+            tool: tc.function.name,
+            label: uiActionLabel,
+          });
+
+          // 谁来执行这条界面指令？
+          //
+          //   网页版聊天（uiControl=true）→ 它自己就能执行，走 SSE 事件，
+          //     不要再投递到指令队列，否则会和网页里的执行器重复执行一次。
+          //   桌宠（uiControl=false）→ 它动不了网页，把指令投递到该用户的
+          //     某个浏览器会话（多标签页时选最近活动的那个），由网页版长轮询取走。
+          const dispatched = options.uiControl
+            ? false
+            : this.uiActionBridge.dispatch(actionId, userId);
+
+          // 只有「有人能执行」时才等真实结果：网页版自己聊天，或指令已成功投递。
+          // 网页没开就别干等 15 秒，直接如实告诉模型。
+          const canWait = Boolean(options.uiControl) || dispatched;
+
+          if (canWait) {
+            const outcome = await this.uiActionBridge.wait(
+              actionId,
+              userId,
+              UI_ACTION_TIMEOUT_MS,
+            );
+            toolResult = formatUIActionResultText(instruction, outcome);
+            yield {
+              type: 'ui_action_result',
+              actionId,
+              taskId,
+              success: outcome.success,
+              message: outcome.message,
+              currentRoute: outcome.currentRoute,
+              currentPage: outcome.currentPage,
+              actualState: outcome.actualState,
+              errorCode: outcome.errorCode,
+              errorMessage: outcome.errorMessage,
+              cancelled: outcome.cancelled,
+            };
+            allTrailSteps.push({
+              type: 'ui_action_result',
+              actionId,
+              taskId,
+              success: outcome.success,
+              message: outcome.message,
+              currentRoute: outcome.currentRoute,
+              currentPage: outcome.currentPage,
+              actualState: outcome.actualState,
+              errorCode: outcome.errorCode,
+              errorMessage: outcome.errorMessage,
+              cancelled: outcome.cancelled,
+            });
+          } else {
+            // 网页版没开：指令没人执行，别把工具自带的「已发出指令」当成成功
+            const offline: UIActionResultPayload = {
+              success: false,
+              message:
+                '网页版没有打开，界面操作没人执行。请告诉用户先在电脑上打开网页版，或者手动操作。',
+              errorCode: 'BROWSER_OFFLINE',
+              errorMessage: '没有在线的浏览器会话',
+            };
+            toolResult = formatUIActionResultText(instruction, offline);
+            yield {
+              type: 'ui_action_result',
+              actionId,
+              taskId,
+              success: false,
+              message: offline.message,
+              errorCode: offline.errorCode,
+              errorMessage: offline.errorMessage,
+            };
+            allTrailSteps.push({
+              type: 'ui_action_result',
+              actionId,
+              taskId,
+              success: false,
+              message: offline.message,
+              errorCode: offline.errorCode,
+              errorMessage: offline.errorMessage,
+            });
+          }
+        }
+
         const durationMs = Date.now() - toolStart;
 
         // 工具可能产出了文件（generate_file）——立刻推给前端渲染卡片
@@ -1361,4 +1608,47 @@ async function* streamAsTypewriter(
   }
   // 最后一片必须是完整文本，避免长度不整除时漏掉尾巴
   yield { type: 'message', content };
+}
+
+/**
+ * 把「界面操作 + 前端回传结果」整理成喂回模型的文本。
+ *
+ * 成功与否必须如实写出来 —— 模型据此决定「接着做下一步」还是「换一种方式帮用户」，
+ * 而不是一律说「已为你打开」。
+ */
+function formatUIActionResultText(
+  instruction: UIActionInstruction,
+  result: UIActionResultPayload,
+): string {
+  const desc = describeUIAction(instruction);
+  if (result.cancelled) {
+    return `界面操作已取消：${desc}。用户主动中止了任务，请立即停止后续界面操作，只回一句简短确认（如「好哒，那我先停下来～」），不要再规划新步骤。`;
+  }
+  if (result.success) {
+    const route = result.currentRoute ? `（当前路由 ${result.currentRoute}）` : '';
+    const page = result.currentPage ? `，页面 ${result.currentPage}` : '';
+    const state = result.actualState
+      ? `，页面状态 ${JSON.stringify(result.actualState)}`
+      : '';
+    return `界面操作成功：${desc}。前端回传：${result.message}${route}${page}${state}。`;
+  }
+  const code = result.errorCode ? `[${result.errorCode}] ` : '';
+  return `界面操作失败：${desc}。${code}原因：${result.message}。请不要声称已经完成该界面操作，改为给用户可执行的替代说明。`;
+}
+
+/** 把界面操作指令转成人类可读描述 */
+function describeUIAction(instruction: UIActionInstruction): string {
+  const params = instruction.params ?? {};
+  switch (instruction.name) {
+    case 'navigate':
+      return `跳转到页面「${String(params.page ?? '')}」`;
+    case 'open_dialog':
+      return `打开弹窗「${String(params.dialog ?? '')}」`;
+    case 'click_action':
+      return `执行页面操作「${String(params.action ?? '')}」`;
+    case 'fill_form':
+      return `填写表单（${Object.keys((params.fields as Record<string, unknown>) ?? {}).join(' / ')}）`;
+    default:
+      return `执行界面操作「${instruction.name}」`;
+  }
 }

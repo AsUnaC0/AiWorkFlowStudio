@@ -16,6 +16,7 @@ const stage = $('stage');
 const bubble = $('bubble');
 const bubbleText = $('bubbleText');
 const bubbleClose = $('bubbleClose');
+const bubbleStop = $('bubbleStop');
 const petWrap = $('petWrap');
 const petRoot = document.querySelector('.pet-root');
 const inputbar = $('inputbar');
@@ -184,6 +185,34 @@ function stopBubbleCursor() {
 }
 
 bubbleClose.addEventListener('click', hideBubble);
+
+/**
+ * 停止当前任务。
+ *
+ * 只发取消请求，不 abort SSE：让 Agent 收到「已取消」后自己收尾并回一句，
+ * 对话记录才完整（断流会让后端干等到超时）。
+ */
+bubbleStop?.addEventListener('click', async () => {
+  const taskId = currentTaskId;
+  if (!taskId) {
+    setStopVisible(false);
+    return;
+  }
+  bubbleStop.disabled = true;
+  try {
+    const result = await api.cancelTask(taskId);
+    if (result && result.ok === false) {
+      showBubble(`⚠️ ${result.error || '取消失败'}`);
+    } else {
+      showBubble('好哒，那我先停下来～');
+    }
+  } catch (error) {
+    showBubble(`⚠️ ${cleanError(error)}`);
+  } finally {
+    bubbleStop.disabled = false;
+    clearCurrentTask();
+  }
+});
 
 // ===========================================================================
 // 语音播报（Edge TTS 合成 → Web Audio 播放 → 文字随语音逐句显示）
@@ -683,6 +712,8 @@ async function sendMessage() {
     state.busy = false;
     sendBtn.disabled = false;
     petRoot.classList.remove('thinking');
+    // 流已结束：任务状态一并清掉，避免「停止」按钮残留
+    clearCurrentTask();
     // 流已经结束 → 剩下的半句不必再等 700ms 的静默判定，立刻切出去播
     if (state.voiceEnabled) flushVoiceRemainder();
     // 语音还在播（或队列里还有没播的句子）时不要收掉「说话」状态，否则嘴巴会中途停下
@@ -721,7 +752,82 @@ const TOOL_LABELS = {
   create_mcp_server: '建 MCP 服务',
   create_skill: '建 Skill',
   generate_file: '生成文件',
+  // UI Control：这些工具不会产生业务数据，只是操作网页界面
+  ui_navigate: '打开页面',
+  ui_open_dialog: '打开弹窗',
+  ui_click_action: '点一下按钮',
+  ui_fill_form: '填表单',
+  ui_get_page_context: '看当前页面',
 };
+
+// ===========================================================================
+// UI Control（桌宠说一句，网页动一下）
+// ===========================================================================
+
+/**
+ * 桌宠自己动不了网页，界面操作由网页版代为执行。
+ * 这里只负责「让用户看到小蝶正在操作什么」，以及操作失败时的提醒。
+ */
+const UI_PAGE_TITLES = {
+  chat: '聊天',
+  dashboard: '控制台',
+  skills: 'Skill 管理',
+  mcp: 'MCP 服务',
+  agents: 'Agent 管理',
+  knowledge: '知识库',
+  workspace: '工作空间',
+  providers: '模型服务',
+  friends: '好友',
+  memory: '记忆星图',
+};
+
+const UI_DIALOG_TITLES = {
+  create_skill: '新建 Skill',
+  create_mcp_server: '新建 MCP 服务',
+  create_agent: '新建 Agent',
+  create_knowledge_base: '新建知识库',
+  create_workspace: '新建工作空间',
+  create_workflow: '新建工作流',
+};
+
+/** 最近一次界面操作的名字：ui_action_result 里不带名字，靠它判断「刚才是填表吗」 */
+let lastUIActionName = '';
+
+/** 当前任务 ID（后端在 task_started 里下发，用于「停止」按钮） */
+let currentTaskId = '';
+
+/** 显示 / 隐藏「停止」按钮（任务进行中才显示） */
+function setStopVisible(visible) {
+  if (!bubbleStop) return;
+  bubbleStop.hidden = !visible;
+}
+
+/** 结束当前任务的本地状态：藏起停止按钮、清空 taskId */
+function clearCurrentTask() {
+  currentTaskId = '';
+  setStopVisible(false);
+}
+
+function describeUIAction(event) {
+  const name = String(event.name || '');
+  const params = event.params || {};
+
+  if (name === 'navigate') {
+    const page = UI_PAGE_TITLES[params.page] || params.page || '页面';
+    return `正在打开「${page}」…`;
+  }
+  if (name === 'open_dialog') {
+    const dialog = UI_DIALOG_TITLES[params.dialog] || '表单';
+    return `正在打开「${dialog}」…`;
+  }
+  if (name === 'fill_form') {
+    return '正在帮你填表单…';
+  }
+  if (name === 'click_action') {
+    return '正在点一下…';
+  }
+  return '正在操作网页…';
+}
 
 api.onChatEvent((event) => {
   if (!event || typeof event !== 'object') return;
@@ -732,6 +838,14 @@ api.onChatEvent((event) => {
         state.displayName = event.personaName;
         personaName.textContent = event.personaName;
       }
+      break;
+    }
+
+    case 'task_started': {
+      // 后端开始了本轮任务：记下 taskId，露出「停止」按钮。
+      // 用户随时可以喊停，不必等第一条界面指令。
+      currentTaskId = String(event.taskId || '');
+      if (currentTaskId) setStopVisible(true);
       break;
     }
 
@@ -762,12 +876,58 @@ api.onChatEvent((event) => {
     case 'message': {
       petRoot.classList.remove('thinking');
       petRoot.classList.add('talking');
+      // 出正文 = 本轮结束，藏起「停止」按钮
+      clearCurrentTask();
       const content = event.content ?? '';
       if (state.voiceEnabled) {
         // 语音开启：文字跟着语音逐句显示，不先整段刷出来
         handleVoiceStream(content);
       } else {
         setBubbleStreaming(content);
+      }
+      break;
+    }
+
+    case 'ui_action': {
+      // 界面操作：网页版会替我们执行。桌宠保持「思考中」动画，
+      // 否则等结果的那一两秒形象会静止，看起来像没反应。
+      lastUIActionName = String(event.name || '');
+      if (event.taskId) {
+        currentTaskId = String(event.taskId);
+        setStopVisible(true);
+      }
+      petRoot.classList.add('thinking');
+      showBubble(describeUIAction(event), { cursor: true });
+      break;
+    }
+
+    case 'ui_action_result': {
+      petRoot.classList.remove('thinking');
+      // 取完就清空，避免下一条不相干的结果被误判成「刚才是填表」
+      const finishedAction = lastUIActionName;
+      lastUIActionName = '';
+
+      // 用户主动取消：给一句确认，别让用户以为还在跑
+      if (event.cancelled) {
+        clearCurrentTask();
+        showBubble('好哒，那我先停下来～');
+        break;
+      }
+
+      if (event.success === false) {
+        const message = String(event.message || '');
+        // 后端那条失败文案是写给模型看的，桌宠这里换成人话
+        showBubble(
+          message.includes('网页版没有打开')
+            ? '网页版没开着，我动不了界面～先在电脑上打开网页版吧'
+            : `⚠️ ${message || '网页上没操作成功'}`,
+        );
+        break;
+      }
+      // 填表成功：只提醒，绝不替用户点「确定」。
+      // 不提醒的话，用户以为小蝶已经建好了，回头发现弹窗还开着。
+      if (finishedAction === 'fill_form') {
+        showBubble('表单我帮你填好啦，检查一下再点「确定」哦～');
       }
       break;
     }
@@ -788,12 +948,14 @@ api.onChatEvent((event) => {
 
     case 'error': {
       petRoot.classList.remove('talking', 'thinking');
+      clearCurrentTask();
       showBubble(`⚠️ ${event.message}`);
       break;
     }
 
     case 'auth:expired': {
       petRoot.classList.remove('talking', 'thinking');
+      clearCurrentTask();
       state.loggedIn = false;
       showBubble('登录过期了，点我重新登录');
       openPanel();

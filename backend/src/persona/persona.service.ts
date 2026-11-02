@@ -11,6 +11,7 @@ import {
   DEFAULT_PERSONA_PROMPT,
   DEFAULT_PERSONA_TAGS,
   MIN_PERCEPTION_INTERVAL,
+  isLegacyPersonaPrompt,
 } from './persona.prompt';
 
 /**
@@ -124,10 +125,25 @@ export class PersonaService {
    * 而默认值本身是稳定的常量，直接用即可。
    */
   async resolveForAgent(agentId: string): Promise<ResolvedPersona> {
-    const record = await this.prisma.agentPersona.findUnique({
+    let record = await this.prisma.agentPersona.findUnique({
       where: { agentId },
     });
     if (!record) return this.defaultPersona();
+
+    // 默认人格升级：只对「和旧版默认文本完全一致」的记录生效。
+    // 用户只要自己动过这段文字，就不再匹配，永远不会被覆盖。
+    if (isLegacyPersonaPrompt(record.systemPrompt)) {
+      record = await this.prisma.agentPersona.update({
+        where: { agentId },
+        data: {
+          systemPrompt: DEFAULT_PERSONA_PROMPT,
+          personaVersion: record.personaVersion + 1,
+        },
+      });
+      this.logger.log(
+        `默认人格已升级到最新版：agent=${agentId} v${record.personaVersion}`,
+      );
+    }
 
     return {
       name: record.name,

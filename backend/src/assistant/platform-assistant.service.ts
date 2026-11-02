@@ -415,6 +415,7 @@ export class PlatformAssistantService {
   async buildContext(
     userId: string,
     workspaceId?: string,
+    uiContext?: PlatformAssistantContext['uiContext'],
   ): Promise<PlatformAssistantContext> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -470,6 +471,7 @@ export class PlatformAssistantService {
           (c) =>
             `${c.label}（${c.name}｜${c.riskLevel === 'HIGH' ? '高风险' : c.riskLevel === 'MEDIUM' ? '中风险' : '只读'}）`,
         ),
+      uiContext,
     };
   }
 

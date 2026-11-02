@@ -18,7 +18,7 @@
 | 08 | [MCP-Skill-Storage-其他模块](./08-MCP-Skill-Storage-其他模块.md) | McpService / SkillService / StorageService / Workspace / Dashboard / Friendship | MCP Server 怎么被 LLM 调用？Skill 是什么？七牛云怎么切换？Workspace 权限模型是怎样的？ |
 | 09 | [文件生成模块](./09-文件生成模块.md) | FilesService / FileGeneratorService / FileStorageService / FilePreviewService / 5 个生成器 / word.repair | AI 怎么真的产出可下载的 Word/Excel/PDF？预览数据怎么来的？为什么 Word 打不开生成的 docx？ |
 | 10 | [聊天文件上传模块](./10-聊天文件上传模块.md) | ChatFilesService / FileParserService / FileContextService / 6 个解析器 / BullMQ 解析 Worker | 用户上传的 PDF/Word/Excel/图片怎么变成 AI 上下文？附件为什么不上知识库？Redis 挂了还能用吗？ |
-| 11 | [平台助理](./11-平台助理.md) | PlatformAssistantService / PlatformToolsService / 19 个平台工具 / PlatformOperationLog / 聊天页操作卡片 | 默认聊天 Agent 怎么变成「能操作平台」的？模型生成的 JSON 怎么防止直接落库？userId 为什么不可伪造？审计表为什么和 trail 分开？ |
+| 11 | [平台助理](./11-平台助理.md) | PlatformAssistantService / PlatformToolsService / **24 个平台工具**（含 5 个 UI Control）/ **UIActionBridgeService**（长轮询队列 + wait/resolve 回传 + 多标签页选目标）/ PlatformOperationLog / 聊天页操作卡片 | 默认聊天 Agent 怎么变成「能操作平台」的？UI Control 怎么让桌宠"帮我去 Skill 页"落到浏览器真实执行？模型生成的 JSON 怎么防止直接落库？userId 为什么不可伪造？审计表为什么和 trail 分开？ |
 | 12 | [人格与记忆模块](./12-人格与记忆模块.md) | AgentPersona / PersonaService / 四段式 Prompt 装配 / MemoryService / MemoryWriterService / 3D 记忆网络 | 「不承认自己是程序」为什么不会削弱权限？人格为什么不塞进 Agent 表？记忆向量为什么不用 pgvector？沉淀怎么做到不拖慢对话？ |
 
 ---
@@ -90,12 +90,11 @@ Agent 侧 Skill 已于 **2026-10-30 接入运行时**（不再是暂缓项），
 | 31 | 03 / 04 / 06 / 10 / 12 / 本页 | **同步第八轮（2026-10-29）全量复核**：改掉 8 处与代码不符的描述 —— 遥测「前后各记一次」→「结束后记一条」、tool_calls 解析的 `parse`/`stringify` 方向、Provider 请求体写死的 `temperature: 0.7`、`ARCHIVED` 版本被标成可激活、附件上下文模板、记忆沉淀分支数、summary「超长丢弃」→「截断到 120 字」；本页「最容易踩的坑」#4（最终答案生成两遍）已随 `streamAsTypewriter` 改造过时，改写为「打字机是后端切片模拟」；审查报告删掉已修复条目索引，只留 G2 / G3 / Skill 暂缓 |
 | 32 | 03 / 04 / 06 / 08 / 10 / 00 / 02 / 12 / 11 / 本页 | **Provider 层两项结构调整（2026-10-29）**：<br>① **删除 `DeepSeekProvider` 子类** —— 只有构造函数 4 行有效代码、零方法覆写，与 `openai` 的「工厂传参」写法不对称。`ai/providers/` 从 3 个实现类收敛到 **2 个**（`OllamaProvider` / `OpenAICompatibleProvider`），承载 4 种 `LlmProviderType`。03 第五节整节改写为「为什么 DeepSeek 没有独立类」+ 两个必须避开的坑（`DEFAULT_BASE_URL.deepseek` 不能删、第三参数 `name` 不能省）；工厂里 `openai` / `deepseek` 两个 case 也合并成一个（`DEFAULT_BASE_URL[provider]` + `provider` 当 name），`openai-compatible` 因无默认地址仍独立。<br>② **新增 reasoning（推理过程）双通道** —— `AiProvider.streamChat` 返回值从 `AsyncGenerator<string>` 改为 `AsyncGenerator<ChatStreamChunk>`（`{type:'content'\|'reasoning', text}`），非流式加 `ChatResult.reasoning?` / `ToolChatResult.reasoning?`；字段探测 `reasoning_content` / `reasoning` / Ollama `message.thinking`。Agent SSE 新增 `reasoning` 事件（累积语义），推理全文作为一条 trail 步骤落库（**无新字段、无迁移**）。03 新增「为什么流式要返回分片」小节，04 补事件表并强调 **`thinking`（后端自造状态）≠ `reasoning`（模型真实思维链）**，06/08 补前端渲染说明，10 补接口签名，12 补桌宠 `reasoning` 期间的思考动画与 SSE 空闲兜底 |
 | 33 | 04 / 08 / 11 / 01 / 本页 | **新增内置联网搜索 `web_search` + 系统助理放开 Skill/MCP 绑定（2026-10-30）**：<br>① **`web_search`** —— 新增 `backend/src/web-search/`（`WebSearchService` 做 provider 抽象与归一化，`WebSearchModule` 只读环境变量、不碰数据库），`agent/tools/web-search.tool.ts` 出 ToolDefinition；`ToolRegistry.buildDefinitions()` 按 `isAvailable()`（= 配了 `BOCHA_API_KEY` / `TAVILY_API_KEY`）决定要不要 push。04 新增 **§三·六** 完整章节（为什么不做成 MCP、两家的字段差异对照表、摘要截断 520 / 注入提示 / 失败不抛错三个取舍、博查 `HTTP 200 + body.code≠200` 的坑）。<br>② **系统平台助理放开 `skillIds` / `mcpServerIds`** —— `SYSTEM_AGENT_EDITABLE_FIELDS` 从 3 个字段扩到 5 个；**关键**：`assertOwnsSkills()` / `assertOwnsMcpServers()` 原本只写在 `else`（用户 Agent）分支里，必须提到 `if (agent.isSystem)` 之前，否则系统助理能绑别人的 Skill 指令与 MCP 凭据。04 权限模型表、08 两处接入状态、11 新增 **§五·二**、01 模块树说明同步；本页坑表 #11 改写、新增 #14。 |
+| 34 | 08 / 12 / 教程 00 / 教程 08 / 教程 02 / 本页 | **同步第十轮（2026-11-02）全量复核**：<br>① **TTS 双引擎补齐** —— 08 第九节重写为「Edge TTS + BreezeBlue 云端，靠 `voice` 前缀分流」，补 6 个 `BREEZE_*` 环境变量表、两条路径的切片/失败/错误翻译差异、`getDefaultVoice()` 的新回落规则；教程 00 §3.16 与教程 08 §6.11 同步（原文写「voice 必须在 `VOICE_IDS` 白名单内」已过时）。<br>② **人格 DTO 放开 `voiceId`** —— 12 §4.4/§4.5 原文说「每个字段都有 `@IsIn(VOICE_IDS)`」，实际 `voiceId` 已改为 `@IsString() @MaxLength(120)`（否则云端音色被 400）；`VOICE_IDS` 现在只给 `TtsController` 识别内置音色，前端下拉是 `creatable`。<br>③ **记忆星图改版** —— 12 §7.2 原表格写「`InstancedMesh` 实体球 + `LineSegments` 直线」，实际已换成四层星图（`Points` shader 星点 + `Sprite` 分类星云 + 二次贝塞尔连线 + 景深星尘）+ `UnrealBloomPass` 后处理；悬停从 `instanceId` 改为命中点 `index`；布局从「球壳 + 扇区 + y 压扁」改为「分类簇心围圈 r=8.6 + 摘要前缀分子簇 + `fill` 填体积」。教程 00 依赖表与目录树同步。<br>④ **基线数字重测** —— 迁移 25 → **26**、`schema.prisma` 1029 → **1035 行**、后端 `.ts` 181 → **184**、`docs/` 47 → **48 篇**；教程 02 §5 同步。<br>⑤ 本页「Skill / MCP 接入现状」的导语「Skill 只有一条路」已过时，改为「Agent 侧两条都通，画布流式调试的 MCP 仍缺（G2）」。 |
 
-> 仍在文档里但**代码尚未修**的缺口见下表（G2 / G3）。
+> 仍在文档里但**代码尚未修**的缺口见下表（G2 / G3）。### Skill / MCP 的接入现状（重要，别踩坑）
 
-### Skill / MCP 的接入现状（重要，别踩坑）
-
-**MCP 有两条路是通的，Skill 只有一条**：
+**Agent 侧两条都通了；画布流式调试那条路 MCP 还没通（G2）**：
 
 | 入口 | Skill | MCP |
 |---|---|---|

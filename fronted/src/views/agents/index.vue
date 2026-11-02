@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
   listAgents,
@@ -7,6 +7,10 @@ import {
   deleteAgent,
   type Agent,
 } from "@/api/agent";
+import {
+  registerPageContext,
+  unregisterPageContext,
+} from "@/modules/ui-control";
 import { AGENT_TEMPLATES, type AgentType } from "@/types/agent";
 import { getLlmModels } from "@/api/provider";
 import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
@@ -69,7 +73,53 @@ const agentModelLabel = (agent: Agent): string => {
 onMounted(() => {
   loadAgents();
   loadModels();
+
+  registerPageContext(
+    {
+      pageId: "agents",
+      title: "Agent 管理",
+      route: "/agents",
+      description: "创建与配置 AI Agent",
+      actions: [
+        {
+          name: "open_create_agent_dialog",
+          label: "创建 Agent",
+          description: "打开创建 Agent 弹窗",
+        },
+        {
+          name: "fill_form",
+          label: "填写 Agent 表单",
+          description: "把内容填进创建 Agent 表单（不提交）",
+        },
+      ],
+    },
+    {
+      open_create_agent_dialog: async () => {
+        openCreateDialog();
+        await nextTick();
+        const dialogVisible = showCreateDialog.value;
+        return {
+          success: dialogVisible,
+          message: dialogVisible
+            ? "已打开「创建 Agent」弹窗"
+            : "「创建 Agent」弹窗没有打开",
+          currentPage: "agents",
+          actualState: { dialogVisible },
+          ...(dialogVisible
+            ? {}
+            : {
+                errorCode: "DIALOG_NOT_OPEN",
+                errorMessage: "showCreateDialog 为 false",
+              }),
+        };
+      },
+      fill_form: (params) =>
+        fillAgentForm((params.fields ?? {}) as Record<string, unknown>),
+    },
+  );
 });
+
+onUnmounted(() => unregisterPageContext("agents"));
 
 const getTemplate = (type: AgentType) =>
   AGENT_TEMPLATES.find((t) => t.type === type);
@@ -111,6 +161,32 @@ const openCreateDialog = () => {
     llmModelId: "",
   };
   showCreateDialog.value = true;
+};
+
+/** AI 填表：把用户提供的内容写进创建表单（只填不提交） */
+const fillAgentForm = (fields: Record<string, unknown>) => {
+  if (!showCreateDialog.value) openCreateDialog();
+  if (typeof fields.name === "string") creating.value.name = fields.name;
+  if (typeof fields.description === "string") {
+    creating.value.description = fields.description;
+  }
+  const type = fields.type;
+  if (
+    type === "GENERAL" ||
+    type === "KNOWLEDGE" ||
+    type === "WORKFLOW" ||
+    type === "TOOL" ||
+    type === "CUSTOM"
+  ) {
+    creating.value.type = type;
+  }
+  if (typeof fields.llmModelId === "string") {
+    creating.value.llmModelId = fields.llmModelId;
+  }
+  return {
+    success: true,
+    message: "已把内容填进「创建 Agent」表单（未提交，请检查后手动创建）",
+  };
 };
 
 const handleCreate = async () => {

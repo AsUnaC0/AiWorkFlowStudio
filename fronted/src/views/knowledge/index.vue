@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import {
   createKnowledgeBase,
   getKnowledgeBases,
   removeKnowledgeBase,
 } from "@/api/knowledge";
+import {
+  registerPageContext,
+  unregisterPageContext,
+} from "@/modules/ui-control";
 import { getLlmModels } from "@/api/provider";
 import { type LlmModel, PROVIDER_LABELS } from "@/types/provider";
 import { MessagePlugin } from "tdesign-vue-next";
@@ -63,6 +67,26 @@ const openCreateDialog = () => {
   createEmbeddingDimension.value = 768;
   createError.value = "";
   createDialogVisible.value = true;
+};
+
+/** AI 填表：把用户提供的内容写进创建表单（只填不提交） */
+const fillKnowledgeForm = (fields: Record<string, unknown>) => {
+  if (!createDialogVisible.value) openCreateDialog();
+  if (typeof fields.name === "string") createName.value = fields.name;
+  if (typeof fields.description === "string") {
+    createDescription.value = fields.description;
+  }
+  if (typeof fields.embeddingModel === "string") {
+    // 自定义模型 id 优先；传的是模型名时忽略（需用户在页面里选）
+    const matched = embeddingModels.value.find(
+      (m) => m.id === fields.embeddingModel || m.modelId === fields.embeddingModel,
+    );
+    if (matched) createEmbeddingLlmModelId.value = matched.id;
+  }
+  return {
+    success: true,
+    message: "已把内容填进「创建知识库」表单（未提交，请检查后手动创建）",
+  };
 };
 
 const submitCreate = async () => {
@@ -154,7 +178,53 @@ const formatRelativeTime = (dateStr: string) => {
 onMounted(() => {
   fetchKnowledgeBases();
   fetchEmbeddingModels();
+
+  registerPageContext(
+    {
+      pageId: "knowledge",
+      title: "知识库",
+      route: "/knowledge",
+      description: "管理知识库与文档",
+      actions: [
+        {
+          name: "open_create_knowledge_dialog",
+          label: "创建知识库",
+          description: "打开创建知识库弹窗",
+        },
+        {
+          name: "fill_form",
+          label: "填写知识库表单",
+          description: "把内容填进创建知识库表单（不提交）",
+        },
+      ],
+    },
+    {
+      open_create_knowledge_dialog: async () => {
+        openCreateDialog();
+        await nextTick();
+        const dialogVisible = createDialogVisible.value;
+        return {
+          success: dialogVisible,
+          message: dialogVisible
+            ? "已打开「创建知识库」弹窗"
+            : "「创建知识库」弹窗没有打开",
+          currentPage: "knowledge",
+          actualState: { dialogVisible },
+          ...(dialogVisible
+            ? {}
+            : {
+                errorCode: "DIALOG_NOT_OPEN",
+                errorMessage: "createDialogVisible 为 false",
+              }),
+        };
+      },
+      fill_form: (params) =>
+        fillKnowledgeForm((params.fields ?? {}) as Record<string, unknown>),
+    },
+  );
 });
+
+onUnmounted(() => unregisterPageContext("knowledge"));
 </script>
 
 <template>

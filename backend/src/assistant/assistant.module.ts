@@ -25,6 +25,8 @@ import { PlatformAssistantService } from './platform-assistant.service';
   imports: [AuthModule, PersonaModule, PlatformToolsModule],
   controllers: [AssistantController],
   providers: [PlatformAssistantService],
-  exports: [PlatformAssistantService],
+  // 再导出 PlatformToolsModule：AgentModule 通过本模块间接拿到
+  // PlatformToolsService / UIActionBridgeService（界面操作结果回传桥）
+  exports: [PlatformAssistantService, PlatformToolsModule],
 })
 export class AssistantModule {}

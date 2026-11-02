@@ -8,12 +8,14 @@ import type {
   PlatformToolRisk,
 } from './platform-tool.interface';
 import { PlatformOperationLogService } from './platform-operation-log.service';
+import type { UIActionInstruction } from './ui-action.types';
 import { UserTools } from './tools/user.tools';
 import { WorkspaceTools } from './tools/workspace.tools';
 import { WorkflowTools } from './tools/workflow.tools';
 import { KnowledgeTools } from './tools/knowledge.tools';
 import { AgentTools } from './tools/agent.tools';
 import { SkillMcpTools } from './tools/skill-mcp.tools';
+import { UIControlTools } from './tools/ui-control.tools';
 
 /** 推送给前端 / 审计用的操作卡片数据（JSON 安全） */
 export interface PlatformOperationPayload {
@@ -35,6 +37,12 @@ export interface PlatformToolExecution {
   text: string;
   /** 供前端渲染操作卡片 + 审计 */
   operation: PlatformOperationPayload;
+  /**
+   * 界面操作指令（UI Control 工具专用）。
+   * 有值时表示「工具没有在服务端执行业务动作」，由 AgentService 转成
+   * `ui_action` 事件交给前端执行，并等待前端回传结果。
+   */
+  uiAction?: UIActionInstruction;
 }
 
 /**
@@ -68,6 +76,7 @@ export class PlatformToolsService {
     private readonly knowledgeTools: KnowledgeTools,
     private readonly agentTools: AgentTools,
     private readonly skillMcpTools: SkillMcpTools,
+    private readonly uiControlTools: UIControlTools,
     private readonly operationLog: PlatformOperationLogService,
   ) {
     for (const tool of this.allTools()) {
@@ -88,6 +97,8 @@ export class PlatformToolsService {
       ...this.knowledgeTools.tools,
       ...this.agentTools.tools,
       ...this.skillMcpTools.tools,
+      // UI Control：界面跳转 / 打开弹窗 / 填表（不写业务数据）
+      ...this.uiControlTools.tools,
     ];
   }
 
@@ -141,6 +152,7 @@ export class PlatformToolsService {
     let targetName: string | undefined;
     let link: string | undefined;
     let errorMessage: string | undefined;
+    let uiAction: UIActionInstruction | undefined;
 
     try {
       const outcome = await tool.execute(args, ctx);
@@ -151,6 +163,7 @@ export class PlatformToolsService {
       targetId = outcome.targetId;
       targetName = outcome.targetName;
       link = outcome.link;
+      uiAction = outcome.uiAction;
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
       status = 'FAILED';
@@ -174,26 +187,29 @@ export class PlatformToolsService {
       durationMs,
     };
 
-    // 审计落库（失败不影响主流程）
-    await this.operationLog.record({
-      userId: ctx.userId,
-      workspaceId: ctx.workspaceId,
-      sessionId: ctx.sessionId,
-      agentId: ctx.agentId,
-      tool: name,
-      action: tool.meta.action,
-      riskLevel: tool.meta.riskLevel,
-      targetType,
-      targetId,
-      targetName,
-      status,
-      summary: operation.summary,
-      link,
-      params: args,
-      errorMessage,
-      durationMs,
-    });
+    // 审计落库（失败不影响主流程）。
+    // UI Control 工具显式关闭审计：界面操作不是业务操作，不写平台操作记录。
+    if (tool.meta.audit !== false) {
+      await this.operationLog.record({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        sessionId: ctx.sessionId,
+        agentId: ctx.agentId,
+        tool: name,
+        action: tool.meta.action,
+        riskLevel: tool.meta.riskLevel,
+        targetType,
+        targetId,
+        targetName,
+        status,
+        summary: operation.summary,
+        link,
+        params: args,
+        errorMessage,
+        durationMs,
+      });
+    }
 
-    return { text, operation };
+    return { text, operation, uiAction };
   }
 }
