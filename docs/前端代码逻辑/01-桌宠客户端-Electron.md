@@ -218,7 +218,7 @@ function setToken(token) {
 | 分组    | 方法                                                                                                        | 方向                                 |
 | ----- | --------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | 状态与账号 | `getState()` / `login()` / `logout()` / `refreshAssistant()` / `saveSettings()`                           | invoke → handle                    |
-| 对话    | `send(input)` / `abort()` / `onChatEvent(cb)`                                                             | invoke / send / 主→渲染推 `chat:event` |
+| 对话    | `send(input)` / `abort()` / `cancelTask(taskId)` / `onChatEvent(cb)`                                       | invoke / send / 主→渲染推 `chat:event` |
 | 语音    | `speak(text)` / `setVoice(payload)` / `onVoiceState(cb)`                                                  | invoke / send / 主→渲染推 `tts:state`  |
 | 窗口行为  | `setIgnoreMouse` / `dragStart` / `dragMove` / `dragEnd` / `focusInput` / `hide` / `quit` / `openExternal` | send（单向）                           |
 
@@ -232,6 +232,10 @@ function setToken(token) {
 
 主进程 `chat:send` 同一时刻只允许一条流：新消息会把旧的 `AbortController` 掐掉
 （`chatAbort.abort()`），渲染进程据此显示「（已取消）」。
+
+`cancelTask(taskId)` 是另一条路：它调 `POST /platform/ui-command/cancel` 让后端把任务标记为取消，
+**故意不 abort SSE** —— 让 Agent 自己收尾并回一句「好哒，我先停下」，对话记录才完整；
+断流会让后端干等到超时。
 
 ### 5.1 错误文案链路：为什么用户看不到 `fetch failed`
 
@@ -309,9 +313,14 @@ response.on('data', (chunk) => {
   buffer = chunks.pop() ?? '';           // 最后半截留下次
   for (const chunk of chunks) {
     const dataLine = chunk.split('\n').find((l) => l.startsWith('data: '));
-    const event = JSON.parse(dataLine.slice(6));   // 单条解析失败跳过，不影响整条流
-    emit(event);                          // 转发给渲染进程
-    armIdle(event.type === 'message' ? 5000 : 90000);   // 见下
+    if (!dataLine) continue;
+    try {
+      const event = JSON.parse(dataLine.slice(6));
+      emit(event);                        // 转发给渲染进程
+      armIdle(event.type === 'message' ? 5000 : 90000);   // 见下
+    } catch {
+      // 单条坏包跳过，不影响整条流
+    }
   }
 });
 ```
@@ -325,8 +334,9 @@ response.on('data', (chunk) => {
 ### 6.2 空闲兜底：分档计时器
 
 在 Electron 主进程里读 SSE 拿不到可靠的 EOF——后端明明已经 `response.end()`
-（用 Node 原生 fetch 测 3 秒就 close），但这里 `end` / `close` / `aborted` 一个都不触发，
-会一直挂着不返回，表现是「气泡一直在闪、输入框点不动」。
+（用 Node 原生 fetch 测 3 秒就 close），但这里 `end` / `close` / `aborted` 实测都不触发。
+代码仍给三者挂了 `settle()` 兜底（谁先来算谁的），可一旦都不来，请求就会一直挂着不返回，
+表现是「气泡一直在闪、输入框点不动」。
 
 所以必须自己按**空闲时间**兜底，且分两档（两种阶段的「正常静默」差别很大）：
 
@@ -346,15 +356,30 @@ response.on('data', (chunk) => {
 | `meta`                                             | 带 `personaName` 就更新显示名（人格改名立即生效）                                   |
 | `thinking`                                         | 头部摇摆加速（`.thinking` 类把摇摆周期 5.4s 压到 1.6s）                            |
 | `reasoning`                                        | **不展示内容**（气泡太小），但必须保持 `thinking` 动画——推理可能几十秒没有 `message`，不处理会像卡死   |
-| `tool_call`                                        | 气泡显示「正在跑工作流…」这类短句（`TOOL_LABELS` 表把 16 个工具名翻成中文动作）                  |
+| `tool_call`                                        | 气泡显示「正在跑工作流…」这类短句（`TOOL_LABELS` 表把 **21 个**工具名翻成中文动作：16 个业务工具 + 5 个 UI 工具）                  |
 | `tool_result`                                      | 摘掉 `thinking`                                                      |
+| `task_started`                                     | 记下 `taskId`、露出气泡里的「停止」按钮（后端开始本轮任务就显示，不必等到第一条界面指令）                    |
 | `message`                                          | 语音开 → `handleVoiceStream()` 逐句切分；语音关 → `setBubbleStreaming()` 直接覆盖 |
+| `ui_action`                                        | 记下动作名（`ui_action_result` 不带名字，靠它判断「刚才是填表吗」）；记 `taskId`、显示停止按钮、`thinking`、气泡写「正在打开「知识库」…」 |
+| `ui_action_result`                                 | 摘掉 `thinking`；`cancelled` → 清任务并回「好哒，那我先停下来～」；失败 → 把后端给模型看的文案换成人话；`fill_form` 成功 → 提醒「表单填好了，检查一下再点确定」，**绝不替用户提交** |
 | `operation`                                        | 只看 `status === 'FAILED'`，气泡提示哪个操作没成功                               |
 | `file`                                             | 气泡提示「文件做好了：xxx（去网页版我的文件下载）」                                        |
 | `error` / `auth:expired` / `system` / `open-panel` | 错误气泡 / 弹出登录面板 / 系统提示 / 托盘「设置…」推来开面板                                |
 
 > **`message`** **事件的** **`content`** **是全量累积文本，不是增量**。如果按增量拼字符串会得到重复内容，
 > 直接覆盖显示才对（`setBubbleStreaming`）。
+
+**「停止」按钮的状态机**（`bubbleStop` + `currentTaskId`）：
+
+```
+task_started / ui_action 带 taskId → currentTaskId = taskId，显示「停止」
+message / error / auth:expired / sendMessage 的 finally → clearCurrentTask() 隐藏
+点击「停止」 → api.cancelTask(taskId) → 按钮先 disabled 防连点
+            → 不 abort SSE，等 ui_action_result(cancelled: true) 收尾
+```
+
+它只在「任务进行中」出现：`task_started` 比第一条 `ui_action` 更早，所以用户不用干等；
+`message` 代表本轮结束，按钮必须收起，否则会一直挂在气泡上。
 
 ***
 
@@ -490,7 +515,7 @@ function hitTest(clientX, clientY) {
 > `transform-box: view-box`。只写 `transform-origin: bottom center` 在 SVG 里不生效。
 
 **拖拽与点击的区分**：`pointerdown` 记 `screenX/screenY` 并 `api.dragStart()`
-（主进程记下窗口起点 `dragOrigin`）；`pointermove` 位移 > 4px 才算拖拽，
+（主进程记下窗口起点 `dragOrigin`）；`pointermove` 位移 `|dx|+|dy| > 4px`（曼哈顿距离）才算拖拽，
 调 `api.dragMove(dx, dy)` 由主进程 `win.setPosition()` 移窗；`pointerup` 没拖过就当点击
 （`onPetClick`：未登录开面板，已登录切换输入框）。窗口移动后 `win.on('moved')` 与
 `pet:drag-end` 都会把位置写回 config。
@@ -505,7 +530,8 @@ function hitTest(clientX, clientY) {
 | 人格    | ✅  | 都从 `GET /platform/assistant` 取 `displayName`；音色也默认跟随人格                |
 | 记忆    | ✅  | 桌宠的对话同样走 `runStream`，结束后同样触发沉淀，网页版星图里能看到                              |
 | 会话    | ❌  | 桌宠首次说话时自建一个标题为「桌宠对话」的会话（`ensureSession()`），不污染网页版聊天记录                 |
-| 工具与审计 | ✅  | 走的是同一套 `PlatformToolsService`，19 个工具、风险确认、`PlatformOperationLog` 全都照旧 |
+| 工具与审计 | ✅  | 走的是同一套 `PlatformToolsService`，19 个业务工具 + 5 个 UI 工具、风险确认、`PlatformOperationLog` 全都照旧 |
+| 界面操作 | ✅  | 桌宠也能让网页版执行 `navigate / open_dialog / click_action / fill_form`（后端同一套 UI 指令队列，见 [03](./03-界面操作桥接.md)） |
 
 **没有任何一条能力是「桌宠专用」的旁路**——这是有意的：桌宠只是个壳，
 后端看不到「请求来自桌宠」这件事，也就没法出现「桌宠能绕过确认」这种漏洞。

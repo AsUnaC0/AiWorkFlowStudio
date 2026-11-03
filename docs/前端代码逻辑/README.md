@@ -7,7 +7,7 @@
 
 ## 文档目录
 
-本套文档只覆盖两块「前端里最不像普通 Vue 页面」的实现——桌面端（Electron 主/渲染双进程）与 3D 星图（Three.js 手写 shader）。常规页面（登录、聊天、配置、工作流、知识库、模型、Skills/MCP、好友、控制台）与 `docs/需求/` 里的交互描述一一对应，不单独成册。
+本套文档只覆盖三块「前端里最不像普通 Vue 页面」的实现——桌面端（Electron 主/渲染双进程）、3D 星图（Three.js 手写 shader）与界面操作桥接（AI 操作浏览器）。常规页面（登录、聊天、配置、工作流、知识库、模型、Skills/MCP、好友、控制台）与 `docs/需求/` 里的交互描述一一对应，不单独成册。
 
 | 序号 | 文件 | 覆盖范围 | 读完你应该能回答 |
 |---|---|---|---|
@@ -49,7 +49,7 @@
 
 ## 本文档的准确性说明
 
-两篇均已对照 `desktop/src/**` 与 `fronted/src/**` 逐文件核验（`main.js` 1055 行、`preload.js` 48 行、`tts.js` 109 行、`renderer/pet.js` 1036 行、`MemoryPanel.vue` 894 行、`MemoryGraph.vue` 1116 行、`api/memory.ts` 125 行、后端 `desktop-pet` 两个文件）。校验分三类：**数字**（阈值 / 半径 / 配色 / 行数）、**名称**（变量 / 函数 / 事件 / 接口路径）、**行为**（调用顺序 / 分支条件 / 失败降级）。
+三篇均已对照 `desktop/src/**` 与 `fronted/src/**` 逐文件核验（`main.js` 1076 行、`preload.js` 50 行、`tts.js` 109 行、`renderer/pet.js` 1198 行、`MemoryPanel.vue` 894 行、`MemoryGraph.vue` 1116 行、`api/memory.ts` 125 行、`api/uiControl.ts` 134 行、`modules/ui-control/` 12 个文件、后端 `ui-action-bridge.service.ts` 753 行、后端 `desktop-pet` 三个文件）。校验分三类：**数字**（阈值 / 半径 / 配色 / 行数）、**名称**（变量 / 函数 / 事件 / 接口路径）、**行为**（调用顺序 / 分支条件 / 失败降级）。
 
 ### 修订记录
 
@@ -67,6 +67,11 @@
 | 10 | 02 §三 | `MEMORY_CATEGORY_LABELS` 的真实用途是**悬停标签的分类名**（`updateTip()`），不是「接口没返回 `categoryLabel` 的兜底」；`getMemoryCategories()` 已封装但**全项目无人调用**（死代码） |
 | 11 | 02 §六 | 坑从 9 条扩到 11 条（新增「相机被放平导致星图扁成一坨」「`minDistance` 太小会钻进星团」） |
 | 12 | **新增 03** | `fronted/src/modules/ui-control/` 与 `fronted/src/api/uiControl.ts` 此前**完全没有文档**。补齐「Registry 三份数据 + 两条边界」「Executor 四种操作」「Browser Bridge 长轮询主循环」「会话 ID 用 sessionStorage 隔离 tab」「路由守卫导致的 ROUTE_MISMATCH 必须重新读路由」等关键实现。与后端 11 §八·一 形成对照：后端讲 UIActionBridgeService，前端 03 讲 Registry / Executor / Bridge。 |
+| 13 | 01 §五 / §六 | 补齐 `cancelTask(taskId)` IPC、`task_started` / `ui_action` / `ui_action_result` 三个事件、气泡「停止」按钮状态机；`TOOL_LABELS` 由 16 个业务工具扩到 21 个（含 5 个 UI 工具）；工具总数改为「19 个业务 + 5 个 UI」 |
+| 14 | 02 §5.1 / §5.3 / §5.5 / §5.6 | 修正「亮度映射连通度」为「亮度映射重要度、尺寸叠加连通度」；`aSize` 补 `hash01(id,41)` 盐值；连线分类过滤改为「**任一端**未命中即 ×0」；点击/拖拽阈值明确为曼哈顿距离 `\|dx\|+\|dy\|` |
+| 15 | 03 §4.5 / §七 / §八 / §十 | 修正 `ui-control.tools.ts` 路径；`get_page_context` 明确为「后端读最近一次上报的 `uiContext`」而非前端读 registry；`main.ts` 示例改为真实的 `import router from "@/router"` + mount 前调用；skills 页示例换成真实的 `actions + handlers + actualState`；`/cancel` 标注为桌宠「停止」按钮消费 |
+| 16 | README | 行数统计与文件数更新到当前代码（`main.js` 1076、`pet.js` 1198、`tts.js` 109、`preload.js` 50、`api/memory.ts` 125、`api/uiControl.ts` 134、ui-control 12 文件、`ui-action-bridge.service.ts` 753） |
+| 17 | README §准确性说明 | 上一轮写入的 5 个行数（`preload.js` 47 / `tts.js` 97 / `api/memory.ts` 123 / `api/uiControl.ts` 120 / `ui-action-bridge.service.ts` 686）与 `wc -l` 实测不符（实为 50 / 109 / 125 / 134 / 753），`desktop-pet` 实为三个文件（controller / module / service），已全部改正。其余行数（1076 / 1198 / 1116 / 894 / 12 文件）复核无误 |
 
 ---
 

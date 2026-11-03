@@ -76,12 +76,12 @@ async ensureSystemAgents(userId: string) {
 
 - 识别判据是 `isSystem=true && isDefault=true`（**不是名字**，名字可以被改）+ `createdBy=userId`
 - 专属 System Prompt 由 `PlatformAssistantService.buildSystemPrompt()` 动态生成
-- 工具 = **19 个平台工具**（后端注册，用户无法定义）+ 可选的 **MCP 工具 / Skill**（用户可在配置页绑定）
+- 工具 = **24 个平台工具**（19 个业务 + 5 个 UI，后端注册，用户无法定义）+ 可选的 **MCP 工具 / Skill**（用户可在配置页绑定）
 - 默认不绑定固定模型（`llmModelId` 为 null），运行时按该用户自己的默认对话模型解析；
   用户在 Agent 配置页手动指定后 `llmModelId` 有值，运行时优先按它解析 —— **只对自己生效**
 
 > 📌 **完整契约见 [11 - 平台助理](./11-平台助理.md)**：初始化与历史迁移（旧的 `meibus` 记录会**原地升级**，id 和会话历史都保留）、
-> 动态上下文注入、19 个工具清单、审计表 `PlatformOperationLog`、前端操作卡片。
+> 动态上下文注入、24 个工具清单、审计表 `PlatformOperationLog`、前端操作卡片。
 > 本文只讲它与 `runStream` 的衔接点。
 
 > ⚠️ **早期文档里写的「自动创建一个名为 `meibus` 的默认助手」已过时**：
@@ -160,7 +160,7 @@ async ensureSystemAgents(userId: string) {
    ① 资源工具   = ToolRegistry.buildDefinitions(workflowIds, knowledgeBaseIds, { enableFileGeneration })
                   —— 里面除了 workflow / knowledge_search / generate_file，还会按需
                      push 内置的 `web_search`（见 三·六）
-   ② 平台工具   = 仅平台助理：platformAssistant.buildToolDefinitions()（19 个）
+   ② 平台工具   = 仅平台助理：platformAssistant.buildToolDefinitions()（24 个）
    ③ MCP 工具   = 仅当 agent.mcpServerIds 非空：mcpService.findRuntimeConfigs() → mcpToolService.buildBindings()
 8. 持久化用户消息到 ChatMessage（如果有 sessionId，content = 原始 options.input），并 `chatSession.update({ updatedAt })` 把会话顶到列表最前
    若有 attachmentIds → chatFiles.attachToMessage(userId, ids, messageId, sessionId) 把附件关联到这条消息
@@ -181,7 +181,7 @@ async ensureSystemAgents(userId: string) {
 > **平台助理的三点特别之处**（详见 [11](./11-平台助理.md)）：
 > 1. **默认不绑定固定模型** —— 每个用户一条记录，`llmModelId` 默认 null，靠第 3 步按该用户的默认对话模型解析
 > 2. **System Prompt 是动态生成的** —— 库里存的 `systemPrompt` 会被覆盖
-> 3. **工具来自后端注册，不是用户配置** —— 19 个平台工具，用户无法通过聊天临时定义
+> 3. **工具来自后端注册，不是用户配置** —— 24 个平台工具，用户无法通过聊天临时定义
 
 > **附件解析失败**：用户消息已落库（不丢），但本轮会 `yield { type: 'error', message }` 直接结束，不再调用 LLM。
 >
