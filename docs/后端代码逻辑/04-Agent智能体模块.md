@@ -2,7 +2,7 @@
 
 > 阅读本文后，你应该能回答：Agent 的 CRUD 是怎么做的？ReAct 循环每一轮发生什么？工具注册和路由机制是怎样的？chatSession 怎么持久化对话？
 
----
+***
 
 ## 一、Agent CRUD
 
@@ -44,17 +44,17 @@ model Agent {
 
 1. 检查用户是否已有 workspace → 没有就关联第一个
 2. 解析模型名：`llmModelId` 有值 → 查 LlmModel 表拿到真实模型标识（如 `deepseek-ai/DeepSeek-V4-Flash`）；否则回退 `dto.model` 或默认 `qwen2.5:7b`
-3. 按 `dto.type` 查 USER_TEMPLATES 拿到默认的 name/description/systemPrompt
+3. 按 `dto.type` 查 USER\_TEMPLATES 拿到默认的 name/description/systemPrompt
 4. Prisma `agent.create({ data: {...} })`
 
 ### 权限模型
 
-| 场景 | 规则 |
-|---|---|
-| list() | 只返回 `createdBy=userId`（系统默认 Agent 也是每用户一条，一个条件覆盖两类记录） |
-| findOne() | 一律要求 `createdBy=userId`，**系统 Agent 不再对所有人可见** |
-| update() | 一律要求 `createdBy=userId`；系统 Agent 另外**只放开白名单字段**（`llmModelId` / `model` / `temperature` / `skillIds` / `mcpServerIds`，见 `SYSTEM_AGENT_EDITABLE_FIELDS`），带其他字段即 400 |
-| remove() | 只有 owner 能删；系统 Agent 一律不可删 |
+| 场景        | 规则                                                                                                                                                                |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| list()    | 只返回 `createdBy=userId`（系统默认 Agent 也是每用户一条，一个条件覆盖两类记录）                                                                                                             |
+| findOne() | 一律要求 `createdBy=userId`，**系统 Agent 不再对所有人可见**                                                                                                                     |
+| update()  | 一律要求 `createdBy=userId`；系统 Agent 另外**只放开白名单字段**（`llmModelId` / `model` / `temperature` / `skillIds` / `mcpServerIds`，见 `SYSTEM_AGENT_EDITABLE_FIELDS`），带其他字段即 400 |
+| remove()  | 只有 owner 能删；系统 Agent 一律不可删                                                                                                                                        |
 
 > **系统默认 Agent 每个用户一条**（`isSystem && isDefault && createdBy = 用户 id`），
 > 模型配置的修改只写在自己那条记录上，不影响其他用户。
@@ -80,21 +80,21 @@ async ensureSystemAgents(userId: string) {
 - 默认不绑定固定模型（`llmModelId` 为 null），运行时按该用户自己的默认对话模型解析；
   用户在 Agent 配置页手动指定后 `llmModelId` 有值，运行时优先按它解析 —— **只对自己生效**
 
-> 📌 **完整契约见 [11 - 平台助理](./11-平台助理.md)**：初始化与历史迁移（旧的 `meibus` 记录会**原地升级**，id 和会话历史都保留）、
+> 📌 **完整契约见** **[11 - 平台助理](./11-平台助理.md)**：初始化与历史迁移（旧的 `meibus` 记录会**原地升级**，id 和会话历史都保留）、
 > 动态上下文注入、24 个工具清单、审计表 `PlatformOperationLog`、前端操作卡片。
 > 本文只讲它与 `runStream` 的衔接点。
 
-> ⚠️ **早期文档里写的「自动创建一个名为 `meibus` 的默认助手」已过时**：
+> ⚠️ **早期文档里写的「自动创建一个名为** **`meibus`** **的默认助手」已过时**：
 > `meibus` 只是升级前的历史名字，`ensure()` 会把这类遗留记录就地升级成平台助理，不会新建。
 
----
+***
 
 > 📌 **接入状态（2026-10-30 核对）：MCP 与 Skill 均已接入运行时，配置页也都有入口。**
 >
-> | 字段 | 运行时是否生效 | 说明 |
-> |---|---|---|
-> | `Agent.mcpServerIds` | ✅ **已接入** | `runStream()` 初始化阶段调 `McpService.findRuntimeConfigs()` + `McpToolService.buildBindings()`，把选中 Server 的工具合并进 ReAct 工具集；tool_call 先查平台工具 → 再查 MCP binding → 没命中才回落 `ToolRegistry` |
-> | `Agent.skillIds` | ✅ **已接入** | `buildSkillSection()` 取 `SkillService.findByIds()` 的结果，按 `ownerId` 过滤后把 `instructions` 拼成 `## 已绑定的 Skill` 段落，追加到 System Prompt 末尾（在身份 / 人格 / 记忆 / 动态上下文之后） |
+> | 字段                   | 运行时是否生效   | 说明                                                                                                                                                                               |
+> | -------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | `Agent.mcpServerIds` | ✅ **已接入** | `runStream()` 初始化阶段调 `McpService.findRuntimeConfigs()` + `McpToolService.buildBindings()`，把选中 Server 的工具合并进 ReAct 工具集；tool\_call 先查平台工具 → 再查 MCP binding → 没命中才回落 `ToolRegistry` |
+> | `Agent.skillIds`     | ✅ **已接入** | `buildSkillSection()` 取 `SkillService.findByIds()` 的结果，按 `ownerId` 过滤后把 `instructions` 拼成 `## 已绑定的 Skill` 段落，追加到 System Prompt 末尾（在身份 / 人格 / 记忆 / 动态上下文之后）                       |
 >
 > **配置入口**：Agent 配置页有「知识库 / 工作流 / MCP 工具 / Skill」四个资源区块。
 > 系统 Agent 渲染「MCP 工具 / Skill」（`PATCH` 白名单已含 `mcpServerIds` / `skillIds`），
@@ -105,11 +105,12 @@ async ensureSystemAgents(userId: string) {
 > 从不触碰 `skillIds` / `mcpServerIds`（已实测确认绑定不会被冲掉）。
 >
 > 归属校验三处都不能省：
+>
 > - `assertOwnsModel()` —— 挡住绑定别人的模型（否则白嫖 API Key）
 > - `assertOwnsSkills()` + `buildSkillSection()` 的 `ownerId` 过滤 —— Skill 的 instructions 会进 System Prompt
 > - `assertOwnsMcpServers()` + `ownedMcpServerIds()` 的运行时过滤 —— `findRuntimeConfigs()` 只按 id 直取并解密凭据，不过滤就会拿别人的 Server 凭据去连接
 >
-> ⚠️ **`assertOwnsSkills()` / `assertOwnsMcpServers()` 必须写在 `if (agent.isSystem)` 分支之前**。
+> ⚠️ **`assertOwnsSkills()`** **/** **`assertOwnsMcpServers()`** **必须写在** **`if (agent.isSystem)`** **分支之前**。
 > 它们原来只写在 `else`（用户 Agent）里 —— 只改白名单不挪这两行，系统 Agent 就能绑别人的
 > Skill 指令与 MCP 凭据。
 >
@@ -117,7 +118,7 @@ async ensureSystemAgents(userId: string) {
 >
 > 所以：**在 Agent 配置页勾选 MCP Server / Skill 都会生效**。Skill 也可以继续在工作流的 LLM 节点里勾选，两条路径互不影响。
 
----
+***
 
 ## 二、runStream — ReAct 循环主流程
 
@@ -179,6 +180,7 @@ async ensureSystemAgents(userId: string) {
 > 只有平台助理才拿得到 `platformToolContext`，普通 Agent 即使猜到了平台工具的名字也不会走到这一支。
 
 > **平台助理的三点特别之处**（详见 [11](./11-平台助理.md)）：
+>
 > 1. **默认不绑定固定模型** —— 每个用户一条记录，`llmModelId` 默认 null，靠第 3 步按该用户的默认对话模型解析
 > 2. **System Prompt 是动态生成的** —— 库里存的 `systemPrompt` 会被覆盖
 > 3. **工具来自后端注册，不是用户配置** —— 24 个平台工具，用户无法通过聊天临时定义
@@ -189,6 +191,7 @@ async ensureSystemAgents(userId: string) {
 > `telemetry = { workspaceId, agentId }`，之后每次 LLM 调用**结束后**调**一次** `recordAgentCall(telemetry, chatBackend, {...})`
 > 写 `ModelCallLog`（成功记 `SUCCESS`、异常记 `FAILED` 后 rethrow，一次调用只落一条）。`workspaceId` 的解析是**五级回退链**
 > （`resolveTelemetryWorkspaceId()`，`agent.service.ts:1009`）：
+>
 > 1. 平台助理当前选中的空间
 > 2. 平台助理可访问的第一个空间（多空间且未选择时兜底，保证统计不丢）
 > 3. Agent 自身所属空间（普通 Agent）
@@ -364,11 +367,11 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 
 代价是三个，且都很实在：
 
-| 问题 | 表现 |
-|---|---|
-| **多花一次模型调用** | 同一轮请求付两份钱、等两轮延迟。实测一轮对话从 2.8s 涨到 5.9s |
-| **两次生成内容不一致** | `temperature > 0` 时不保证复现。用户会看到气泡里的字**突变**成另一段话 |
-| **长度回退** | 第二次是从 `streamedContent = ''` 累积，前端按「累积覆盖」渲染就会看到字数从 102 掉回 1，桌宠客户端踩过：气泡先显示一段完整介绍，几秒后被换成一句更短的招呼 |
+| 问题            | 表现                                                                                            |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| **多花一次模型调用**  | 同一轮请求付两份钱、等两轮延迟。实测一轮对话从 2.8s 涨到 5.9s                                                          |
+| **两次生成内容不一致** | `temperature > 0` 时不保证复现。用户会看到气泡里的字**突变**成另一段话                                                |
+| **长度回退**      | 第二次是从 `streamedContent = ''` 累积，前端按「累积覆盖」渲染就会看到字数从 102 掉回 1，桌宠客户端踩过：气泡先显示一段完整介绍，几秒后被换成一句更短的招呼 |
 
 现在改成 `streamAsTypewriter(result.content)`：对已有答案切 3 字一片推送，
 按总长度反推间隔让整段约 600ms 打完。效果和真流式看不出差别，
@@ -381,20 +384,21 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 
 前端 SSE 会收到这些事件（按顺序）：
 
-| 事件 type | 含义 | 数据 |
-|---|---|---|
-| `meta` | 模型信息 | agentId, agentName, model, provider, **isPlatformAssistant** |
-| `thinking` | LLM 正在推理 | message |
-| **`reasoning`** | **模型的推理过程（思维链）**，只有思考型模型才有；累积语义，前端渲染成独立折叠区 | content（每次都是**推理全文**） |
-| `tool_call` | LLM 调用工具 | tool name, args |
-| **`file`** | **`generate_file` 产出的文件**（每个工具执行后，`flushFileEvents()` 在 `tool_result` **之前** yield） | file，前端渲染成文件卡片，见 09 |
-| **`operation`** | **平台工具的一次操作记录**（仅平台助理） | operation（工具 / 风险 / 目标资源 / 状态 / 耗时 / 跳转链接），前端渲染成操作卡片，见 11 |
-| `tool_result` | 工具返回结果 | tool name, result, durationMs |
-| `thinking` | 继续下一轮... | |
-| `message` | 最终回答（累积内容） | content（每次都是完整内容） |
-| `error` | 出错（附件解析失败 / 达到工具调用上限 / Agent 被禁用） | message |
+| 事件 type         | 含义                                                                                      | 数据                                                           |
+| --------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `meta`          | 模型信息                                                                                    | agentId, agentName, model, provider, **isPlatformAssistant** |
+| `thinking`      | LLM 正在推理                                                                                | message                                                      |
+| **`reasoning`** | **模型的推理过程（思维链）**，只有思考型模型才有；累积语义，前端渲染成独立折叠区                                              | content（每次都是**推理全文**）                                        |
+| `tool_call`     | LLM 调用工具                                                                                | tool name, args                                              |
+| **`file`**      | **`generate_file`** **产出的文件**（每个工具执行后，`flushFileEvents()` 在 `tool_result` **之前** yield） | file，前端渲染成文件卡片，见 09                                          |
+| **`operation`** | **平台工具的一次操作记录**（仅平台助理）                                                                  | operation（工具 / 风险 / 目标资源 / 状态 / 耗时 / 跳转链接），前端渲染成操作卡片，见 11    |
+| `tool_result`   | 工具返回结果                                                                                  | tool name, result, durationMs                                |
+| `thinking`      | 继续下一轮...                                                                                | <br />                                                       |
+| `message`       | 最终回答（累积内容）                                                                              | content（每次都是完整内容）                                            |
+| `error`         | 出错（附件解析失败 / 达到工具调用上限 / Agent 被禁用）                                                       | message                                                      |
 
-> **`reasoning` 与 `thinking` 不是一回事**，别混：
+> **`reasoning`** **与** **`thinking`** **不是一回事**，别混：
+>
 > - `thinking` 是**后端自己造的**状态提示（「思考中...」「思考中... (第 2 轮)」），没有真实信息量，
 >   只用来让前端显示呼吸动画，且会被前端过滤掉、不渲染成步骤。
 > - `reasoning` 是**模型真实返回的思维链文本**（DeepSeek 的 `reasoning_content` / Ollama 的
@@ -402,7 +406,7 @@ yield { type: 'error', message: 'Agent 达到最大工具调用次数限制' };
 >
 > 两者都进 `trail`，但前端只把 `reasoning` 单独渲染成一个「深度思考」折叠区。
 
----
+***
 
 ## 三、ToolRegistry — 工具注册中心
 
@@ -463,20 +467,22 @@ async executeTool(toolName: string, args, context) {
 ```
 
 **路由规则**：
-| tool name | 路由到 | 用途 |
-|---|---|---|
-| `workflow_{uuid}` | WorkflowTool | 执行绑定的工作流 |
-| `knowledge_search` | KnowledgeTool | 在绑定的知识库中搜索 |
-| `generate_file` | GenerateFileTool | 生成 Word / Excel / PDF / Markdown / CSV 文件 |
-| `web_search` | WebSearchTool | 联网搜索实时网页（配了搜索 Key 才存在，见 三·六） |
 
----
+| tool name          | 路由到              | 用途                                        |
+| ------------------ | ---------------- | ----------------------------------------- |
+| `workflow_{uuid}`  | WorkflowTool     | 执行绑定的工作流                                  |
+| `knowledge_search` | KnowledgeTool    | 在绑定的知识库中搜索                                |
+| `generate_file`    | GenerateFileTool | 生成 Word / Excel / PDF / Markdown / CSV 文件 |
+| `web_search`       | WebSearchTool    | 联网搜索实时网页（配了搜索 Key 才存在，见 三·六）              |
+
+***
 
 ## 三·五、GenerateFileTool — 文件生成工具
 
 **文件路径**：`backend/src/agent/tools/generate-file.tool.ts`
 
 **唯一必填参数**是 `format`（枚举 `docx / xlsx / pdf / md / csv`），其余按类型选填：
+
 - 文档类：`markdown`（推荐）或 `blocks`
 - 表格类：`sheets`（可多工作表）或 `columns` + `rows`
 
@@ -490,7 +496,7 @@ context.files?.push(file);   // 回传给 AgentService → 推 SSE file 事件 +
 
 > 完整的生成 / 存储 / 预览 / Word 兼容性逻辑见 **[09 - 文件生成模块](./09-文件生成模块.md)**。
 
----
+***
 
 ## 三·六、WebSearchTool — 内置联网搜索
 
@@ -515,22 +521,22 @@ MCP 那条路本身是通的（Tavily 官方远程 MCP 用 `BEARER_TOKEN` 就能
 WebSearchModule
  └─ WebSearchService     provider 抽象 + 归一化 + 超时 + 错误翻译（只读环境变量，不碰数据库）
       ↑
- WebSearchTool           ToolDefinition + 结果格式化（在 agent/tools/ 下，和另外三个工具并列）
+ WebSearchTool            ToolDefinition + 结果格式化（在 agent/tools/ 下，和另外三个工具并列）
       ↑
  ToolRegistry            按 isAvailable() 决定要不要 push 定义；按名路由执行
 ```
 
-`WebSearchModule` **只依赖环境变量、不导入 `PrismaModule`**，所以任何模块都能安全导入，不会形成循环依赖。
+`WebSearchModule` **只依赖环境变量、不导入** **`PrismaModule`**，所以任何模块都能安全导入，不会形成循环依赖。
 
 ### 配置（全部走环境变量）
 
-| 变量 | 说明 |
-|---|---|
-| `WEB_SEARCH_PROVIDER` | `bocha` / `tavily`；留空 = 自动选（优先博查） |
-| `BOCHA_API_KEY` | 博查 Key（open.bochaai.com） |
-| `TAVILY_API_KEY` | Tavily Key（tavily.com） |
-| `WEB_SEARCH_TIMEOUT_MS` | 单次请求超时，默认 15000 |
-| `WEB_SEARCH_MAX_RESULTS` | 默认返回条数，默认 6（上限 10） |
+| 变量                       | 说明                                |
+| ------------------------ | --------------------------------- |
+| `WEB_SEARCH_PROVIDER`    | `bocha` / `tavily`；留空 = 自动选（优先博查） |
+| `BOCHA_API_KEY`          | 博查 Key（open.bochaai.com）          |
+| `TAVILY_API_KEY`         | Tavily Key（tavily.com）            |
+| `WEB_SEARCH_TIMEOUT_MS`  | 单次请求超时，默认 15000                   |
+| `WEB_SEARCH_MAX_RESULTS` | 默认返回条数，默认 6（上限 10）                |
 
 **可用性 = 任一 Key 存在**。一个都没配 → `isEnabled()` 返回 `false` → 工具定义不进 tools 数组，
 模型不会去调一个必然失败的工具，启动时也不刷警告（`.env` 里 `WEB_SEARCH_PROVIDER` 有默认值，
@@ -547,15 +553,15 @@ WEB_SEARCH_PROVIDER 非法   → warn，改为自动选（bocha > tavily）
 
 ### 两家的字段差异（归一化就发生在这里）
 
-| 语义 | 博查 | Tavily |
-|---|---|---|
-| 请求地址 | `POST https://api.bochaai.com/v1/web-search` | `POST https://api.tavily.com/search` |
-| 认证 | `Authorization: Bearer` | 同左 |
-| 条数 | `count` | `max_results` |
+| 语义   | 博查                                                    | Tavily                                                         |
+| ---- | ----------------------------------------------------- | -------------------------------------------------------------- |
+| 请求地址 | `POST https://api.bochaai.com/v1/web-search`          | `POST https://api.tavily.com/search`                           |
+| 认证   | `Authorization: Bearer`                               | 同左                                                             |
+| 条数   | `count`                                               | `max_results`                                                  |
 | 时间范围 | `freshness`：`oneDay/oneWeek/oneMonth/oneYear/noLimit` | `time_range`：`day/week/month/year`；`day`/`week` 时 `topic=news` |
-| 结果路径 | `data.webPages.value[]` | `results[]` |
-| 摘要字段 | `summary`（比 `snippet` 信息密度高，优先取） | `content` |
-| 发布时间 | `datePublished` | `published_date` |
+| 结果路径 | `data.webPages.value[]`                               | `results[]`                                                    |
+| 摘要字段 | `summary`（比 `snippet` 信息密度高，优先取）                      | `content`                                                      |
+| 发布时间 | `datePublished`                                       | `published_date`                                               |
 
 归一化成 `WebSearchItem { title, url, snippet, siteName?, publishedAt? }`，
 所以换源时工具层与 Prompt 都不用动。
@@ -584,12 +590,12 @@ WEB_SEARCH_PROVIDER 非法   → warn，改为自动选（bocha > tavily）
 
 ### 踩过的坑
 
-- **博查会 HTTP 200 + body `code != 200`**（SDK 风格）。只看 `response.ok` 会把鉴权失败
+- **博查会 HTTP 200 + body** **`code != 200`**（SDK 风格）。只看 `response.ok` 会把鉴权失败
   当成「没搜到结果」，用户看到的是「没有相关网页」而不是「Key 无效」。必须额外查体内 `code`。
-- **`isAvailable()` 必须同步**：它在 `buildDefinitions()` 里被调用，不能是异步的；
+- **`isAvailable()`** **必须同步**：它在 `buildDefinitions()` 里被调用，不能是异步的；
   provider 判定在构造函数里一次性算好。
 
----
+***
 
 ## 四、WorkflowTool — 工作流工具
 
@@ -636,7 +642,7 @@ WEB_SEARCH_PROVIDER 非法   → warn，改为自动选（bocha > tavily）
 5. 输出取值：`typeof result.previousOutput === 'string' ? previousOutput : JSON.stringify(previousOutput ?? result.data)`
 6. 返回 `工作流「名称」(vN) 运行结果：\n${output}`
 
----
+***
 
 ## 五、KnowledgeTool — 知识库搜索工具
 
@@ -679,7 +685,7 @@ WEB_SEARCH_PROVIDER 非法   → warn，改为自动选（bocha > tavily）
 4. 无命中 → 返回 `知识库中未检索到与「xxx」相关的内容。`
 5. 有命中 → 拼成 `检索到 N 条结果：\n\n[1] (来源：文件名) 相似度=0.912\n内容…`
 
----
+***
 
 ## 六、AgentTool 接口
 
@@ -696,27 +702,29 @@ export interface AgentTool {
 
 **设计意图**：ReAct 循环里调 ToolRegistry.executeTool() → 路由到某个 Tool.execute() → 返回 `Promise<string>` → 作为 `role:'tool'` 消息喂回 LLM。所有 Tool 的返回值必须是字符串，因为 LLM 的 tool message content 就是字符串。
 
----
+***
 
 ## 七、ChatSession — 对话持久化
 
 AgentController 的 SSE 接口支持 `sessionId` 参数：
+
 - 有 sessionId → 每轮用户消息、assistant 消息、tool 消息都落库到 ChatMessage 表
 - 下次前端带同一个 sessionId → 从 ChatMessage 表读出历史，传给 AgentService.runStream() 的 `history` 参数
 
 ChatMessage 的 role 有 4 种：`user` / `assistant` / `system` / `tool`。
 
-| 字段 | 用途 |
-|---|---|
-| `role` | user / assistant / system / tool |
-| `content` | 消息正文（**始终是字符串**）—— 云端模型可能把内容返回成多模态 content parts 数组，Provider 边界已用 `normalizeContentToString()` 归一化，落库前 `persistAssistantMessage()` 再兜一道，见 [03 第九节](./03-AI%20Provider大模型接入层.md) |
-| `toolCalls`（Json?） | 仅 assistant：LLM 返回的原始 tool_calls，用于多轮对话历史重建 |
-| `trail`（Json?） | 仅 assistant：本轮的 `thinking / reasoning / tool_call / tool_result / file / operation` 执行轨迹，前端渲染折叠面板 |
-| `toolCallId` | 仅 tool：对应 assistant 消息里某个 toolCall 的 `id` |
-| `files`（关联） | 仅 assistant：本轮 `generate_file` 产出的文件（`GeneratedFile`），渲染成文件卡片，见 09 |
-| `attachments`（关联） | 仅 user：随消息上传的聊天附件（`ChatAttachment`），历史回看能看到用户当时发了哪些文件，见 10 |
+| 字段                 | 用途                                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`             | user / assistant / system / tool                                                                                                                                                |
+| `content`          | 消息正文（**始终是字符串**）—— 云端模型可能把内容返回成多模态 content parts 数组，Provider 边界已用 `normalizeContentToString()` 归一化，落库前 `persistAssistantMessage()` 再兜一道，见 [03 第九节](./03-AI%20Provider大模型接入层.md) |
+| `toolCalls`（Json?） | 仅 assistant：LLM 返回的原始 tool\_calls，用于多轮对话历史重建                                                                                                                                    |
+| `trail`（Json?）     | 仅 assistant：本轮的 `thinking / reasoning / tool_call / tool_result / file / operation` 执行轨迹，前端渲染折叠面板                                                                               |
+| `toolCallId`       | 仅 tool：对应 assistant 消息里某个 toolCall 的 `id`                                                                                                                                       |
+| `files`（关联）        | 仅 assistant：本轮 `generate_file` 产出的文件（`GeneratedFile`），渲染成文件卡片，见 09                                                                                                              |
+| `attachments`（关联）  | 仅 user：随消息上传的聊天附件（`ChatAttachment`），历史回看能看到用户当时发了哪些文件，见 10                                                                                                                      |
 
 **历史回放**（`ChatSessionService.getHistoryForLLM()`）：
+
 ```typescript
 1. 按 createdAt 升序读出该 session 全部 ChatMessage
 2. assistant 且有 toolCalls → 把 arguments 用 stringifyToolArguments() 统一成 JSON 字符串
@@ -728,3 +736,4 @@ ChatMessage 的 role 有 4 种：`user` / `assistant` / `system` / `tool`。
 > `getWithMessages()`（前端**读取**会话详情用）会 `include` `messages.attachments` 与 `messages.files`，所以历史消息的附件/文件卡片都能直接渲染。注意它和 `getHistoryForLLM()`（喂给**模型**用）是两条不同的查询——后者不带关联，附件内容由 `augmentHistoryWithAttachments()` 单独按预算拼接。
 
 > 两个入口的 history 处理略有差异：SSE 流式接口传**完整历史**；非流式 `POST /agents/:id/chat` 会 `history.slice(0, -1)` 去掉最后一条。
+

@@ -4,13 +4,13 @@
 
 > 本文讲 **2 个 Provider 实现类**（`OllamaProvider` / `OpenAICompatibleProvider`），
 > 对应 `LlmProviderType` 枚举的 **4 种类型**（`ollama` / `openai` / `deepseek` / `openai-compatible`，
-> 其中 `openai` / `deepseek` / `openai-compatible` **三者共用 `OpenAICompatibleProvider` 实现类**，
+> 其中 `openai` / `deepseek` / `openai-compatible` **三者共用** **`OpenAICompatibleProvider`** **实现类**，
 > 只在构造参数上区分默认 baseUrl 与实例 `name`）——「2 个实现类 / 4 种类型」。
 >
 > 早期版本曾有一个 `DeepSeekProvider extends OpenAICompatibleProvider` 的子类，因只有 4 行有效代码、
 > 与 `openai` 分支的处理方式不对称，已删除（见第五节）。
 
----
+***
 
 ## 一、设计思路：接口 + 多实现 + 工厂
 
@@ -32,10 +32,11 @@ AiModule 里的 DI 绑定（ai.module.ts L10）
 ```
 
 **为什么要两层？**
+
 - **默认场景**：AIService 用 `@Inject(AI_PROVIDER)` 拿到 DI 构造的全局 Ollama 单例——所有 Agent 共享，直接调本地 Ollama
 - **自定义模型场景**：Agent 绑定了 `llmModelId` → LlmConfigService `resolveModelRuntime()` → `createProvider()` 手动 new 一个 Provider 实例 —— 用完即弃，每次 runStream 都是新实例
 
----
+***
 
 ## 二、AiProvider 接口定义
 
@@ -54,6 +55,7 @@ export interface AiProvider {
 ```
 
 **配套类型**：
+
 - `ChatMessage`：`{ role: 'system'|'user'|'assistant'|'tool', content, images?, tool_calls?, tool_call_id? }`
   > `content` 的 TS 类型是 **`string`**。但云端模型可能把 `content` 返回成**多模态内容块数组**（content parts），
   > 所以 Provider 在**解析响应时**会用 `normalizeContentToString()` 归一化成字符串再往外传（见 **第九节**）。
@@ -98,7 +100,7 @@ export async function* contentOnly(
 非流式接口则是在 `ChatResult` / `ToolChatResult` 上加**可选** `reasoning?: string`——
 普通模型没有推理过程时该字段直接不出现，调用方必须容忍缺失。
 
----
+***
 
 ## 三、OllamaProvider 实现
 
@@ -108,7 +110,7 @@ export async function* contentOnly(
 
 ### 非流式调用（chat / chatWithTools）
 
-两个方法打同一个 endpoint，**请求体只差一个 `tools` 字段**。
+两个方法打同一个 endpoint，**请求体只差一个** **`tools`** **字段**。
 
 `chat()`：
 
@@ -139,7 +141,7 @@ fetch(`${this.baseUrl}/api/chat`, {
   }),
 ```
 
-> ⚠️ **`model` 不是写死的**。Provider 层永远只读 `options.model`，模型名完全由调用方决定，共三条来源：
+> ⚠️ **`model`** **不是写死的**。Provider 层永远只读 `options.model`，模型名完全由调用方决定，共三条来源：
 >
 > 1. **Agent 聊天** —— `chatModel = agent.model`（`agent.service.ts:476`）。
 >    这个字段在创建 / 更新 Agent 时由 `resolveModelName()` 写入：没有 `llmModelId` 就落
@@ -155,6 +157,7 @@ fetch(`${this.baseUrl}/api/chat`, {
 > 映射过去，并把 `maxTokens` 重命名为 Ollama 的 `num_predict`（`temperature` 为空就不传）。
 
 **Ollama 返回格式**（NDJSON → 整体一个 JSON 对象）：
+
 ```json
 {
   "message": {
@@ -190,6 +193,7 @@ Provider 解析时把它们映射成统一的 `usage`（`ollama.provider.ts`）�
 ```
 
 解析逻辑：
+
 ```typescript
 const reader = response.body.getReader();
 let buffer = '';
@@ -214,9 +218,9 @@ while (true) {
 }
 ```
 
-> ⚠️ **结束信号不是 `done: true` 字段**。虽然 Ollama 每行 JSON 里确实带 `done` 字段，但本项目的解析代码**完全没有读它**——循环是靠 `reader.read()` 返回的 `done` 结束的。别照着"检测 done:true 才停"去改代码。
+> ⚠️ **结束信号不是** **`done: true`** **字段**。虽然 Ollama 每行 JSON 里确实带 `done` 字段，但本项目的解析代码**完全没有读它**——循环是靠 `reader.read()` 返回的 `done` 结束的。别照着"检测 done:true 才停"去改代码。
 >
-> ⚠️ **`thinking` 必须走 reasoning 通道**。普通模型这一行是 `undefined`，`normalizeContentToString(undefined)` 返回空串，不 yield —— 所以这段逻辑对非思考型模型零影响。
+> ⚠️ **`thinking`** **必须走 reasoning 通道**。普通模型这一行是 `undefined`，`normalizeContentToString(undefined)` 返回空串，不 yield —— 所以这段逻辑对非思考型模型零影响。
 
 ### 关键格式转换：toOllamaMessages()
 
@@ -241,7 +245,7 @@ private toOllamaMessages(messages) {
 }
 ```
 
----
+***
 
 ## 四、OpenAICompatibleProvider 实现
 
@@ -272,6 +276,7 @@ fetch(`${baseUrl}/chat/completions`, {
 > OpenAI 兼容端点不需要鉴权，带了反而可能被拒。
 
 **OpenAI 返回格式**：
+
 ```json
 {
   "choices": [{
@@ -289,23 +294,23 @@ fetch(`${baseUrl}/chat/completions`, {
 }
 ```
 
-**推理过程（`reasoning_content` / `reasoning`）**：思考型模型会在 `message` 上多带一个字段。
+**推理过程（`reasoning_content`** **/** **`reasoning`）**：思考型模型会在 `message` 上多带一个字段。
 字段名各家不统一，`pickReasoning()` 按优先级探测：
 
-| 字段 | 谁在用 |
-|---|---|
+| 字段                  | 谁在用                         |
+| ------------------- | --------------------------- |
 | `reasoning_content` | DeepSeek reasoner、硅基流动等，最常见 |
-| `reasoning` | OpenRouter、部分自建网关 |
+| `reasoning`         | OpenRouter、部分自建网关           |
 
 两者都可能是字符串或内容块数组，统一过 `normalizeContentToString()`。
-都没有则**不返回 `reasoning` 字段**（不是返回空串）—— 调用方据此判断「这个模型有没有思考过程」。
+都没有则**不返回** **`reasoning`** **字段**（不是返回空串）—— 调用方据此判断「这个模型有没有思考过程」。
 
 **usage 的读取**：OpenAI 兼容服务不一定回 `usage`（本地网关常省略）——Provider 只在
 `usage.total_tokens !== undefined` 时才返回 usage，否则按「无用量」处理。
 
 ### 流式调用 —— SSE 解析
 
-OpenAI 兼容服务用的是 SSE（Server-Sent Events），每行以 `data: ` 开头，以 `data: [DONE]` 结束：
+OpenAI 兼容服务用的是 SSE（Server-Sent Events），每行以 `data: `  开头，以 `data: [DONE]` 结束：
 
 ```
 data: {"choices":[{"delta":{"reasoning_content":"用户只是"}}]}
@@ -316,6 +321,7 @@ data: [DONE]
 ```
 
 解析逻辑：
+
 ```typescript
 for (const line of lines) {
   const trimmed = line.trim();
@@ -346,7 +352,7 @@ for (const line of lines) {
 已知后缀有三个：`/chat/completions`、`/embeddings`、`/models`。这样后续拼接 `/chat/completions`、
 `/models`、`/embeddings` 都不会重复。
 
----
+***
 
 ## 五、为什么 DeepSeek 没有独立的 Provider 类
 
@@ -363,20 +369,20 @@ new OpenAICompatibleProvider(
 );
 ```
 
-**为什么删掉早期的 `DeepSeekProvider` 子类**：
+**为什么删掉早期的** **`DeepSeekProvider`** **子类**：
 
-| 原因 | 说明 |
-|---|---|
-| 零行为增量 | 子类只有一个构造函数 `super(baseUrl \|\| '…', apiKey, 'deepseek')`，无任何覆写方法 |
-| 风格不对称 | `openai` 走「工厂传参」、`deepseek` 走「子类」，两种同类厂商两种写法，是 code smell |
+| 原因      | 说明                                                                                                                                                 |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 零行为增量   | 子类只有一个构造函数 `super(baseUrl \|\| '…', apiKey, 'deepseek')`，无任何覆写方法                                                                                   |
+| 风格不对称   | `openai` 走「工厂传参」、`deepseek` 走「子类」，两种同类厂商两种写法，是 code smell                                                                                          |
 | 扩展点是闲置的 | 保留它的唯一正当理由是「将来 DeepSeek 出现 OpenAI 协议之外的专有逻辑」。DeepSeek 真正独有的差异（`reasoning_content` 思维链）已经**在通用 Provider 里处理掉了**（见第二节「推理过程」），不需要靠子类；至今没有剩下任何必须子类化的东西 |
-| 文档成本 | 一个 12 行的类要占掉一节文档 + 文件树 + 索引表多处引用 |
+| 文档成本    | 一个 12 行的类要占掉一节文档 + 文件树 + 索引表多处引用                                                                                                                   |
 
 **删它时有两个坑必须避开**（否则会静默改变行为）：
 
-1. **`DEFAULT_BASE_URL.deepseek` 不能删**。它不只给工厂兜底用，`LlmConfigService.resolveBaseUrl()`
+1. **`DEFAULT_BASE_URL.deepseek`** **不能删**。它不只给工厂兜底用，`LlmConfigService.resolveBaseUrl()`
    在创建/编辑配置时也靠它把默认地址**持久化进数据库**。删掉这个 key，新建 DeepSeek 配置会得到 `null` baseUrl。
-2. **第三个参数 `name` 必须与 provider 类型同名**。`AiProvider.name` 会被 `agent.service.ts`、
+2. **第三个参数** **`name`** **必须与 provider 类型同名**。`AiProvider.name` 会被 `agent.service.ts`、
    `llm.executor.ts`、`embedding.service.ts` 直接写进 `ModelCallLog.provider`，仪表盘按它分组统计。
    现在工厂把 `provider` 变量本身传进去（见第六节，天然保证同名）；但只要有人改成传字面量或省略该参数，
    就会回落成默认的 `'openai-compatible'`，历史记录和新记录被拆成两个桶。
@@ -386,7 +392,7 @@ new OpenAICompatibleProvider(
 > （自定义 Header、额外参数、不同的错误码格式、`/embeddings` 缺失要单独报错等）才建子类；
 > 仅仅是 baseUrl / 名字不同的，一律走工厂传参。
 
----
+***
 
 ## 六、ProviderFactory — 动态构造
 
@@ -421,13 +427,13 @@ export function createProvider(input: ProviderConnectionInput): AiProvider {
 }
 ```
 
-**为什么 `openai` 和 `deepseek` 能合并成一个 `case`**：两者的构造参数完全由 `provider` 类型决定——
+**为什么** **`openai`** **和** **`deepseek`** **能合并成一个** **`case`**：两者的构造参数完全由 `provider` 类型决定——
 `DEFAULT_BASE_URL[provider]` 取默认地址、`provider` 本身当 `name`。合并后新增同类厂商只要
 「往 `DEFAULT_BASE_URL` 加一条 + 挂到这个 case 上」，不用再复制一段几乎相同的 `new`。
 
-**`openai-compatible` 不能并进来**：它没有默认 baseUrl（缺了要抛错），行为真的不同。
+**`openai-compatible`** **不能并进来**：它没有默认 baseUrl（缺了要抛错），行为真的不同。
 
-> ⚠️ 合并时**不能顺手把 `'deepseek'` 从 `LlmProviderType` 里删掉**。类型和实现类是两件事：
+> ⚠️ 合并时**不能顺手把** **`'deepseek'`** **从** **`LlmProviderType`** **里删掉**。类型和实现类是两件事：
 > `LlmProviderConfig.provider` 列里已经存着 `'deepseek'` 的历史数据、前端下拉框要显示「DeepSeek」、
 > `LlmConfigService.resolveBaseUrl()` 也靠这个值决定默认地址。删类型 = 数据迁移 + 破坏已有配置。
 > 能删的是**实现类**（见第五节），不是**枚举值**。
@@ -438,38 +444,38 @@ export function createProvider(input: ProviderConnectionInput): AiProvider {
 `{ provider, modelId, providerType, capabilities }`。其中 `capabilities: ModelCapability[]`（8 种能力值之一）由调用方
 用来判断「这个模型支不支持流式/视觉」等，避免给不支持的能力硬发请求。
 
----
+***
 
 ## 七、两种流式协议的区别
 
-| | Ollama | OpenAI 兼容 |
-|---|---|---|
-| 协议 | NDJSON | SSE |
-| 每行行首 | 无 | `data: ` |
-| 结束信号 | **流读完（`reader.read()` 的 `done`）** —— 代码不读 `done:true` 字段 | `data: [DONE]` |
-| Endpoint | `/api/chat` | `/chat/completions` |
-| Arguments 格式 | 必须是 **对象** | JSON **字符串** |
-| 推理过程字段 | `message.thinking` | `delta.reasoning_content`（或 `reasoning`） |
+| <br />       | Ollama                                                           | OpenAI 兼容                                |
+| ------------ | ---------------------------------------------------------------- | ---------------------------------------- |
+| 协议           | NDJSON                                                           | SSE                                      |
+| 每行行首         | 无                                                                | `data: `                                 |
+| 结束信号         | **流读完（`reader.read()`** **的** **`done`）** —— 代码不读 `done:true` 字段 | `data: [DONE]`                           |
+| Endpoint     | `/api/chat`                                                      | `/chat/completions`                      |
+| Arguments 格式 | 必须是 **对象**                                                       | JSON **字符串**                             |
+| 推理过程字段       | `message.thinking`                                               | `delta.reasoning_content`（或 `reasoning`） |
 
 Provider 层各自处理自己的协议细节，上层 AgentService 和 WorkflowEngine 完全不感知——
 它们只看 `ChatStreamChunk`（`{ type:'content'|'reasoning', text }`）和 `ToolChatResult` 这种统一抽象。
 
----
+***
 
 ## 八、Embedding 的两个细节
 
 **① 两个 Provider 的入参字段名不同**：
 
-| Provider | Endpoint | 请求体 |
-|---|---|---|
-| Ollama | `POST {baseUrl}/api/embeddings` | `{ model, prompt: text }` ← 用 `prompt` |
-| OpenAI 兼容 | `POST {baseUrl}/embeddings` | `{ model, input: text }` ← 用 `input` |
+| Provider  | Endpoint                        | 请求体                                    |
+| --------- | ------------------------------- | -------------------------------------- |
+| Ollama    | `POST {baseUrl}/api/embeddings` | `{ model, prompt: text }` ← 用 `prompt` |
+| OpenAI 兼容 | `POST {baseUrl}/embeddings`     | `{ model, input: text }` ← 用 `input`   |
 
 **② Ollama 是一条一条发的**：`OllamaProvider.embedding()` 内部是 `for (const text of texts) { fetch(...) }`，每条文本一次 HTTP 请求。`EmbeddingService` 里的 `BATCH_SIZE = 100` 只是**外层分批**（每 100 条调一次 `provider.embedding()`），并不会减少 Ollama 的 HTTP 次数。OpenAI 兼容 Provider 同样是逐条发。
 
 两者返回值都是 `{ embeddings: number[][], model }`。
 
----
+***
 
 ## 八点五、tool-args.util — Function Calling 入参的兼容层
 
@@ -481,18 +487,18 @@ OpenAI 规范要求 `tool_calls[].function.arguments` 是 **JSON 字符串**，�
 
 这个工具文件提供两个函数兜住所有形态：
 
-| 函数 | 作用 | 行为 |
-|---|---|---|
-| `parseToolArguments(raw)` | 任意形态 → **对象** | `null/undefined` → `{}`；对象原样返回；JSON 字符串 parse 后返回；非 JSON 字符串 → `{ input: 字符串 }`（对以 `input` 为入参的工具友好）；其他标量 → `{ input: 值 }` |
-| `stringifyToolArguments(raw)` | 任意形态 → **JSON 字符串** | `null` → `'{}'`；字符串原样；其他 `JSON.stringify`（失败回退 `'{}'`）——用于在 Provider 边界统一输出形态 |
+| 函数                            | 作用                  | 行为                                                                                                                         |
+| ----------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `parseToolArguments(raw)`     | 任意形态 → **对象**       | `null/undefined` → `{}`；对象原样返回；JSON 字符串 parse 后返回；非 JSON 字符串 → `{ input: 字符串 }`（对以 `input` 为入参的工具友好）；其他标量 → `{ input: 值 }` |
+| `stringifyToolArguments(raw)` | 任意形态 → **JSON 字符串** | `null` → `'{}'`；字符串原样；其他 `JSON.stringify`（失败回退 `'{}'`）——用于在 Provider 边界统一输出形态                                              |
 
-两个 Provider 的 `chatWithTools` 都在用：**解析模型返回的 `tool_calls`** 时走 `stringifyToolArguments`
+两个 Provider 的 `chatWithTools` 都在用：**解析模型返回的** **`tool_calls`** 时走 `stringifyToolArguments`
 （把 arguments 统一成 JSON 字符串，Ollama 返回的可能是对象、OpenAI 返回的是字符串）；
 **回填历史消息**时走 `parseToolArguments`（`toOllamaMessages` 要把字符串 arguments 转回对象，
 Agent 执行工具时也要先 parse 成对象）。
 不修这个兼容层，「经第三方转发的云端模型」的工具调用会**静默丢参数**，是最难排查的一类线上问题。
 
----
+***
 
 ## 八、telemetry 与 ModelCallLog —— Provider 之上还有一层监控
 
@@ -520,8 +526,9 @@ async recordModelCall(
 ```
 
 **三条硬规则**：
-1. **`workspaceId` 非空才记录**——表字段是 NOT NULL，无归属上下文（如用户没进任何空间）的调用直接跳过。
-2. **`meta.provider` 必须由调用方显式传入实际 Provider 名**——AIService 注入的是全局 Ollama，
+
+1. **`workspaceId`** **非空才记录**——表字段是 NOT NULL，无归属上下文（如用户没进任何空间）的调用直接跳过。
+2. **`meta.provider`** **必须由调用方显式传入实际 Provider 名**——AIService 注入的是全局 Ollama，
    而 Agent / LLM 节点用的是 `resolveModelRuntime()` 动态构造的 Provider，不传就会把云端模型
    错误归属成 `ollama`。
 3. **流式调用拿不到 usage**——`streamChat` 只记成败和延迟，Token 记 0，但调用次数正常（所以
@@ -531,7 +538,7 @@ async recordModelCall(
 多轮（经 `recordAgentCall` 转发，`agent.service.ts:1044`）、`EmbeddingService.embedBatch`（`embedding.service.ts:97`，EMBEDDING）。
 错误分类（`SUCCESS` / `FAILED` / `errorCode`）也在这一层完成。
 
----
+***
 
 ## 九、内容归一化 —— 为什么 `content` 最终一定是字符串
 
@@ -562,13 +569,13 @@ Argument `content`: Invalid value provided. Expected String, provided Object.
 
 `normalizeContentToString(content: unknown): string` 处理所有形态：
 
-| 输入 | 输出 |
-|---|---|
-| `null` / `undefined` | `''` |
-| 字符串 | 原样 |
-| 数字 / 布尔 | `String(x)` |
-| 数组 | 逐块提取后 `\n` 连接（跳过空块） |
-| 对象 | 单块提取 |
+| 输入                   | 输出                  |
+| -------------------- | ------------------- |
+| `null` / `undefined` | `''`                |
+| 字符串                  | 原样                  |
+| 数字 / 布尔              | `String(x)`         |
+| 数组                   | 逐块提取后 `\n` 连接（跳过空块） |
+| 对象                   | 单块提取                |
 
 单块提取 `extractPart()` 的优先级：
 
@@ -581,14 +588,15 @@ Argument `content`: Invalid value provided. Expected String, provided Object.
 
 ### 调用点（Provider 边界 + 落库兜底）
 
-| 位置 | 改了什么 |
-|---|---|
-| `openai-compatible.provider.ts` `chat` / `chatWithTools` | content 类型改 `unknown` 并归一化，`ToolChatResult.content` 始终是字符串 |
-| `openai-compatible.provider.ts` `streamChat` | `delta.content` 也归一化 —— 否则数组 token 拼进 `fullContent` 会变成 `[object Object]` |
-| `openai-compatible.provider.ts` `pickReasoning()` | **推理字段也过同一个归一化**：`reasoning_content` / `reasoning` 可能是字符串，也可能是内容块数组 |
-| `ollama.provider.ts` | 同上四处（含 `message.thinking`） |
-| `agent.service.ts` `persistAssistantMessage` + tool_calls 分支 | 落库前再过一遍，防任何 Provider 漏网 |
+| 位置                                                            | 改了什么                                                                      |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `openai-compatible.provider.ts` `chat` / `chatWithTools`      | content 类型改 `unknown` 并归一化，`ToolChatResult.content` 始终是字符串                |
+| `openai-compatible.provider.ts` `streamChat`                  | `delta.content` 也归一化 —— 否则数组 token 拼进 `fullContent` 会变成 `[object Object]` |
+| `openai-compatible.provider.ts` `pickReasoning()`             | **推理字段也过同一个归一化**：`reasoning_content` / `reasoning` 可能是字符串，也可能是内容块数组       |
+| `ollama.provider.ts`                                          | 同上四处（含 `message.thinking`）                                                |
+| `agent.service.ts` `persistAssistantMessage` + tool\_calls 分支 | 落库前再过一遍，防任何 Provider 漏网                                                   |
 
 > **为什么放在 Provider 边界而不是落库前**：这样 Agent 聊天和工作流 LLM 节点**同时受益**，
 > 上层拿到的 `content` 天然就是字符串，不需要各自防御。
 > `deepseek` / `openai-compatible` 复用 `OpenAICompatibleProvider`，一并覆盖。
+
